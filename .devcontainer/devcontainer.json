@@ -1,0 +1,44 @@
+{
+  "name": "Vibe-Trading",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+
+  "postCreateCommand": "pip install -e . && cd frontend && npm ci",
+
+  "forwardPorts": [8899, 5899],
+  "portsAttributes": {
+    "8899": {
+      "label": "Vibe-Trading Web UI",
+      "onAutoForward": "openBrowser"
+    },
+    "5899": {
+      "label": "Vibe-Trading Frontend Dev",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+
+  "remoteEnv": {
+    "PYTHONPATH": "${containerWorkspaceFolder}/agent"
+  }
+}
