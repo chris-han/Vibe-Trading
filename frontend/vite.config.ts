@@ -21,6 +21,9 @@ export default defineConfig({
       "/api": { target: "http://localhost:8899", changeOrigin: true },
       "/system": { target: "http://localhost:8899", changeOrigin: true },
     },
+    hmr: {
+      port: 5901,
+    },
   },
   build: {
     rollupOptions: {

@@ -1,7 +1,6 @@
 ---
 name: doc-reader
 description: Read PDF documents (papers, annual reports, research reports), automatically extracting text pages and applying OCR to image/scanned pages. Use the `read_document` tool.
-category: tool
 ---
 # PDF Document Reading
 

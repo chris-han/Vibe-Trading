@@ -146,6 +146,64 @@ def load_run_context(run_dir: Path) -> Dict[str, Any]:
     }
 
 
+def load_run_report(run_dir: Path) -> Optional[str]:
+    """Load a saved narrative report for a run.
+
+    For historical session runs created before report persistence existed,
+    this falls back to the session event log and extracts the matching
+    assistant reply using the ``session_id`` saved in ``req.json``.
+
+    Args:
+        run_dir: The run directory under ``runs/``.
+
+    Returns:
+        Markdown/text report content when available.
+    """
+    for file_name in ("report.md", "summary.md", "answer.md", "final_report.md", "final_report.txt"):
+        path = run_dir / file_name
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            continue
+        if text:
+            return text
+
+    request_data = load_json_file(run_dir / "req.json") or {}
+    context = request_data.get("context") or {}
+    session_id = str(context.get("session_id") or "").strip()
+    if not session_id:
+        return None
+
+    events_path = run_dir.parent.parent / "sessions" / session_id / "events.jsonl"
+    if not events_path.exists():
+        return None
+
+    fallback: Optional[str] = None
+    try:
+        for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if event.get("event_type") != "message.created" or event.get("role") != "assistant":
+                continue
+
+            content = str(event.get("content") or "").strip()
+            if not content or content == "Strategy execution completed.":
+                continue
+
+            metadata = event.get("metadata") or {}
+            inner_meta = metadata.get("metadata") or {}
+            if inner_meta.get("run_id") == run_dir.name:
+                return content
+            fallback = content
+    except Exception:
+        return None
+
+    return fallback
+
+
 def infer_indicator_periods(run_dir: Path) -> List[int]:
     """Infer moving-average periods from planner or design artifacts.
 
@@ -413,11 +471,10 @@ def reconstruct_price_series(run_dir: Path) -> List[Dict[str, Any]]:
     if not signal_path.exists():
         return []
 
-    agent_root = Path(__file__).resolve().parents[1]
     try:
-        from src.providers.llm import _ensure_dotenv
+        from runtime_env import ensure_runtime_env
 
-        _ensure_dotenv()
+        ensure_runtime_env()
     except Exception:
         pass
     fetch_start_date = _compute_fetch_start_date(run_dir, start_date)

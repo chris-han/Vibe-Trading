@@ -1,7 +1,6 @@
 ---
 name: pair-trading
 description: Pair trading strategy. Trades mean reversion using the spread/ratio Z-score of two correlated instruments. Requires at least two instruments.
-category: strategy
 ---
 # Pair Trading Strategy
 

@@ -1,7 +1,6 @@
 ---
 name: web-reader
 description: Read web pages, articles, and document links by converting URLs into Markdown text. Use the `read_url` tool directly, without bash.
-category: tool
 ---
 # Web Reading
 

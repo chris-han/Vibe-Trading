@@ -17,14 +17,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Security, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, Security, UploadFile, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from rich.console import Console
 
-from src.ui_services import build_run_analysis, load_run_context
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+from runtime_env import ensure_runtime_env
+from src.ui_services import build_run_analysis, load_run_context, load_run_report
 
 # UTF-8 on Windows
 import sys as _sys
@@ -33,11 +40,44 @@ for _s in ("stdout", "stderr"):
     if callable(_r):
         _r(encoding="utf-8", errors="replace")
 
-RUNS_DIR = Path(__file__).resolve().parent / "runs"
-SESSIONS_DIR = Path(__file__).resolve().parent / "sessions"
-UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
+ensure_runtime_env()
+
+# ---------------------------------------------------------------------------
+# Data root: all runtime-generated files (sessions, runs, uploads, swarm) live
+# under a single configurable root derived from TERMINAL_CWD.  A relative
+# value is resolved against the agent/ directory (e.g. 'chris' →
+# agent/chris/).  Defaults to agent/ when unset.
+# ---------------------------------------------------------------------------
+_AGENT_DIR = Path(__file__).resolve().parent
+_raw_cwd = os.getenv("TERMINAL_CWD", "")
+if _raw_cwd and not os.path.isabs(_raw_cwd):
+    DATA_ROOT = (_AGENT_DIR / _raw_cwd).resolve()
+elif _raw_cwd:
+    DATA_ROOT = Path(_raw_cwd).resolve()
+else:
+    DATA_ROOT = _AGENT_DIR
+DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+RUNS_DIR = DATA_ROOT / "runs"
+SESSIONS_DIR = DATA_ROOT / "sessions"
+UPLOADS_DIR = DATA_ROOT / "uploads"
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
+def _resolve_upload_dir(session_id: Optional[str] = None, run_id: Optional[str] = None) -> Path:
+    """Store user uploads under the most specific artifact scope available."""
+    if run_id:
+        return RUNS_DIR / run_id / "artifacts" / "uploads"
+
+    if session_id:
+        session_dir = SESSIONS_DIR / session_id
+        if not session_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        return session_dir / "uploads"
+
+    raise HTTPException(status_code=400, detail="session_id or run_id is required for uploads")
+
 
 # Rich console for colored logs
 console = Console()
@@ -97,6 +137,7 @@ class RunResponse(BaseModel):
     run_id: str = Field(..., description="Run identifier")
     elapsed_seconds: float = Field(..., description="Execution time in seconds")
     reason: Optional[str] = Field(None, description="Failure reason when available")
+    prompt: Optional[str] = Field(None, description="Original user prompt")
 
     planner_output: Optional[Dict[str, Any]] = Field(None, description="Planner output")
     strategy_spec: Optional[Dict[str, Any]] = Field(None, description="Strategy specification")
@@ -111,7 +152,6 @@ class RunResponse(BaseModel):
     artifacts_equity_csv: Optional[List[Dict[str, Any]]] = Field(None, description="Full equity rows")
     artifacts_metrics_csv: Optional[List[Dict[str, Any]]] = Field(None, description="Full metrics rows")
     artifacts_trades_csv: Optional[List[Dict[str, Any]]] = Field(None, description="Full trade rows")
-    validation: Optional[Dict[str, Any]] = Field(None, description="Statistical validation results")
 
     run_directory: str = Field(..., description="Run directory path")
     run_stage: Optional[str] = Field(None, description="UI-facing run stage")
@@ -123,6 +163,7 @@ class RunResponse(BaseModel):
     )
     trade_markers: Optional[List[Dict[str, Any]]] = Field(None, description="Trade markers for charts")
     run_logs: Optional[List[Dict[str, Any]]] = Field(None, description="Structured stdout/stderr lines")
+    report_markdown: Optional[str] = Field(None, description="Saved narrative report for research-only runs")
 
 
 class HealthResponse(BaseModel):
@@ -166,6 +207,44 @@ class MessageResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class SessionEventResponse(BaseModel):
+    """Canonical session event."""
+    event_id: str
+    session_id: str
+    attempt_id: Optional[str] = None
+    event_type: str
+    timestamp: str
+    role: Optional[str] = None
+    content: Optional[str] = None
+    reasoning: Optional[str] = None
+    tool: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    args: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class TrajectoryConversationItem(BaseModel):
+    """One ShareGPT-style conversation item."""
+    from_: str = Field(..., alias="from")
+    value: str
+
+    model_config = {"populate_by_name": True}
+
+
+class SessionTrajectoryResponse(BaseModel):
+    """Training-ready Atropos trajectory export."""
+    session_id: str
+    title: str
+    source_file: str
+    trajectory: Dict[str, Any]
+
+
+class BatchDeleteSessionsRequest(BaseModel):
+    """Delete multiple sessions in one request."""
+    session_ids: List[str] = Field(..., min_length=1)
+
+
 
 # ============================================================================
 # FastAPI Application
@@ -173,7 +252,7 @@ class MessageResponse(BaseModel):
 
 app = FastAPI(
     title="Vibe-Trading API",
-    description="Vibe-Trading API: natural-language finance research, backtesting, and swarm workflows",
+    description="Vibe-Trading API: natural-language finance research, backtesting, and agents workflows",
     version="5.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -193,14 +272,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def _run_startup_preflight() -> None:
-    """Run preflight checks on server startup."""
-    from src.preflight import run_preflight
-
-    run_preflight(console)
 
 
 # ============================================================================
@@ -274,6 +345,15 @@ def _build_response_from_run_dir(run_dir: Path, elapsed: float, *, include_analy
         elapsed_seconds=elapsed,
         run_directory=str(run_dir),
     )
+
+    request_data = _load_json_file(run_dir / "req.json") or {}
+    prompt = str(request_data.get("prompt") or "").strip()
+    if prompt:
+        response.prompt = prompt
+
+    report_markdown = load_run_report(run_dir)
+    if report_markdown:
+        response.report_markdown = report_markdown
 
     state_data = _load_json_file(run_dir / "state.json")
     if state_data:
@@ -351,13 +431,6 @@ def _build_response_from_run_dir(run_dir: Path, elapsed: float, *, include_analy
     if trades_path.exists():
         response.artifacts_trades_csv = _load_csv_to_dict(trades_path)
 
-    validation_path = run_dir / "artifacts" / "validation.json"
-    if validation_path.exists():
-        try:
-            response.validation = json.loads(validation_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-
     if response.artifacts_equity_csv:
         filtered_equity = []
         for row in response.artifacts_equity_csv[:1000]:
@@ -409,25 +482,6 @@ async def get_run_code(run_id: str):
         if p.exists():
             result[f] = p.read_text(encoding="utf-8")
     return result
-
-
-@app.get("/runs/{run_id}/pine")
-async def get_run_pine(run_id: str):
-    """Return Pine Script file for a run.
-
-    Args:
-        run_id: Run identifier.
-
-    Returns:
-        Object with pine script content and exists flag.
-    """
-    pine_path = RUNS_DIR / run_id / "artifacts" / "strategy.pine"
-    if not pine_path.exists():
-        return {"exists": False, "content": None}
-    return {
-        "exists": True,
-        "content": pine_path.read_text(encoding="utf-8"),
-    }
 
 
 @app.get("/runs/{run_id}", response_model=RunResponse)
@@ -579,16 +633,21 @@ async def shutdown_local_api(background_tasks: BackgroundTasks, request: Request
 @app.get("/skills")
 async def list_skills():
     """List registered skills (name and description)."""
-    from src.agent.skills import SkillsLoader
-
-    loader = SkillsLoader()
-    return [
-        {
-            "name": s.name,
-            "description": s.description,
-        }
-        for s in loader.skills
-    ]
+    import re as _re
+    skills_dir = Path(__file__).resolve().parent / "src" / "skills"
+    result = []
+    if skills_dir.exists():
+        for p in sorted(skills_dir.iterdir()):
+            if not p.is_dir():
+                continue
+            md = p / "SKILL.md"
+            if not md.exists():
+                continue
+            text = md.read_text(encoding="utf-8", errors="ignore")
+            m = _re.search(r"^description:\s*(.+)$", text, _re.MULTILINE)
+            desc = m.group(1).strip().strip('"') if m else ""
+            result.append({"name": p.name, "description": desc})
+    return result
 
 
 @app.get("/api")
@@ -695,17 +754,18 @@ async def get_session(session_id: str):
         last_attempt_id=session.last_attempt_id,
     )
 
-
-@app.delete("/sessions/{session_id}", dependencies=[Depends(require_auth)])
-async def delete_session(session_id: str):
-    """Delete a session."""
+@app.post("/sessions/batch-delete", dependencies=[Depends(require_auth)])
+async def batch_delete_sessions(request: BatchDeleteSessionsRequest):
+    """Delete multiple sessions."""
     svc = _get_session_service()
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    deleted = svc.delete_session(session_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    return {"status": "deleted", "session_id": session_id}
+    result = svc.delete_sessions(request.session_ids)
+    return {
+        "status": "ok",
+        "deleted": result["deleted"],
+        "missing": result["missing"],
+    }
 
 
 class UpdateSessionRequest(BaseModel):
@@ -776,6 +836,49 @@ async def get_messages(session_id: str, limit: int = Query(100, ge=1, le=1000)):
     ]
 
 
+@app.get("/sessions/{session_id}/event-log", response_model=List[SessionEventResponse])
+async def get_event_log(session_id: str, limit: int = Query(1000, ge=1, le=20000)):
+    """List canonical session events."""
+    svc = _get_session_service()
+    if not svc:
+        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    session = svc.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    events = svc.get_events(session_id, limit=limit)
+    return [
+        SessionEventResponse(
+            event_id=e.event_id,
+            session_id=e.session_id,
+            attempt_id=e.attempt_id,
+            event_type=e.event_type,
+            timestamp=e.timestamp,
+            role=e.role,
+            content=e.content,
+            reasoning=e.reasoning,
+            tool=e.tool,
+            tool_call_id=e.tool_call_id,
+            args=e.args,
+            status=e.status,
+            metadata=e.metadata if e.metadata else None,
+        )
+        for e in events
+    ]
+
+
+@app.get("/sessions/{session_id}/trajectory", response_model=SessionTrajectoryResponse)
+async def get_session_trajectory(session_id: str):
+    """Export a session as an Atropos/Hermes trajectory entry."""
+    svc = _get_session_service()
+    if not svc:
+        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    try:
+        export = svc.export_atropos_trajectory(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return SessionTrajectoryResponse(**export)
+
+
 @app.get("/sessions/{session_id}/events")
 async def session_events(
     session_id: str,
@@ -815,8 +918,12 @@ async def session_events(
 # ============================================================================
 
 @app.post("/upload", dependencies=[Depends(require_auth)])
-async def upload_file(file: UploadFile):
-    """Upload a PDF; stored under uploads/ with a UUID name (max 50MB)."""
+async def upload_file(
+    file: UploadFile,
+    session_id: Optional[str] = Form(None),
+    run_id: Optional[str] = Form(None),
+):
+    """Upload a PDF into the scoped session/run artifact folder with a UUID name."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
@@ -827,10 +934,11 @@ async def upload_file(file: UploadFile):
             detail=f"File too large (limit {MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
         )
 
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    target_dir = _resolve_upload_dir(session_id=session_id, run_id=run_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = f"{uuid.uuid4().hex}.pdf"
-    dest = UPLOADS_DIR / safe_name
+    dest = target_dir / safe_name
     dest.write_bytes(content)
 
     return {
@@ -853,10 +961,10 @@ def _get_swarm_runtime():
     if _swarm_runtime is not None:
         return _swarm_runtime
     from src.swarm.store import SwarmStore
-    from src.swarm.runtime import SwarmRuntime
-    swarm_dir = Path(__file__).resolve().parent / ".swarm" / "runs"
+    from src.swarm.runtime import WorkflowRuntime
+    swarm_dir = DATA_ROOT / ".swarm" / "runs"
     store = SwarmStore(base_dir=swarm_dir)
-    _swarm_runtime = SwarmRuntime(store=store)
+    _swarm_runtime = WorkflowRuntime(store=store)
     return _swarm_runtime
 
 
@@ -970,6 +1078,81 @@ async def cancel_swarm_run(run_id: str):
 # Main Entry Point
 # ============================================================================
 
+def _pid_exists(pid: int) -> bool:
+    """Return True when the process id still exists."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _kill_process_on_port(port: int) -> None:
+    """Best-effort: terminate any process listening on the requested TCP port."""
+    import shutil
+    import subprocess
+
+    if port <= 0:
+        return
+
+    pids: list[int] = []
+    try:
+        if shutil.which("lsof"):
+            result = subprocess.run(
+                ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            pids = [
+                int(line.strip())
+                for line in result.stdout.splitlines()
+                if line.strip().isdigit() and int(line.strip()) != os.getpid()
+            ]
+        elif shutil.which("fuser"):
+            result = subprocess.run(
+                ["fuser", f"{port}/tcp"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            pids = [
+                int(token)
+                for token in result.stdout.split()
+                if token.strip().isdigit() and int(token.strip()) != os.getpid()
+            ]
+    except Exception as exc:
+        print(f"[warn] Failed to inspect port {port}: {exc}")
+        return
+
+    if not pids:
+        return
+
+    print(f"[info] Port {port} is busy; stopping PID(s): {', '.join(str(pid) for pid in pids)}")
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        alive = [pid for pid in pids if _pid_exists(pid)]
+        if not alive:
+            print(f"[info] Freed TCP port {port}")
+            return
+        time.sleep(0.1)
+
+    for pid in [pid for pid in pids if _pid_exists(pid)]:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    time.sleep(0.1)
+    print(f"[info] Freed TCP port {port}")
+
+
 def serve_main(argv: list[str] | None = None) -> int:
     """Start the API server from CLI-style arguments."""
     import argparse
@@ -978,7 +1161,7 @@ def serve_main(argv: list[str] | None = None) -> int:
     from fastapi.staticfiles import StaticFiles
 
     parser = argparse.ArgumentParser(description="Vibe-Trading Server")
-    parser.add_argument("--port", type=int, default=8000, help="Listen port (default 8000)")
+    parser.add_argument("--port", type=int, default=8899, help="Listen port (default 8899)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     parser.add_argument("--dev", action="store_true", help="Dev mode: spawn Vite on :5173")
     try:
@@ -1009,6 +1192,8 @@ def serve_main(argv: list[str] | None = None) -> int:
         print(f"[warn] No frontend build found at {frontend_dist}")
         print("[warn] Run: cd frontend && npm run build")
 
+    _kill_process_on_port(args.port)
+
     print("=" * 50)
     print("  Vibe-Trading Server")
     print(f"  http://127.0.0.1:{args.port}")
@@ -1025,4 +1210,3 @@ def serve_main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(serve_main())
-

@@ -28,7 +28,7 @@ function diffClass(a: unknown, b: unknown, higherIsBetter: boolean): string {
   if (!Number.isFinite(na) || !Number.isFinite(nb)) return "";
   const better = higherIsBetter ? nb > na : nb < na;
   const worse = higherIsBetter ? nb < na : nb > na;
-  return better ? "text-green-600 dark:text-green-400" : worse ? "text-red-600 dark:text-red-400" : "";
+  return better ? "text-success" : worse ? "text-destructive" : "";
 }
 
 function diffStr(a: unknown, b: unknown, type: "pct" | "num" | "int" | "days"): string {
@@ -243,15 +243,15 @@ export function Compare() {
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
-      <h1 className="text-xl font-bold flex items-center gap-2">
-        <GitCompare className="h-5 w-5" /> {t.strategyComparison}
+      <h1 className="text-xl font-bold flex items-center gap-2 text-foreground">
+        <GitCompare className="h-5 w-5 text-primary" /> {t.strategyComparison}
       </h1>
 
       {/* Selectors */}
       <div className="flex gap-4 items-end">
         <div className="flex-1">
           <label className="text-xs text-muted-foreground block mb-1">{t.baseline}</label>
-          <select value={leftId} onChange={(e) => setLeftId(e.target.value)} className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" title={leftRun?.prompt || leftId}>
+          <select value={leftId} onChange={(e) => setLeftId(e.target.value)} className="w-full px-3 py-2 rounded-button border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground" title={leftRun?.prompt || leftId}>
             <option value="">{t.selectRun}</option>
             {runs.map((r) => <option key={r.run_id} value={r.run_id}>{runLabel(r)} ({r.status})</option>)}
           </select>
@@ -259,7 +259,7 @@ export function Compare() {
         <ArrowRight className="h-5 w-5 text-muted-foreground mb-2 shrink-0" />
         <div className="flex-1">
           <label className="text-xs text-muted-foreground block mb-1">{t.compareTo}</label>
-          <select value={rightId} onChange={(e) => setRightId(e.target.value)} className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" title={rightRun?.prompt || rightId}>
+          <select value={rightId} onChange={(e) => setRightId(e.target.value)} className="w-full px-3 py-2 rounded-button border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground" title={rightRun?.prompt || rightId}>
             <option value="">{t.selectRun}</option>
             {runs.map((r) => <option key={r.run_id} value={r.run_id}>{runLabel(r)} ({r.status})</option>)}
           </select>
@@ -268,7 +268,7 @@ export function Compare() {
 
       {/* Equity curve overlay */}
       {(leftCurve.length > 0 || rightCurve.length > 0) && (
-        <div className="border rounded-xl p-4">
+        <div className="border border-border rounded-card p-4 bg-card">
           <h2 className="text-sm font-medium text-muted-foreground mb-2">{t.equityDrawdown}</h2>
           <EquityChartOverlay
             leftCurve={leftCurve}
@@ -281,10 +281,10 @@ export function Compare() {
 
       {/* Metrics table */}
       {(leftData || rightData) && (
-        <div className="border rounded-xl overflow-hidden">
+        <div className="border border-border rounded-card overflow-hidden bg-card">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b bg-muted/40">
+              <tr className="border-b border-border bg-muted/30">
                 <th className="text-left px-4 py-2.5 text-muted-foreground font-medium">{t.metric}</th>
                 <th className="text-right px-4 py-2.5 text-muted-foreground font-medium">{t.baseline}</th>
                 <th className="text-right px-4 py-2.5 text-muted-foreground font-medium">{t.compareTo}</th>
@@ -296,10 +296,10 @@ export function Compare() {
                 const lv = resolveMetric(leftData, key);
                 const rv = resolveMetric(rightData, key);
                 return (
-                  <tr key={key} className="border-b last:border-0 hover:bg-muted/20">
-                    <td className="px-4 py-2.5 font-medium">{label}</td>
-                    <td className="px-4 py-2.5 text-right font-mono tabular-nums">{fmt(lv, type)}</td>
-                    <td className="px-4 py-2.5 text-right font-mono tabular-nums">{fmt(rv, type)}</td>
+                  <tr key={key} className="border-b border-border/50 last:border-0 hover:bg-muted/20">
+                    <td className="px-4 py-2.5 font-medium text-foreground">{label}</td>
+                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-muted-foreground">{fmt(lv, type)}</td>
+                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-muted-foreground">{fmt(rv, type)}</td>
                     <td className={cn("px-4 py-2.5 text-right font-mono tabular-nums font-semibold", diffClass(lv, rv, higherIsBetter))}>{diffStr(lv, rv, type)}</td>
                   </tr>
                 );

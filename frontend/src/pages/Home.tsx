@@ -12,24 +12,35 @@ export function Home() {
   ];
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-8">
+    <div className="flex flex-col items-center justify-center min-h-screen p-8 bg-background">
       <div className="max-w-2xl text-center space-y-6">
-        <h1 className="text-4xl font-bold tracking-tight">{t.heroTitle}</h1>
-        <p className="text-lg text-muted-foreground">{t.heroDesc}</p>
+        {/* Display Hero - 70px equivalent at display scale */}
+        <h1 className="text-5xl md:text-[4.375rem] font-semibold tracking-normal text-foreground">
+          {t.heroTitle}
+        </h1>
+        <p className="text-lg text-muted-foreground leading-relaxed">{t.heroDesc}</p>
+        {/* Primary CTA - Wise Green with 16px radius */}
         <Link
           to="/agent"
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-primary text-primary-foreground font-medium hover:opacity-90 transition"
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-button bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors hover:scale-105 active:scale-95"
         >
           {t.startResearch} <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
 
+      {/* Feature cards with generous border radius and warm styling */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-16 max-w-4xl w-full">
         {FEATURES.map(({ icon: Icon, title, desc }) => (
-          <div key={title} className="border rounded-lg p-6 space-y-3">
-            <Icon className="h-8 w-8 text-primary" />
-            <h3 className="font-semibold">{title}</h3>
-            <p className="text-sm text-muted-foreground">{desc}</p>
+          <div
+            key={title}
+            className="bg-card rounded-card p-6 space-y-3 shadow-sm border border-border hover:shadow-md transition-shadow"
+          >
+            {/* Circular action button styling for icons */}
+            <div className="h-12 w-12 rounded-full bg-primary/20 flex items-center justify-center">
+              <Icon className="h-6 w-6 text-primary" />
+            </div>
+            <h3 className="font-semibold text-foreground">{title}</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
           </div>
         ))}
       </div>

@@ -7,3 +7,15 @@ __pycache__/
 runs/
 
 .env
+# .hermes configuration and source files
+!.hermes/
+.hermes/cache/
+.hermes/logs/
+.hermes/sessions/
+.hermes/sandboxes/
+.hermes/auth.json
+.hermes/auth.lock
+.hermes/processes.json
+.hermes/**/*.lock
+
+hermes_config.yaml

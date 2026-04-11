@@ -1,0 +1,3 @@
+[submodule "hermes-agent"]
+	path = hermes-agent
+	url = https://github.com/chris-han/hermes-agent.git

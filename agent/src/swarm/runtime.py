@@ -37,7 +37,7 @@ from src.swarm.worker import run_worker
 logger = logging.getLogger(__name__)
 
 
-class SwarmRuntime:
+class WorkflowRuntime:
     """Swarm DAG orchestration engine.
 
     Manages the full lifecycle of a swarm run: creation, scheduling, execution,
@@ -118,17 +118,28 @@ class SwarmRuntime:
         cancel_event.set()
         return True
 
+    # Event types that are high-frequency streaming deltas.
+    # These are forwarded to the live callback (for real-time display) but NOT
+    # written to the persistent events.jsonl — doing so would cause thousands
+    # of file open/write/close cycles with lock contention per worker, severely
+    # throttling streaming throughput.
+    _TRANSIENT_EVENT_TYPES: frozenset[str] = frozenset({"worker_text"})
+
     def _emit_event(self, run_id: str, event: SwarmEvent) -> None:
         """Persist an event and forward to live callback if registered.
+
+        High-frequency streaming delta events (worker_text) are forwarded to
+        the live callback only — not written to disk — to avoid I/O overhead.
 
         Args:
             run_id: Run identifier.
             event: Event to persist.
         """
-        try:
-            self._store.append_event(run_id, event)
-        except Exception:
-            logger.warning("Failed to persist event for run %s", run_id, exc_info=True)
+        if event.type not in self._TRANSIENT_EVENT_TYPES:
+            try:
+                self._store.append_event(run_id, event)
+            except Exception:
+                logger.warning("Failed to persist event for run %s", run_id, exc_info=True)
         with self._lock:
             cb = self._live_callbacks.get(run_id)
         if cb is not None:
@@ -393,6 +404,85 @@ class SwarmRuntime:
 
         return results
 
+    def _run_worker_once(
+        self,
+        agent_spec: SwarmAgentSpec,
+        task: SwarmTask,
+        upstream_summaries: dict[str, str],
+        user_vars: dict[str, str],
+        run_dir: Path,
+        event_callback: Callable[[SwarmEvent], None] | None,
+        run_id: str,
+    ) -> WorkerResult:
+        """Run a single worker attempt with timeout enforcement.
+
+        `run_worker()` can block indefinitely when an underlying model/tool call
+        hangs. Swarm presets already declare `timeout_seconds`, so enforce that
+        limit here and return a structured timeout result instead of leaving the
+        whole run stuck in `running` forever.
+        """
+        timeout_seconds = max(0, int(agent_spec.timeout_seconds or 0))
+        result_box: dict[str, WorkerResult] = {}
+        error_box: dict[str, Exception] = {}
+
+        def _target() -> None:
+            try:
+                result_box["result"] = run_worker(
+                    agent_spec=agent_spec,
+                    task=task,
+                    upstream_summaries=upstream_summaries,
+                    user_vars=user_vars,
+                    run_dir=run_dir,
+                    event_callback=event_callback,
+                )
+            except Exception as exc:  # pragma: no cover - re-raised below
+                error_box["error"] = exc
+
+        worker_thread = threading.Thread(
+            target=_target,
+            name=f"swarm-worker-{run_id}-{task.id}",
+            daemon=True,
+        )
+        worker_thread.start()
+
+        if timeout_seconds > 0:
+            worker_thread.join(timeout=timeout_seconds)
+        else:
+            worker_thread.join()
+
+        if worker_thread.is_alive():
+            error_msg = (
+                f"Worker '{agent_spec.id}' timed out after {timeout_seconds}s "
+                f"on task '{task.id}'"
+            )
+            logger.warning(error_msg)
+            self._emit_event(
+                run_id,
+                self._make_event(
+                    "worker_timeout",
+                    agent_id=agent_spec.id,
+                    task_id=task.id,
+                    data={"timeout_seconds": timeout_seconds},
+                ),
+            )
+            return WorkerResult(
+                status="timeout",
+                summary=f"Task timed out after {timeout_seconds}s before a final response was produced.",
+                error=error_msg,
+            )
+
+        if "error" in error_box:
+            raise error_box["error"]
+
+        result = result_box.get("result")
+        if result is None:
+            return WorkerResult(
+                status="failed",
+                summary="",
+                error=f"Worker '{agent_spec.id}' exited without returning a result",
+            )
+        return result
+
     def _run_worker_with_retries(
         self,
         agent_spec: SwarmAgentSpec,
@@ -443,13 +533,14 @@ class SwarmRuntime:
                     task.id, attempt + 1, max_retries + 1,
                 )
 
-            result = run_worker(
+            result = self._run_worker_once(
                 agent_spec=agent_spec,
                 task=task,
                 upstream_summaries=upstream_summaries,
                 user_vars=user_vars,
                 run_dir=run_dir,
                 event_callback=event_callback,
+                run_id=run_id,
             )
 
             cumulative_input_tokens += result.input_tokens

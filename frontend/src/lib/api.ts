@@ -23,9 +23,12 @@ export interface UploadResult {
   filename: string;
 }
 
-async function uploadFile(file: File): Promise<UploadResult> {
+async function uploadFile(file: File, sessionId?: string): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
+  if (sessionId) {
+    form.append("session_id", sessionId);
+  }
   const res = await fetch(`${BASE}/upload`, { method: "POST", body: form });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
@@ -43,14 +46,18 @@ export const api = {
   listRuns: () => request<RunListItem[]>("/runs"),
   getRun: (id: string) => request<RunData>(`/runs/${id}`),
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
-  getRunPine: (id: string) => request<PineScriptResult>(`/runs/${id}/pine`),
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
-  deleteSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "DELETE" }),
+  deleteSessions: (session_ids: string[]) => request<{ status: string; deleted: string[]; missing: string[] }>("/sessions/batch-delete", {
+    method: "POST",
+    body: JSON.stringify({ session_ids }),
+  }),
   renameSession: (sid: string, title: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   sendMessage: (sid: string, content: string) => request<{ message_id: string; attempt_id: string }>(`/sessions/${sid}/messages`, { method: "POST", body: JSON.stringify({ content }) }),
   cancelSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}/cancel`, { method: "POST" }),
   getSessionMessages: (sid: string) => request<MessageItem[]>(`/sessions/${sid}/messages`),
+  getSessionEvents: (sid: string, limit = 5000) => request<SessionEventItem[]>(`/sessions/${sid}/event-log?limit=${limit}`),
+  getSessionTrajectory: (sid: string) => request<SessionTrajectoryExport>(`/sessions/${sid}/trajectory`),
   sseUrl: (sid: string) => `${BASE}/sessions/${sid}/events`,
 
   // Swarm API
@@ -127,52 +134,6 @@ export interface EquityPoint {
   drawdown: string | number;
 }
 
-export interface ValidationData {
-  monte_carlo?: {
-    actual_sharpe: number;
-    actual_max_dd: number;
-    p_value_sharpe: number;
-    p_value_max_dd: number;
-    simulated_sharpe_mean: number;
-    simulated_sharpe_std: number;
-    simulated_sharpe_p5: number;
-    simulated_sharpe_p95: number;
-    n_simulations: number;
-    n_trades: number;
-    error?: string;
-  };
-  bootstrap?: {
-    observed_sharpe: number;
-    ci_lower: number;
-    ci_upper: number;
-    median_sharpe: number;
-    prob_positive: number;
-    confidence: number;
-    n_bootstrap: number;
-    error?: string;
-  };
-  walk_forward?: {
-    n_windows: number;
-    windows: Array<{
-      window: number;
-      start: string;
-      end: string;
-      return: number;
-      sharpe: number;
-      max_dd: number;
-      trades: number;
-      win_rate: number;
-    }>;
-    profitable_windows: number;
-    consistency_rate: number;
-    return_mean: number;
-    return_std: number;
-    sharpe_mean: number;
-    sharpe_std: number;
-    error?: string;
-  };
-}
-
 export interface RunData {
   status: string;
   run_id: string;
@@ -184,7 +145,6 @@ export interface RunData {
 
   metrics?: BacktestMetrics;
   artifacts?: ArtifactInfo[];
-  validation?: ValidationData;
 
   price_series?: Record<string, PriceBar[]>;
   indicator_series?: Record<string, Record<string, IndicatorPoint[]>>;
@@ -192,6 +152,7 @@ export interface RunData {
   equity_curve?: EquityPoint[];
   trade_log?: Array<Record<string, string>>;
   run_logs?: Array<{ source?: string; line_number?: number; message?: string }>;
+  report_markdown?: string;
 }
 
 export interface BacktestMetrics {
@@ -219,11 +180,6 @@ export interface ArtifactInfo {
   exists: boolean;
 }
 
-export interface PineScriptResult {
-  exists: boolean;
-  content: string | null;
-}
-
 export interface SessionItem {
   session_id: string;
   title?: string;
@@ -241,4 +197,38 @@ export interface MessageItem {
   created_at: string;
   linked_attempt_id?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface SessionEventItem {
+  event_id: string;
+  session_id: string;
+  attempt_id?: string;
+  event_type: string;
+  timestamp: string;
+  role?: string;
+  content?: string;
+  reasoning?: string;
+  tool?: string;
+  tool_call_id?: string;
+  args?: Record<string, unknown>;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TrajectoryConversationItem {
+  from: string;
+  value: string;
+}
+
+export interface SessionTrajectoryExport {
+  session_id: string;
+  title: string;
+  source_file: string;
+  trajectory: {
+    conversations: TrajectoryConversationItem[];
+    timestamp: string;
+    model: string;
+    completed: boolean;
+    metadata?: Record<string, unknown>;
+  };
 }

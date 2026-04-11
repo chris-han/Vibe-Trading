@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Loader2, ArrowDown, CheckCircle2, Square, Download, Plus, Paperclip, X, Users } from "lucide-react";
+import { ArrowUp, Loader2, ArrowDown, CheckCircle2, Square, Download, Plus, Paperclip, X, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
+import { useSessionsStore } from "@/stores/sessions";
 import { useSSE } from "@/hooks/useSSE";
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/lib/api";
@@ -61,10 +62,13 @@ export function Agent() {
 
   const messages = useAgentStore(s => s.messages);
   const streamingText = useAgentStore(s => s.streamingText);
+  const reasoningText = useAgentStore(s => s.reasoningText);
   const status = useAgentStore(s => s.status);
   const sessionId = useAgentStore(s => s.sessionId);
   const toolCalls = useAgentStore(s => s.toolCalls);
   const sessionLoading = useAgentStore(s => s.sessionLoading);
+  const upsertSession = useSessionsStore((s) => s.upsertSession);
+  const patchSession = useSessionsStore((s) => s.patchSession);
 
   const { connect, disconnect, onStatusChange } = useSSE();
   const { t } = useI18n();
@@ -131,10 +135,11 @@ export function Agent() {
         const meta = m.metadata as Record<string, unknown> | undefined;
         const runId = meta?.run_id as string | undefined;
         const metrics = meta?.metrics as Record<string, number> | undefined;
+        const status = String(meta?.status || "").toLowerCase();
         const ts = new Date(m.created_at).getTime();
         if (m.role === "user") {
           agentMsgs.push({ id: m.message_id, type: "user", content: m.content, timestamp: ts });
-        } else if (runId) {
+        } else if (runId && status === "completed") {
           // Show text answer first (if non-empty), then chart card
           if (m.content && m.content !== "Strategy execution completed.") {
             agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, timestamp: ts });
@@ -162,7 +167,27 @@ export function Agent() {
     const touch = () => { lastEventRef.current = Date.now(); };
 
     connect(api.sseUrl(sid), {
-      text_delta: (d) => { touch(); act().appendDelta(String(d.delta || "")); scrollToBottom(); },
+      "attempt.started": (d) => {
+        touch();
+        patchSession(sid, {
+          status: "running",
+          updated_at: new Date().toISOString(),
+          last_attempt_id: String(d.attempt_id || ""),
+        });
+      },
+
+      text_delta: (d) => {
+        touch();
+        act().appendDelta(String(d.content || d.delta || ""));
+        scrollToBottom();
+      },
+
+      reasoning_delta: (d) => {
+        touch();
+        act().appendReasoningDelta(String(d.content || d.delta || ""));
+        scrollToBottom();
+      },
+
       thinking_done: () => { touch(); /* don't flush — keep streaming text visible */ },
 
       tool_call: (d) => {
@@ -187,10 +212,22 @@ export function Agent() {
         });
       },
 
+      tool_progress: (d) => {
+        touch();
+        act().updateToolCall(String(d.tool || "delegate_task"), {
+          preview: String(d.preview || ""),
+        });
+      },
+
       compact: () => { touch(); },
 
       "attempt.completed": async (d) => {
         touch();
+        patchSession(sid, {
+          status: "completed",
+          updated_at: new Date().toISOString(),
+          last_attempt_id: String(d.attempt_id || ""),
+        });
         const s = act();
         // Build ThinkingTimeline summary from accumulated toolCalls
         const completedTools = s.toolCalls;
@@ -206,27 +243,24 @@ export function Agent() {
 
         // Clear streaming text (don't create thinking message)
         s.clearStreaming();
+        s.clearReasoning();
 
         // Add final answer
         const runDir = String(d.run_dir || "");
         const runId = runDir ? runDir.split(/[/\\]/).pop() : undefined;
         const summary = String(d.summary || "");
+        const metrics = (d.metrics as Record<string, number> | undefined) || undefined;
         if (summary) s.addMessage({ id: "", type: "answer", content: summary, timestamp: Date.now() });
 
-        // Only show RunCompleteCard if backtest produced metrics
         if (runId) {
-          try {
-            const runData = await api.getRun(runId);
-            const hasMetrics = runData.metrics && Object.keys(runData.metrics).length > 0;
-            if (hasMetrics) {
-              s.addMessage({
-                id: "", type: "run_complete", content: "", runId,
-                metrics: runData.metrics,
-                equityCurve: runData.equity_curve?.map(e => ({ time: e.time, equity: e.equity })),
-                timestamp: Date.now(),
-              });
-            }
-          } catch { /* ignore */ }
+          s.addMessage({
+            id: "",
+            type: "run_complete",
+            content: "",
+            runId,
+            metrics,
+            timestamp: Date.now(),
+          });
         }
 
         // Reset
@@ -237,16 +271,22 @@ export function Agent() {
 
       "attempt.failed": (d) => {
         touch();
+        patchSession(sid, {
+          status: "failed",
+          updated_at: new Date().toISOString(),
+          last_attempt_id: String(d.attempt_id || ""),
+        });
         act().clearStreaming();
+        act().clearReasoning();
         act().addMessage({ id: "", type: "error", content: String(d.error || "Execution failed"), timestamp: Date.now() });
         act().setStatus("idle");
         scrollToBottom();
       },
 
-      heartbeat: () => {},
+      heartbeat: () => { touch(); },
       reconnect: (d) => { act().setSseStatus("reconnecting", Number(d.attempt ?? 0)); },
     });
-  }, [connect, disconnect, scrollToBottom]);
+  }, [connect, disconnect, patchSession, scrollToBottom]);
 
   useEffect(() => {
     const gen = ++genRef.current;
@@ -292,6 +332,7 @@ export function Agent() {
       try {
         const session = await api.createSession(`[Swarm] ${presetTitle}: ${prompt.slice(0, 30)}`);
         sid = session.session_id;
+        upsertSession(session);
         act().setSessionId(sid);
         setSearchParams({ session: sid }, { replace: true });
       } catch { /* continue without session */ }
@@ -299,6 +340,12 @@ export function Agent() {
 
     act().addMessage({ id: "", type: "user", content: `[${presetTitle}] ${prompt}`, timestamp: Date.now() });
     act().setStatus("streaming");
+    if (sid) {
+      patchSession(sid, {
+        status: "running",
+        updated_at: new Date().toISOString(),
+      });
+    }
     // Add a placeholder swarm-progress message (rendered as SwarmDashboard)
     act().addMessage({ id: "swarm-progress", type: "answer", content: "", timestamp: Date.now() });
     forceScrollToBottom();
@@ -323,7 +370,7 @@ export function Agent() {
       if (!dash.agents[agentId]) {
         dash.agents[agentId] = {
           id: agentId, status: "waiting", tool: "", iters: 0,
-          startedAt: 0, elapsed: 0, lastText: "", summary: "",
+          startedAt: 0, elapsed: 0, lastText: "", reasoningText: "", summary: "",
         };
         dash.agentOrder.push(agentId);
       }
@@ -364,11 +411,13 @@ export function Agent() {
         try {
           const d = JSON.parse(e.data);
           const agentId = d.agent_id || "";
-          const content = (d.data?.content || "").trim();
-          if (agentId && content) {
+          const delta = d.data?.content || "";
+          if (agentId && delta) {
             const a = ensureAgent(agentId);
-            const lastLine = content.split("\n").pop()?.trim() || "";
-            if (lastLine) a.lastText = lastLine.slice(0, 60);
+            a.reasoningText += delta;
+            // lastText = last non-empty line for the compact row view
+            const lastLine = a.reasoningText.trimEnd().split("\n").pop()?.trim() || "";
+            if (lastLine) a.lastText = lastLine.slice(0, 80);
             flush();
           }
         } catch {}
@@ -416,6 +465,8 @@ export function Agent() {
               a.summary = summary;
               dash.completedSummaries.push({ agentId, summary });
             }
+            // Keep reasoningText for review but clear lastText
+            a.lastText = "";
             flush();
           }
         } catch {}
@@ -458,6 +509,12 @@ export function Agent() {
             evtSource.close();
             dash.finished = true;
             dash.finalStatus = rs;
+            if (sid) {
+              patchSession(sid, {
+                status: rs,
+                updated_at: new Date().toISOString(),
+              });
+            }
             const report = String(run.final_report || "");
             if (!report) {
               const tasks = (run.tasks || []) as Array<{ agent_id: string; summary?: string }>;
@@ -475,9 +532,21 @@ export function Agent() {
         } catch {}
       }
       evtSource.close();
+      if (sid) {
+        patchSession(sid, {
+          status: "failed",
+          updated_at: new Date().toISOString(),
+        });
+      }
       act().addMessage({ id: "", type: "error", content: "Swarm timed out", timestamp: Date.now() });
       act().setStatus("idle");
     } catch (err) {
+      if (sid) {
+        patchSession(sid, {
+          status: "failed",
+          updated_at: new Date().toISOString(),
+        });
+      }
       act().setStatus("error");
       act().addMessage({ id: "", type: "error", content: `Swarm failed: ${err instanceof Error ? err.message : "Unknown"}`, timestamp: Date.now() });
     }
@@ -491,7 +560,10 @@ export function Agent() {
     // Swarm mode: let agent auto-select the right preset
     if (swarmPreset) {
       setSwarmPreset(null);
-      finalPrompt = `[Swarm Team Mode] Use the swarm tool to assemble the best specialist team for this task. Auto-select the most appropriate preset.\n\n${prompt}`;
+      // Don't double-wrap if the user pasted a prompt that already has the prefix
+      if (!prompt.startsWith("[Swarm Team Mode]")) {
+        finalPrompt = `[Swarm Team Mode] Call \`list_swarm_presets\` to see available presets, then call \`run_swarm\` with the most appropriate preset for this task. Do NOT use delegate_task or load_skill.\n\n${prompt}`;
+      }
     }
 
     if (attachment) {
@@ -501,6 +573,8 @@ export function Agent() {
     setInput("");
     act().addMessage({ id: "", type: "user", content: finalPrompt, timestamp: Date.now() });
     act().setStatus("streaming");
+    act().clearStreaming();
+    act().clearReasoning();
     forceScrollToBottom();
     inputRef.current?.focus();
 
@@ -509,15 +583,22 @@ export function Agent() {
       if (!sid) {
         const session = await api.createSession(prompt.slice(0, 50));
         sid = session.session_id;
+        upsertSession(session);
         act().setSessionId(sid);
         setSearchParams({ session: sid }, { replace: true });
       }
       setupSSE(sid);
-      await api.sendMessage(sid, finalPrompt);
-    } catch {
+      const result = await api.sendMessage(sid, finalPrompt);
+      patchSession(sid, {
+        status: "running",
+        updated_at: new Date().toISOString(),
+        last_attempt_id: result.attempt_id,
+      });
+    } catch (err) {
       act().setStatus("error");
-      toast.error(t.sendFailed);
-      act().addMessage({ id: "", type: "error", content: t.sendFailed, timestamp: Date.now() });
+      const errorMsg = err instanceof Error ? err.message : t.sendFailed;
+      toast.error(errorMsg);
+      act().addMessage({ id: "", type: "error", content: errorMsg, timestamp: Date.now() });
     }
   };
 
@@ -531,8 +612,13 @@ export function Agent() {
     }
     try {
       await api.cancelSession(sessionId);
+      patchSession(sessionId, {
+        status: "cancelled",
+        updated_at: new Date().toISOString(),
+      });
       act().setStatus("idle");
       act().clearStreaming();
+      act().clearReasoning();
       useAgentStore.setState({ toolCalls: [] });
       toast.info("Cancel request sent");
     } catch {
@@ -598,7 +684,16 @@ export function Agent() {
     setUploading(true);
     setShowUploadMenu(false);
     try {
-      const result = await api.uploadFile(file);
+      let sid = act().sessionId;
+      if (!sid) {
+        const session = await api.createSession(file.name.slice(0, 50));
+        sid = session.session_id;
+        upsertSession(session);
+        act().setSessionId(sid);
+        setSearchParams({ session: sid }, { replace: true });
+      }
+
+      const result = await api.uploadFile(file, sid);
       setAttachment({ filename: result.filename, filePath: result.file_path });
       toast.success(`Uploaded: ${result.filename}`);
     } catch (err) {
@@ -674,9 +769,18 @@ export function Agent() {
           {(streamingText || (status === "streaming" && toolCalls.length > 0)) && (
             <div className="flex gap-3">
               <AgentAvatar />
-              <div className="flex-1 min-w-0 space-y-1.5">
+          <div className="flex-1 min-w-0 space-y-1.5">
+                {reasoningText && (
+                  <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap leading-relaxed">
+                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      Reasoning
+                    </div>
+                    {reasoningText}
+                    <span className="inline-block w-0.5 h-3 bg-primary ml-0.5 animate-pulse align-middle" />
+                  </div>
+                )}
                 {streamingText && (
-                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
+                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed text-foreground">
                     {streamingText}
                     <span className="inline-block w-0.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
                   </div>
@@ -684,12 +788,20 @@ export function Agent() {
                 {status === "streaming" && toolCalls.length > 0 && (() => {
                   const latest = toolCalls[toolCalls.length - 1];
                   const running = latest.status === "running";
+                  const detail = String(latest.preview || "").trim().replace(/\s+/g, " ").slice(0, 160);
                   return (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
                       {running
-                        ? <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
-                        : <CheckCircle2 className="h-3 w-3 text-success/60 shrink-0" />}
-                      <span>Step {toolCalls.length} · {latest.tool}</span>
+                        ? <Loader2 className="mt-0.5 h-3 w-3 animate-spin text-primary shrink-0" />
+                        : <CheckCircle2 className="mt-0.5 h-3 w-3 text-success/60 shrink-0" />}
+                      <div className="min-w-0">
+                        <div>Step {toolCalls.length} · {latest.tool}</div>
+                        {detail && (
+                          <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
+                            {detail}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })()}
@@ -703,7 +815,7 @@ export function Agent() {
         {showScrollBtn && (
           <button
             onClick={forceScrollToBottom}
-            className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:opacity-90 transition-opacity z-10"
+            className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:bg-primary/90 transition-colors z-10"
           >
             <ArrowDown className="h-3 w-3" /> New messages
           </button>
@@ -711,15 +823,15 @@ export function Agent() {
         <ConversationTimeline messages={messages} containerRef={listRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t p-4 bg-background/80 backdrop-blur-sm">
+      <form onSubmit={handleSubmit} className="border-t border-border p-4 bg-background/80 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto space-y-2">
           {/* Swarm preset badge */}
           {swarmPreset && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400 text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-button bg-primary text-primary-foreground text-xs font-medium">
                 <Users className="h-3 w-3" />
                 {swarmPreset.title}
-                <button type="button" onClick={() => setSwarmPreset(null)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setSwarmPreset(null)} className="hover:text-destructive hover:bg-destructive/20 rounded p-0.5 transition-colors">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -728,10 +840,10 @@ export function Agent() {
           {/* Attachment badge */}
           {attachment && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-button bg-primary text-primary-foreground text-xs font-medium">
                 <Paperclip className="h-3 w-3" />
                 {attachment.filename}
-                <button type="button" onClick={() => setAttachment(null)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setAttachment(null)} className="hover:text-destructive hover:bg-destructive/20 rounded p-0.5 transition-colors">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -751,13 +863,13 @@ export function Agent() {
                 type="button"
                 onClick={() => setShowUploadMenu(prev => !prev)}
                 disabled={status === "streaming" || uploading}
-                className="w-9 h-9 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
+                className="w-9 h-9 rounded-full border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
                 title="More options"
               >
                 <Plus className="h-4 w-4" />
               </button>
               {showUploadMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-xl border bg-background/95 backdrop-blur-sm shadow-lg py-1 z-50">
+                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-card border border-border bg-background/95 backdrop-blur-sm shadow-lg py-1 z-50">
                   <button
                     type="button"
                     onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
@@ -766,7 +878,7 @@ export function Agent() {
                     <Paperclip className="h-4 w-4" />
                     Upload PDF document
                   </button>
-                  <div className="border-t my-1" />
+                  <div className="border-t border-border my-1" />
                   <button
                     type="button"
                     onClick={() => {
@@ -806,14 +918,14 @@ export function Agent() {
                 }
               }}
               placeholder={t.prompt}
-              className="flex-1 px-4 py-2.5 rounded-xl border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow resize-none max-h-32 overflow-y-auto"
+              className="flex-1 px-4 py-2.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-shadow resize-none max-h-32 overflow-hidden text-foreground placeholder:text-muted-foreground"
               disabled={status === "streaming"}
             />
             {messages.length > 0 && (
               <button
                 type="button"
                 onClick={handleExport}
-                className="px-3 py-2.5 rounded-xl border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="w-9 h-9 flex items-center justify-center rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 title="Export chat"
               >
                 <Download className="h-4 w-4" />
@@ -823,7 +935,7 @@ export function Agent() {
               <button
                 type="button"
                 onClick={handleCancel}
-                className="px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+                className="w-9 h-9 rounded-full bg-destructive text-destructive-foreground font-medium hover:bg-destructive/90 transition-colors flex items-center justify-center"
                 title="Stop generation"
               >
                 <Square className="h-4 w-4" />
@@ -832,9 +944,9 @@ export function Agent() {
               <button
                 type="submit"
                 disabled={!input.trim() && !attachment}
-                className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
+                className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-medium disabled:opacity-40 hover:bg-primary/90 transition-colors flex items-center justify-center"
               >
-                <Send className="h-4 w-4" />
+                <ArrowUp className="h-4 w-4" />
               </button>
             )}
           </div>

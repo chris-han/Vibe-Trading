@@ -1,8 +1,4 @@
 <p align="center">
-  <b>English</b> | <a href="README_zh.md">中文</a> | <a href="README_ja.md">日本語</a> | <a href="README_ko.md">한국어</a>
-</p>
-
-<p align="center">
   <img src="assets/icon.png" width="120" alt="Vibe-Trading Logo"/>
 </p>
 
@@ -19,10 +15,10 @@
   <a href="https://pypi.org/project/vibe-trading-ai/"><img src="https://img.shields.io/pypi/v/vibe-trading-ai?style=flat&logo=pypi&logoColor=white" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=flat" alt="License"></a>
   <br>
-  <img src="https://img.shields.io/badge/Skills-68-orange" alt="Skills">
+  <img src="https://img.shields.io/badge/Skills-64-orange" alt="Skills">
   <img src="https://img.shields.io/badge/Swarm_Presets-29-7C3AED" alt="Swarm">
-  <img src="https://img.shields.io/badge/Tools-21-0F766E" alt="Tools">
-  <img src="https://img.shields.io/badge/Data_Sources-5-2563EB" alt="Data Sources">
+  <img src="https://img.shields.io/badge/Tools-20-0F766E" alt="Tools">
+  <img src="https://img.shields.io/badge/Markets-3-2563EB" alt="Markets">
   <br>
   <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/Feishu-Group-E9DBFC?style=flat-square&logo=feishu&logoColor=white" alt="Feishu"></a>
   <a href="https://github.com/HKUDS/.github/blob/main/profile/README.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat-square&logo=wechat&logoColor=white" alt="WeChat"></a>
@@ -37,10 +33,7 @@
   <a href="#-cli-reference">CLI</a> &nbsp;&middot;&nbsp;
   <a href="#-api-server">API</a> &nbsp;&middot;&nbsp;
   <a href="#-mcp-plugin">MCP</a> &nbsp;&middot;&nbsp;
-  <a href="#-project-structure">Structure</a> &nbsp;&middot;&nbsp;
-  <a href="#-roadmap">Roadmap</a> &nbsp;&middot;&nbsp;
-  <a href="#-contributing">Contributing</a> &nbsp;&middot;&nbsp;
-  <a href="#contributors">Contributors</a>
+  <a href="#-project-structure">Structure</a>
 </p>
 
 <p align="center">
@@ -51,11 +44,8 @@
 
 ## 📰 News
 
-- **2026-04-11** 🛡️ **Reliability & DX**: `vibe-trading init` interactive .env bootstrap ([#19](https://github.com/HKUDS/Vibe-Trading/pull/19)), startup preflight checks for LLM & data sources, runtime data-source fallback when primary returns empty, hardened backtest engine with data validation & error isolation, date/time context injection into agent & swarm prompts. Multi-language README (zh/ja/ko) via community PR [#21](https://github.com/HKUDS/Vibe-Trading/pull/21).
-- **2026-04-10** 📦 **v0.1.4**: Fix Docker build ([#8](https://github.com/HKUDS/Vibe-Trading/issues/8)), add `web_search` MCP tool (17 total), `akshare`/`ccxt` in deps & MCP. 11 LLM providers (DeepSeek, Groq, Gemini, Ollama, etc.), all tuning params via `.env`. Hardened `ml-strategy` skill. Published to PyPI and ClawHub.
-- **2026-04-09** 📊 **Backtest Wave 2 — multi-asset engines**: added ChinaFutures (CFFEX/SHFE/DCE/ZCE, 50+ contracts), GlobalFutures (CME/ICE/Eurex, 30+ contracts), Forex (24 pairs, spread + swap), Options v2 (American exercise, IV smile). Statistical validation: Monte Carlo permutation test, Bootstrap Sharpe CI, Walk-Forward analysis.
-- **2026-04-08** 🔧 **Multi-market backtest** with per-market rules; **Pine Script v6 export** for TradingView. **Data source expansion**: 5 sources with auto-fallback, `web_search` tool, skill categorization (7 categories).
-- **2026-04-01** 🚀 **v0.1.0** — Initial release: ReAct agent, 64 skills, 29 swarm presets, cross-market backtest, CLI + Web UI + MCP server.
+- **2026-04-09** 🔧 Multi-market backtest engines — per-market rules (A-share T+1, crypto funding/liquidation, US/HK fees) replace the single vectorised engine.
+- **2026-04-01** 🚀 Released **v0.1.0** — Initial release: ReAct agent, 64 skills, 29 swarm presets, cross-market backtest, CLI + Web UI + MCP server.
 
 ---
 
@@ -65,9 +55,8 @@ Vibe-Trading is an AI-powered multi-agent finance workspace that turns natural l
 
 ### Key Capabilities:
 • **Strategy Generation** — Automatically writes trading code from your ideas<br>
-• **Smart Data Access** — 5 data sources with automatic fallback; zero-config for all markets<br>
+• **Smart Data Access** — Pulls market data from multiple sources seamlessly<br>
 • **Performance Testing** — Tests your strategies against historical market data<br>
-• **TradingView Export** — One-click convert strategies to Pine Script v6 for TradingView<br>
 • **Expert Teams** — Deploys specialized AI agents for complex research tasks<br>
 • **Live Updates** — Watch the entire analysis process in real-time
 
@@ -80,7 +69,7 @@ Vibe-Trading is an AI-powered multi-agent finance workspace that turns natural l
     <td align="center" width="25%" valign="top">
       <img src="assets/scene-research.png" height="150" alt="Research"/><br>
       <h3>🔍 DeepResearch for Trading</h3>
-      <img src="https://img.shields.io/badge/68_Skills-FF6B6B?style=for-the-badge&logo=bookstack&logoColor=white" alt="Skills" /><br><br>
+      <img src="https://img.shields.io/badge/64_Skills-FF6B6B?style=for-the-badge&logo=bookstack&logoColor=white" alt="Skills" /><br><br>
       <div align="left" style="font-size: 4px;">
         • Multi-domain analysis coverage across markets<br>
         • Auto strategy and signal generation<br>
@@ -102,11 +91,11 @@ Vibe-Trading is an AI-powered multi-agent finance workspace that turns natural l
     <td align="center" width="25%" valign="top">
       <img src="assets/scene-backtest.png" height="150" alt="Backtest"/><br>
       <h3>📊 Cross-Market Backtest</h3>
-      <img src="https://img.shields.io/badge/5_Data_Sources-FFD93D?style=for-the-badge&logo=bitcoin&logoColor=black" alt="Backtest" /><br><br>
+      <img src="https://img.shields.io/badge/3_Markets-FFD93D?style=for-the-badge&logo=bitcoin&logoColor=black" alt="Backtest" /><br><br>
       <div align="left">
-        • A-shares, HK/US equities, crypto, futures & forex<br>
-        • 7 market engines: A-share, US/HK equity, crypto, China futures, global futures, forex<br>
-        • Statistical validation: Monte Carlo, Bootstrap CI, Walk-Forward<br>
+        • A-shares, HK/US equities & crypto<br>
+        • 7 flexible intervals from 1 min to 1 day<br>
+        • Daily & options portfolio engines<br>
         • 15+ performance metrics & 4 optimizers
       </div>
     </td>
@@ -124,21 +113,22 @@ Vibe-Trading is an AI-powered multi-agent finance workspace that turns natural l
   </tr>
 </table>
 
-## 68 Skills across 7 Categories
+## 64 Skills across 8 Core Finance Domains
 
-- 📊 68 specialized finance skills organized into 7 categories
+- 📊 64 specialized finance skills across 8 core domains
 - 🌐 Complete coverage from traditional markets to crypto & DeFi
-- 🔬 Comprehensive capabilities spanning data sourcing to quantitative research
+- 🔬 Comprehensive capabilities spanning technical analysis to quantitative research
 
-| Category | Skills | Examples |
-|----------|--------|----------|
-| Data Source | 6 | `data-routing`, `tushare`, `yfinance`, `okx-market`, `akshare`, `ccxt` |
-| Strategy | 16 | `strategy-generate`, `technical-basic`, `candlestick`, `ichimoku`, `elliott-wave`, `smc`, `multi-factor`, `ml-strategy` |
-| Analysis | 15 | `factor-research`, `macro-analysis`, `global-macro`, `valuation-model`, `earnings-forecast`, `credit-analysis` |
-| Asset Class | 9 | `options-strategy`, `options-advanced`, `convertible-bond`, `etf-analysis`, `asset-allocation`, `sector-rotation` |
-| Crypto | 7 | `perp-funding-basis`, `liquidation-heatmap`, `stablecoin-flow`, `defi-yield`, `onchain-analysis` |
-| Flow | 7 | `hk-connect-flow`, `us-etf-flow`, `edgar-sec-filings`, `financial-statement`, `adr-hshare` |
-| Tool | 8 | `backtest-diagnose`, `report-generate`, `pine-script`, `doc-reader`, `web-reader` |
+| Area | Examples |
+|------|----------|
+| Technical Analysis | `technical-basic`, `candlestick`, `ichimoku`, `harmonic`, `elliott-wave`, `smc` |
+| Quant Research | `strategy-generate`, `multi-factor`, `pair-trading`, `factor-research`, `ml-strategy` |
+| Fundamentals | `valuation-model`, `financial-statement`, `earnings-forecast`, `credit-analysis` |
+| HK/US Equities | `edgar-sec-filings`, `earnings-revision`, `us-etf-flow`, `hk-connect-flow`, `adr-hshare` |
+| Crypto Desk | `perp-funding-basis`, `liquidation-heatmap`, `stablecoin-flow`, `token-unlock-treasury`, `defi-yield` |
+| Macro | `macro-analysis`, `global-macro`, `asset-allocation`, `commodity-analysis`, `sector-rotation` |
+| Derivatives | `options-strategy`, `options-advanced`, `options-payoff`, `crypto-derivatives`, `hedging-strategy` |
+| Alt Data | `social-media-intelligence`, `sentiment-analysis`, `behavioral-finance`, `report-generate` |
 
 ## 29 Agent Swarm Team Presets
 
@@ -220,13 +210,11 @@ vibe-trading-mcp               # start MCP server (stdio)
 
 ### Prerequisites
 
-- An **LLM API key** from any supported provider — or run locally with **Ollama** (no key needed)
+- An **OpenAI-compatible API key** (OpenRouter, DeepSeek, etc.) — the only hard requirement
 - **Python 3.11+** for Path B
 - **Docker** for Path A
 
-> **Supported LLM providers:** OpenRouter, OpenAI, DeepSeek, Gemini, Groq, DashScope/Qwen, Zhipu, Moonshot/Kimi, MiniMax, Xiaomi MIMO, Ollama (local). See `.env.example` for config.
-
-> **Tip:** All markets work without any API keys thanks to automatic fallback. yfinance (HK/US), OKX (crypto), and AKShare (A-shares, US, HK, futures, forex) are all free. Tushare token is optional — AKShare covers A-shares as a free fallback.
+> **Tip:** yfinance (HK/US equities) and OKX (crypto) are free and require no API key. You only need a Tushare token for A-share data.
 
 ### Path A: Docker (zero setup)
 
@@ -234,7 +222,7 @@ vibe-trading-mcp               # start MCP server (stdio)
 git clone https://github.com/HKUDS/Vibe-Trading.git
 cd Vibe-Trading
 cp agent/.env.example agent/.env
-# Edit agent/.env — uncomment your LLM provider and set API key
+# Edit agent/.env — set OPENAI_API_KEY (required)
 docker compose up --build
 ```
 
@@ -245,26 +233,39 @@ Open `http://localhost:8899`. Backend + frontend in one container.
 ```bash
 git clone https://github.com/HKUDS/Vibe-Trading.git
 cd Vibe-Trading
-python -m venv .venv
+cd agent
+python3 -m venv .venv
 
 # Activate
 source .venv/bin/activate          # Linux / macOS
 # .venv\Scripts\Activate.ps1       # Windows PowerShell
 
-pip install -e .
-cp agent/.env.example agent/.env   # Edit — set your LLM provider API key
-vibe-trading                       # Launch interactive TUI
+python -m pip install -U pip setuptools wheel
+python -m pip install -e .
+cp .env.example .env               # Edit — set OPENAI_API_KEY
+python cli.py                      # Launch interactive TUI
 ```
+
+If you do not activate the environment, use the agent interpreter explicitly:
+
+```bash
+cd agent
+./.venv/bin/python -m pip install -e .
+./.venv/bin/python cli.py
+./.venv/bin/python predict_oklo.py
+```
+
+Use a single virtualenv only: `agent/.venv`. Avoid bare `pip` and `python3` in repo automation. Enter `agent/` first, then use `./.venv/bin/python -m pip` and `./.venv/bin/python ...`.
 
 <details>
 <summary><b>Start web UI (optional)</b></summary>
 
 ```bash
 # Terminal 1: API server
-vibe-trading serve --port 8899
+python cli.py serve --port 8899
 
 # Terminal 2: Frontend dev server
-cd frontend && npm install && npm run dev
+cd ../frontend && npm install && npm run dev
 ```
 
 Open `http://localhost:5899`. The frontend proxies API calls to `localhost:8899`.
@@ -294,20 +295,18 @@ The skill + MCP config is downloaded into your agent's skills directory. See [Cl
 
 ## 🧠 Environment Variables
 
-Copy `agent/.env.example` to `agent/.env` and uncomment the provider block you want. Each provider needs 3-4 variables:
+Edit `agent/.env`:
 
 | Variable | Required | Description |
 |----------|:--------:|-------------|
-| `LANGCHAIN_PROVIDER` | Yes | Provider name (`openrouter`, `deepseek`, `groq`, `ollama`, etc.) |
-| `<PROVIDER>_API_KEY` | Yes* | API key (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, etc.) |
-| `<PROVIDER>_BASE_URL` | Yes | API endpoint URL |
+| `OPENAI_API_KEY` | Yes | OpenAI-compatible API key (OpenRouter, DeepSeek, etc.) |
+| `OPENAI_BASE_URL` | Usually | API gateway URL (default: `https://openrouter.ai/api/v1`) |
+| `LANGCHAIN_PROVIDER` | Yes | LLM provider selector (e.g. `openrouter`) |
 | `LANGCHAIN_MODEL_NAME` | Yes | Model name (e.g. `deepseek/deepseek-v3.2`) |
-| `TUSHARE_TOKEN` | No | Tushare Pro token for A-share data (falls back to AKShare) |
-| `TIMEOUT_SECONDS` | No | LLM call timeout, default 120s |
+| `TUSHARE_TOKEN` | A-shares only | Tushare Pro token for A-share data |
+| `TIMEOUT_SECONDS` | No | Agent timeout, default 2400s |
 
-<sub>* Ollama does not require an API key.</sub>
-
-**Free data (no key needed):** A-shares via AKShare, HK/US equities via yfinance, crypto via OKX, 100+ crypto exchanges via CCXT. The system automatically selects the best available source for each market.
+**Free data (no key needed):** HK/US equities via yfinance, crypto via OKX public API.
 
 ---
 
@@ -325,7 +324,7 @@ vibe-trading serve         # API server
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
-| `/skills` | List all 68 finance skills |
+| `/skills` | List all 64 finance skills |
 | `/swarm` | List 29 swarm team presets |
 | `/swarm run <preset> [vars_json]` | Run a swarm team with live streaming |
 | `/swarm list` | Swarm run history |
@@ -334,7 +333,6 @@ vibe-trading serve         # API server
 | `/list` | Recent runs |
 | `/show <run_id>` | Run details + metrics |
 | `/code <run_id>` | Generated strategy code |
-| `/pine <run_id>` | Pine Script for TradingView |
 | `/trace <run_id>` | Full execution replay |
 | `/continue <run_id> <prompt>` | Continue a run with new instructions |
 | `/sessions` | List chat sessions |
@@ -362,7 +360,6 @@ vibe-trading --swarm-run investment_committee '{"topic":"BTC outlook"}'
 vibe-trading --list
 vibe-trading --show <run_id>
 vibe-trading --code <run_id>
-vibe-trading --pine <run_id>           # Pine Script for TradingView
 vibe-trading --trace <run_id>
 vibe-trading --continue <run_id> "refine the strategy"
 vibe-trading --upload report.pdf
@@ -382,7 +379,6 @@ vibe-trading serve --port 8899
 |--------|----------|-------------|
 | `GET` | `/runs` | List runs |
 | `GET` | `/runs/{run_id}` | Run details |
-| `GET` | `/runs/{run_id}/pine` | Pine Script export |
 | `POST` | `/sessions` | Create session |
 | `POST` | `/sessions/{id}/messages` | Send message |
 | `GET` | `/sessions/{id}/events` | SSE event stream |
@@ -397,7 +393,7 @@ Interactive docs: `http://localhost:8899/docs`
 
 ## 🔌 MCP Plugin
 
-Vibe-Trading exposes 17 MCP tools for any MCP-compatible client. Runs as a stdio subprocess — no server setup needed. **16 of 17 tools work with zero API keys** (HK/US/crypto). Only `run_swarm` needs an LLM key.
+Vibe-Trading exposes 16 MCP tools for any MCP-compatible client. Runs as a stdio subprocess — no server setup needed. **15 of 16 tools work with zero API keys** (HK/US/crypto). Only `run_swarm` needs an LLM key.
 
 <details>
 <summary><b>Claude Desktop</b></summary>
@@ -439,7 +435,7 @@ vibe-trading-mcp --transport sse  # SSE for web clients
 
 </details>
 
-**MCP tools exposed (17):** `list_skills`, `load_skill`, `backtest`, `factor_analysis`, `analyze_options`, `pattern_recognition`, `get_market_data`, `web_search`, `read_url`, `read_document`, `read_file`, `write_file`, `list_swarm_presets`, `run_swarm`, `get_swarm_status`, `get_run_result`, `list_runs`.
+**MCP tools exposed (16):** `list_skills`, `load_skill`, `backtest`, `factor_analysis`, `analyze_options`, `pattern_recognition`, `get_market_data`, `read_url`, `read_document`, `read_file`, `write_file`, `list_swarm_presets`, `run_swarm`, `get_swarm_status`, `get_run_result`, `list_runs`.
 
 <details>
 <summary><b>Install from ClawHub (one command)</b></summary>
@@ -459,7 +455,7 @@ Browse on ClawHub: [clawhub.ai/skills/vibe-trading](https://clawhub.ai/skills/vi
 <details>
 <summary><b>OpenSpace — self-evolving skills</b></summary>
 
-All 68 finance skills are published on [open-space.cloud](https://open-space.cloud) and evolve autonomously through OpenSpace's self-evolution engine.
+All 64 finance skills are published on [open-space.cloud](https://open-space.cloud) and evolve autonomously through OpenSpace's self-evolution engine.
 
 To use with OpenSpace, add both MCP servers to your agent config:
 
@@ -481,7 +477,7 @@ To use with OpenSpace, add both MCP servers to your agent config:
 }
 ```
 
-OpenSpace will auto-discover all 68 skills, enabling auto-fix, auto-improve, and community sharing. Search for Vibe-Trading skills via `search_skills("finance backtest")` in any OpenSpace-connected agent.
+OpenSpace will auto-discover all 64 skills, enabling auto-fix, auto-improve, and community sharing. Search for Vibe-Trading skills via `search_skills("finance backtest")` in any OpenSpace-connected agent.
 
 </details>
 
@@ -494,41 +490,38 @@ OpenSpace will auto-discover all 68 skills, enabling auto-fix, auto-improve, and
 
 ```
 Vibe-Trading/
-├── agent/                          # Backend (Python)
+├── agent/                          # Agent runtime (Python)
 │   ├── cli.py                      # CLI entrypoint — interactive TUI + subcommands
 │   ├── api_server.py               # FastAPI server — runs, sessions, upload, swarm, SSE
-│   ├── mcp_server.py               # MCP server — 17 tools for OpenClaw / Claude Desktop
+│   ├── mcp_server.py               # MCP server — 16 tools for OpenClaw / Claude Desktop
 │   │
 │   ├── src/
 │   │   ├── agent/                  # ReAct agent core
 │   │   │   ├── loop.py             #   main reasoning loop
-│   │   │   ├── skills.py           #   skill loader (68 SKILL.md files, 7 categories)
+│   │   │   ├── skills.py           #   skill loader (64 SKILL.md files)
 │   │   │   ├── tools.py            #   tool orchestration
 │   │   │   ├── context.py          #   system prompt builder
 │   │   │   ├── memory.py           #   run memory / artifact store
 │   │   │   └── trace.py            #   execution trace writer
 │   │   │
-│   │   ├── tools/                  # 21 agent tools
+│   │   ├── tools/                  # 20 agent tools
 │   │   │   ├── backtest_tool.py    #   run backtests
 │   │   │   ├── factor_analysis_tool.py
 │   │   │   ├── options_pricing_tool.py
 │   │   │   ├── pattern_tool.py     #   chart pattern detection
 │   │   │   ├── doc_reader_tool.py  #   PDF reader (OCR fallback)
 │   │   │   ├── web_reader_tool.py  #   web page reader (Jina)
-│   │   │   ├── web_search_tool.py  #   DuckDuckGo web search
 │   │   │   ├── swarm_tool.py       #   launch swarm teams
 │   │   │   └── ...                 #   file I/O, bash, tasks, etc.
 │   │   │
-│   │   ├── skills/                 # 68 finance skills in 7 categories (SKILL.md each)
+│   │   ├── skills/                 # 64 finance skill definitions (SKILL.md each)
 │   │   ├── swarm/                  # Swarm DAG execution engine
 │   │   ├── session/                # Multi-turn chat session management
 │   │   └── providers/              # LLM provider abstraction
 │   │
 │   ├── backtest/                   # Backtest engines
-│   │   ├── engines/                #   7 engines: china_a, global_equity, crypto, china_futures, global_futures, forex + options_portfolio
-│   │   ├── loaders/                #   5 sources: tushare, okx, yfinance, akshare, ccxt
-│   │   │   ├── base.py             #   DataLoader Protocol
-│   │   │   └── registry.py         #   Registry + auto-fallback chains
+│   │   ├── engines/                #   daily_portfolio + options_portfolio
+│   │   ├── loaders/                #   tushare, okx, yfinance
 │   │   └── optimizers/             #   MVO, equal vol, max div, risk parity
 │   │
 │   └── config/swarm/               # 29 swarm preset YAML definitions
@@ -576,46 +569,6 @@ Vibe-Trading is part of the **[HKUDS](https://github.com/HKUDS)** agent ecosyste
 
 ---
 
-## 🗺 Roadmap
-
-> We ship in phases. Items move to [Issues](https://github.com/HKUDS/Vibe-Trading/issues) when work begins.
-
-| Phase | Feature | Status |
-|-------|---------|--------|
-| **Analysis & Viz** | Options volatility surface & Greeks 3D visualization | Planned |
-| | Cross-asset correlation heatmap with rolling window & clustering | Planned |
-| | Benchmark comparison in CLI backtest output | Planned |
-| | Calmar Ratio & Omega Ratio in backtest metrics | Planned |
-| **Skills & Presets** | Dividend Analysis skill | Planned |
-| | ESG / Sustainable Investing swarm preset | Planned |
-| | Emerging Markets Research Desk swarm preset | Planned |
-| **Portfolio & Optimization** | Advanced portfolio optimizer: leverage, sector caps, turnover constraints | Planned |
-| **Future** | Beginner tutorial: "5-minute natural language backtest" | Planned |
-| | Live data streaming via WebSocket | Exploring |
-| | Strategy marketplace (share & discover) | Exploring |
-
----
-
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-**Good first issues** are tagged with [`good first issue`](https://github.com/HKUDS/Vibe-Trading/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) — pick one and get started.
-
-Want to contribute something bigger? Check the [Roadmap](#-roadmap) above and open an issue to discuss before starting.
-
----
-
-## Contributors
-
-Thanks to everyone who has contributed to Vibe-Trading!
-
-<a href="https://github.com/HKUDS/Vibe-Trading/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=HKUDS/Vibe-Trading" />
-</a>
-
----
-
 ## Disclaimer
 
 Vibe-Trading is for research, simulation, and backtesting only. It is not investment advice and it does not execute live trades. Past performance does not guarantee future results.
@@ -632,3 +585,54 @@ MIT License — see [LICENSE](LICENSE)
 <p align="center">
   <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.Vibe-Trading&style=flat" alt="visitors"/>
 </p>
+
+---
+## In **production mode**
+
+```bash
+vibe-trading serve --port 8899
+```
+
+starts the **backend**, and if dist exists, FastAPI also serves the **built frontend** on the same port.
+
+Open:
+
+- `http://localhost:8899`
+
+### Important
+This only serves both if the frontend has already been built:
+
+```bash
+cd frontend
+bun install
+bun run build
+cd ../agent
+uv run python cli.py serve --port 8899
+```
+
+---
+
+## In dev mode
+
+For live frontend changes, use **two processes**:
+
+```bash
+# terminal 1
+cd agent
+uv run python cli.py serve --port 8899
+
+# terminal 2
+cd frontend
+bun install
+bun run dev
+```
+
+Then open:
+
+- Frontend dev UI: `http://localhost:5899`
+- Backend API: `http://localhost:8899`
+
+So the short answer is:
+
+- **Yes** for built/prod frontend
+- **No** for Vite live dev unless you run the frontend separately

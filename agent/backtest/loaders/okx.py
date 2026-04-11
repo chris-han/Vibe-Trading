@@ -10,24 +10,12 @@ from typing import Dict, List, Optional
 import pandas as pd
 import requests
 
-from backtest.loaders.base import validate_date_range
-from backtest.loaders.registry import register
-
 BASE_URL = "https://www.okx.com/api/v5"
 _MAX_PER_PAGE = 300
 
 
-@register
 class DataLoader:
     """OKX crypto OHLCV loader."""
-
-    name = "okx"
-    markets = {"crypto"}
-    requires_auth = False
-
-    def is_available(self) -> bool:
-        """Always available (public API, no auth)."""
-        return True
 
     def __init__(self) -> None:
         """No credentials required for public candles."""
@@ -53,8 +41,6 @@ class DataLoader:
         Returns:
             Mapping symbol -> DataFrame.
         """
-        validate_date_range(start_date, end_date)
-
         if fields:
             print(f"[WARN] OKX ignores extra fields: {fields}")
 

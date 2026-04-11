@@ -1,4 +1,4 @@
-"""Filesystem-backed persistence for Session, Message, and Attempt records."""
+"""Filesystem-backed persistence for Session, Attempt, and SessionEvent records."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.session.models import Attempt, Message, Session
+from src.session.models import Attempt, Message, Session, SessionEvent, SessionEventType
 
 
 class SessionStore:
@@ -17,7 +17,7 @@ class SessionStore:
         sessions/
         ├── {session_id}/
         │   ├── session.json
-        │   ├── messages.jsonl
+        │   ├── events.jsonl
         │   └── attempts/
         │       └── {attempt_id}/
         │           └── attempt.json
@@ -41,8 +41,8 @@ class SessionStore:
     def _session_file(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "session.json"
 
-    def _messages_file(self, session_id: str) -> Path:
-        return self._session_dir(session_id) / "messages.jsonl"
+    def _events_file(self, session_id: str) -> Path:
+        return self._session_dir(session_id) / "events.jsonl"
 
     def _attempt_dir(self, session_id: str, attempt_id: str) -> Path:
         return self._session_dir(session_id) / "attempts" / attempt_id
@@ -133,21 +133,52 @@ class SessionStore:
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions[:limit]
 
-    # ---- Message Append-Only Log ----
+    # ---- Canonical Event Log ----
+
+    def append_event(self, event: SessionEvent) -> None:
+        """Append a canonical event to the session event log."""
+        path = self._events_file(event.session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+
+    def get_events(self, session_id: str, limit: int = 1000) -> List[SessionEvent]:
+        """Read canonical session events in chronological order."""
+        path = self._events_file(session_id)
+        if not path.exists():
+            return []
+        events: List[SessionEvent] = []
+        for line in path.read_text(encoding="utf-8").strip().splitlines():
+            if line.strip():
+                events.append(SessionEvent.from_dict(json.loads(line)))
+        return events[-limit:]
+
+    # ---- Message Projection ----
 
     def append_message(self, message: Message) -> None:
-        """Append a message to the session JSONL log.
+        """Append a message as a canonical event.
 
         Args:
             message: Message to append.
         """
-        path = self._messages_file(message.session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(message.to_dict(), ensure_ascii=False) + "\n")
+        self.append_event(
+            SessionEvent(
+                session_id=message.session_id,
+                attempt_id=message.linked_attempt_id,
+                event_type=SessionEventType.MESSAGE_CREATED.value,
+                timestamp=message.created_at,
+                role=message.role,
+                content=message.content,
+                metadata={
+                    "message_id": message.message_id,
+                    "linked_attempt_id": message.linked_attempt_id,
+                    "metadata": message.metadata,
+                },
+            )
+        )
 
     def get_messages(self, session_id: str, limit: int = 100) -> List[Message]:
-        """Read all messages for a session.
+        """Project user/assistant messages from the canonical event log.
 
         Args:
             session_id: Session ID.
@@ -156,14 +187,30 @@ class SessionStore:
         Returns:
             List of Message objects in chronological order.
         """
-        path = self._messages_file(session_id)
-        if not path.exists():
-            return []
-        messages: List[Message] = []
-        for line in path.read_text(encoding="utf-8").strip().splitlines():
-            if line.strip():
-                messages.append(Message.from_dict(json.loads(line)))
-        return messages[-limit:]
+        events = self.get_events(session_id, limit=max(limit * 10, 1000))
+        if events:
+            messages: List[Message] = []
+            for event in events:
+                if event.event_type != SessionEventType.MESSAGE_CREATED.value:
+                    continue
+                meta = dict(event.metadata.get("metadata") or {}) if isinstance(event.metadata, dict) else {}
+                linked_attempt_id = None
+                if isinstance(event.metadata, dict):
+                    linked_attempt_id = event.metadata.get("linked_attempt_id") or event.attempt_id
+                messages.append(
+                    Message(
+                        message_id=str((event.metadata or {}).get("message_id") or event.event_id),
+                        session_id=event.session_id,
+                        role=event.role or "user",
+                        content=event.content or "",
+                        created_at=event.timestamp,
+                        linked_attempt_id=linked_attempt_id,
+                        metadata=meta,
+                    )
+                )
+            return messages[-limit:]
+
+        return []
 
     # ---- Attempt CRUD ----
 

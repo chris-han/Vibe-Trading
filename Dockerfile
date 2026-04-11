@@ -3,7 +3,24 @@
 # ============================================================================
 FROM node:20-slim AS frontend-build
 
+# System proxy configuration (uses build args for mirror/proxy support)
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
+
 WORKDIR /app/frontend
+
+# Configure npm to use system proxy
+RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi && \
+    if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi && \
+    if [ -n "$NO_PROXY" ]; then npm config set noproxy "$NO_PROXY"; fi
+
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY frontend/ ./
@@ -14,6 +31,17 @@ RUN npm run build
 # ============================================================================
 FROM python:3.11-slim AS runtime
 
+# System proxy configuration (uses build args for mirror/proxy support)
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
+
 WORKDIR /app
 
 # System deps
@@ -23,11 +51,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Python deps (install before copying code for layer caching)
 COPY agent/requirements.txt agent/requirements.txt
-RUN pip install --no-cache-dir -r agent/requirements.txt
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    $(if [ -n "$HTTP_PROXY" ]; then echo "--proxy=$HTTP_PROXY"; fi) \
+    -r agent/requirements.txt
 
 # Copy project
 COPY pyproject.toml LICENSE README.md ./
+COPY .hermes/ .hermes/
 COPY agent/ agent/
+COPY data/ data/
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist frontend/dist
@@ -37,6 +69,8 @@ RUN pip install --no-cache-dir -e .
 
 # Default port
 EXPOSE 8899
+
+ENV HERMES_ENABLE_PROJECT_PLUGINS=true
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

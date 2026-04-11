@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from src.agent.tools import BaseTool
+from .base import BaseTool
+from src.tools.path_utils import safe_path as _safe_path
 
 
 def _compute_ic_series(factor_df: pd.DataFrame, return_df: pd.DataFrame) -> pd.Series:
@@ -37,6 +38,8 @@ def _compute_ic_series(factor_df: pd.DataFrame, return_df: pd.DataFrame) -> pd.S
         r = return_df.loc[date].dropna()
         shared = f.index.intersection(r.index)
         if len(shared) < 5:
+            continue
+        if f[shared].std() == 0 or r[shared].std() == 0:
             continue
         corr, _ = spearmanr(f[shared], r[shared])
         if not np.isnan(corr):
@@ -116,6 +119,8 @@ def run_factor_analysis(
     try:
         factor_df = pd.read_csv(factor_csv, index_col=0, parse_dates=True)
         return_df = pd.read_csv(return_csv, index_col=0, parse_dates=True)
+        factor_df = factor_df.apply(pd.to_numeric, errors="coerce")
+        return_df = return_df.apply(pd.to_numeric, errors="coerce")
     except Exception as e:
         return json.dumps({"status": "error", "error": f"Failed to read CSV: {e}"}, ensure_ascii=False)
 
@@ -186,11 +191,11 @@ class FactorAnalysisTool(BaseTool):
         "properties": {
             "factor_csv": {
                 "type": "string",
-                "description": "Factor values CSV path (index=date, columns=codes)",
+                "description": "Factor values CSV path relative to run_dir (index=date, columns=codes)",
             },
             "return_csv": {
                 "type": "string",
-                "description": "Returns CSV path (same structure)",
+                "description": "Returns CSV path relative to run_dir (same structure)",
             },
             "n_groups": {
                 "type": "integer",
@@ -199,7 +204,7 @@ class FactorAnalysisTool(BaseTool):
             },
             "output_dir": {
                 "type": "string",
-                "description": "Output directory for results",
+                "description": "Output directory relative to run_dir",
             },
         },
         "required": ["factor_csv", "return_csv", "output_dir"],
@@ -209,14 +214,24 @@ class FactorAnalysisTool(BaseTool):
         """Run factor analysis.
 
         Args:
-            **kwargs: Must include factor_csv, return_csv, output_dir. Optional n_groups.
+            **kwargs: Must include factor_csv, return_csv, output_dir. Optional run_dir, n_groups.
 
         Returns:
             JSON-formatted analysis summary.
         """
+        run_dir = kwargs.get("run_dir")
+        if not run_dir:
+            return json.dumps({"status": "error", "error": "run_dir is required for factor_analysis"}, ensure_ascii=False)
+        base = Path(run_dir)
+        try:
+            factor_csv = str(_safe_path(kwargs["factor_csv"], base))
+            return_csv = str(_safe_path(kwargs["return_csv"], base))
+            output_dir = str(_safe_path(kwargs["output_dir"], base))
+        except ValueError as exc:
+            return json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False)
         return run_factor_analysis(
-            factor_csv=kwargs["factor_csv"],
-            return_csv=kwargs["return_csv"],
-            output_dir=kwargs["output_dir"],
+            factor_csv=factor_csv,
+            return_csv=return_csv,
+            output_dir=output_dir,
             n_groups=kwargs.get("n_groups", 5),
         )

@@ -1,7 +1,6 @@
 ---
 name: backtest-diagnose
 description: Diagnose failed or underperforming backtests, locate the root cause, and fix the issue
-category: tool
 ---
 
 # Backtest Diagnosis
@@ -72,7 +71,7 @@ These issues require the user to check the API token, switch data sources, or wa
 ## Post-Fix Validation Rules
 
 After modifying `signal_engine.py`, you must confirm:
-1. **AST syntax passes**: `bash("python -c \"import ast; ast.parse(open('code/signal_engine.py').read()); print('OK')\"")`
+1. **AST syntax passes**: `bash("python -m py_compile code/signal_engine.py && echo OK")`
 2. **Contains `class SignalEngine`**: the file must define `class SignalEngine`
 3. **Contains `def generate`**: the class must contain a `def generate` method
 4. **Rerun the backtest**: after the fix, rerun the backtest and verify the results

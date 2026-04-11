@@ -1,7 +1,6 @@
 ---
 name: strategy-generate
 description: Create, modify, and optimize quantitative trading strategies, then backtest and evaluate them.
-category: strategy
 ---
 
 ## Workflow
@@ -9,7 +8,7 @@ category: strategy
 1. **Requirements parsing**: parse user intent, extract instrument codes, time range, and strategy logic, then write `config.json`
 2. **Strategy design**: think through the 5 questions of data / signal / position sizing / backtest / validation
 3. **Strategy coding**: write `code/signal_engine.py` (following the `SignalEngine` contract)
-4. **Syntax check**: `bash("python -c \"import ast; ast.parse(open('code/signal_engine.py').read()); print('OK')\"")`
+4. **Syntax check**: `bash("python -m py_compile code/signal_engine.py && echo OK")`
 5. **Run backtest**: call the `backtest` tool (built into the engine; no need to write `run_backtest.py`)
 6. **Evaluate results**: read `artifacts/metrics.csv` and judge by the review criteria
 7. **Iterative fixing**: if results are poor, modify with `edit_file` → run `backtest` → re-evaluate
@@ -62,9 +61,11 @@ class SignalEngine:
 **Hard constraints:**
 - The signal `Series` index must align exactly with the input `DataFrame` index
 - Include all required imports (`numpy`, `pandas`, and so on)
+- Use `pd.DataFrame` and `pd.Series` in type annotations; do not import `DataFrame` or `Series` from `typing`
 - Do not hardcode dates or stock codes (read them from `config.json`)
 - Do not include an `if __name__ == "__main__"` block
 - Pure pandas / numpy implementation, with no external signal libraries
+- If `config.json.optimizer` is set, do not re-implement that optimizer inside `signal_engine.py`; return raw directional or target-weight series and let the built-in optimizer handle sizing
 - Output plain Python code, not Markdown fences
 
 ## Quality Checklist
@@ -118,14 +119,12 @@ Self-check after writing `signal_engine.py`:
   "extra_fields": null,
   "optimizer": null,
   "optimizer_params": {},
-  "engine": "daily",
-  "validation": null
+  "engine": "daily"
 }
 ```
 
-- `source`: `"auto"` (recommended, auto-select by code format) / `"tushare"` / `"yfinance"` / `"okx"` / `"akshare"` / `"ccxt"`
+- `source`: `"auto"` (recommended, auto-select by code format) / `"tushare"` / `"yfinance"` / `"okx"`
   - `"auto"` supports mixed instruments. For example, `["000001.SZ", "BTC-USDT"]` will be automatically routed to `tushare` and `okx`
-  - Futures codes (e.g. `"IF2406.CFFEX"`, `"ESZ4"`) and forex pairs (e.g. `"EUR/USD"`) are also auto-routed
 - `interval`: candlestick interval, default `"1D"`. Supported values: `"1m"` / `"5m"` / `"15m"` / `"30m"` / `"1H"` / `"4H"` / `"1D"`
   - The annualization factor for minute backtests is inferred automatically from `source` (252 trading days for China A-shares, 365 calendar days for crypto)
   - Minute backtests can be very data-heavy. Recommended limits are no more than 30 days for `1m`, or 1 year for `1H`
@@ -135,19 +134,6 @@ Self-check after writing `signal_engine.py`:
 - `engine`: backtest engine, default `"daily"`. For options strategies, set `"options"` (requires `OptionsSignalEngine`)
 - `initial_cash`: default 1,000,000
 - `commission`: default 0.1%
-- `validation`: optional statistical validation after backtest completes. Omit to skip. Example:
-  ```json
-  "validation": {
-    "monte_carlo": {"n_simulations": 1000},
-    "bootstrap": {"n_bootstrap": 1000, "confidence": 0.95},
-    "walk_forward": {"n_windows": 5}
-  }
-  ```
-  - `monte_carlo`: permutation test — shuffles trade order to compute p-value (is Sharpe significantly better than random?)
-  - `bootstrap`: resamples daily returns to compute Sharpe 95% confidence interval
-  - `walk_forward`: splits equity curve into N windows, checks performance consistency
-  - Each key is optional — include only the validations you want
-  - Can also run standalone on past results: `python -m backtest.validation <run_dir>`
 
 ## Review Criteria
 

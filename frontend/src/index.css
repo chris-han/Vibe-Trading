@@ -2,71 +2,131 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Autaut Grotesk - Local font face */
+@font-face {
+  font-family: "Autaut Grotesk";
+  src: url("/font/AutautGrotesk-Regular.woff2") format("woff2"),
+       url("/font/AutautGrotesk-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   :root {
-    /* Light mode surfaces */
-    --background: 220 20% 98%;
-    --foreground: 220 20% 10%;
+    /* Wise & Pinterest-inspired Design System - Light Mode */
+
+    /* Brand Colors */
+    --near-black: #0e0f0c;
+    --wise-green: #9fe870;
+    --dark-green: #163300;
+    --light-mint: #e2f6d5;
+    --pastel-green: #cdffad;
+
+    /* Warm Neutrals - olive/sand undertones */
+    --warm-dark: #454745;
+    --warm-gray: #868685;
+    --light-surface: #e8ebe6;
+
+    /* Semantic Colors */
+    --positive-green: #054d28;
+    --danger-red: #d03238;
+    --warning-yellow: #ffd11a;
+    --focus-blue: #435ee5;
+    --bright-orange: #ffc091;
+
+    /* Light mode surfaces - warm white with subtle green tint */
+    --background: 80 9% 96%;
+    --foreground: 100 8% 5%;
     --card: 0 0% 100%;
-    --card-foreground: 220 20% 10%;
+    --card-foreground: 100 8% 5%;
 
-    /* Brand accent */
-    --primary: 27 90% 52%;
-    --primary-foreground: 0 0% 100%;
+    /* Brand accent - Wise Green */
+    --primary: 96 75% 67%;
+    --primary-foreground: 96 100% 10%;
 
-    --muted: 220 14% 92%;
-    --muted-foreground: 220 14% 46%;
-    --destructive: 0 84% 60%;
+    --muted: 80 9% 91%;
+    --muted-foreground: 100 3% 40%;
+    --destructive: 356 65% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 14% 87%;
-    --radius: 0.5rem;
+    --border: 80 5% 80%;
+    --radius: 1rem;
 
     /* Semantic colors */
-    --success: 142 71% 45%;
-    --danger: 0 84% 60%;
-    --warning: 38 92% 50%;
-    --info: 217 91% 60%;
+    --success: 152 88% 17%;
+    --danger: 356 65% 51%;
+    --warning: 48 100% 55%;
+    --info: 197 100% 61%;
 
     /* Chart tokens */
-    --chart-grid: 220 14% 90%;
-    --chart-text: 220 14% 46%;
-    --chart-axis: 220 14% 80%;
+    --chart-grid: 80 9% 88%;
+    --chart-text: 100 3% 52%;
+    --chart-axis: 80 5% 75%;
     --chart-compare-a: #3b82f6;
     --chart-compare-b: #f59e0b;
+
+    /* Three-tier design tokens */
+    --comp-radius-button: 16px;
+    --comp-radius-card: 20px;
+    --comp-radius-lg: 28px;
+    --sema-color-border-focus-outer-default: #435ee5;
   }
 
   .dark {
-    /* Dark mode: 4-level surface system */
-    --background: 220 20% 5%;       /* bg-base */
-    --foreground: 220 10% 92%;
-    --card: 220 20% 8%;             /* surface-1 */
-    --card-foreground: 220 10% 92%;
+    /* Wise & Pinterest-inspired Dark Mode - Warm Dark with Olive/Sand Undertones */
 
-    --primary: 27 90% 52%;
-    --primary-foreground: 0 0% 100%;
+    /* Warm dark backgrounds - olive/sand tinted, not cool blue */
+    --background: 80 6% 10%;        /* Warm dark with subtle olive tint */
+    --foreground: 60 10% 94%;       /* Warm off-white, not pure white */
 
-    --muted: 220 20% 13%;           /* surface-2 */
-    --muted-foreground: 220 10% 55%;
-    --destructive: 0 62% 50%;
+    /* Card surfaces - layered warm darks */
+    --card: 80 5% 13%;              /* Slightly lighter warm dark */
+    --card-foreground: 60 10% 94%;
+
+    /* Brand accent - Wise Green stays consistent */
+    --primary: 96 75% 67%;
+    --primary-foreground: 96 100% 10%;
+
+    /* Warm neutrals for dark mode */
+    --muted: 80 5% 18%;             /* Warm olive-gray for surfaces */
+    --muted-foreground: 60 5% 55%;  /* Muted warm text */
+
+    /* Destructive with warmth */
+    --destructive: 356 55% 55%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 20% 18%;          /* surface-3 */
 
-    /* Semantic colors */
-    --success: 142 71% 45%;
-    --danger: 0 62% 50%;
-    --warning: 38 92% 50%;
-    --info: 217 91% 60%;
+    /* Warm borders - olive tinted */
+    --border: 80 5% 22%;            /* Warm dark border */
 
-    /* Chart tokens */
-    --chart-grid: 220 20% 12%;
-    --chart-text: 220 10% 42%;
-    --chart-axis: 220 20% 22%;
-    --chart-compare-a: #60a5fa;
-    --chart-compare-b: #fbbf24;
+    /* Semantic colors - adjusted for dark mode warmth */
+    --success: 96 60% 55%;          /* Softer green for dark bg */
+    --danger: 356 55% 60%;          /* Warm red */
+    --warning: 48 90% 55%;          /* Warm yellow */
+    --info: 197 70% 60%;            /* Muted cyan */
+
+    /* Chart tokens - warm adjusted */
+    --chart-grid: 80 5% 20%;
+    --chart-text: 60 5% 50%;
+    --chart-axis: 80 5% 25%;
+    --chart-compare-a: #7dd3fc;     /* Softer blue */
+    --chart-compare-b: #fcd34d;     /* Warm yellow */
   }
 
   * { @apply border-border; }
   body { @apply bg-background text-foreground; }
+
+  /* Autaut Grotesk with global fallbacks */
+  body {
+    font-family: "Autaut Grotesk", -apple-system, system-ui, "Segoe UI", Roboto, Oxygen-Sans, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Helvetica, "Hiragino Kaku Gothic Pro W3", "Meiryo", "MS PGothic", Arial, sans-serif;
+    font-feature-settings: "calt" 1;
+  }
+
+  /* Generous border-radius scale */
+  .rounded-button { border-radius: 16px; }
+  .rounded-card { border-radius: 20px; }
+  .rounded-comfortable { border-radius: 20px; }
+  .rounded-section { border-radius: 32px; }
+  .rounded-hero { border-radius: 40px; }
 
   /* Prose table enhancements */
   .prose table { border-collapse: collapse; width: 100%; }

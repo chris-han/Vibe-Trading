@@ -7,7 +7,7 @@ import os
 import subprocess
 from typing import Any
 
-from src.agent.tools import BaseTool
+from .base import BaseTool
 
 _OUTPUT_LIMIT = 50_000
 _DEFAULT_TIMEOUT = 120

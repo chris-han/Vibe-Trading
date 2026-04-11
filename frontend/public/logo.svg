@@ -1,25 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 48" fill="none">
-  <!-- P mark: stylized from grid/network nodes -->
-  <g>
-    <!-- Vertical stem of P -->
-    <rect x="4" y="4" width="6" height="40" rx="3" fill="#1a365d"/>
-    <!-- P bowl: arc of connected nodes -->
-    <circle cx="14" cy="10" r="2.5" fill="#0891b2"/>
-    <circle cx="24" cy="6" r="2.5" fill="#0891b2"/>
-    <circle cx="34" cy="8" r="2.5" fill="#0891b2"/>
-    <circle cx="38" cy="16" r="2.5" fill="#0891b2"/>
-    <circle cx="34" cy="24" r="2.5" fill="#0891b2"/>
-    <circle cx="24" cy="26" r="2.5" fill="#0891b2"/>
-    <circle cx="14" cy="24" r="2.5" fill="#0891b2"/>
-    <!-- Node connections forming the P bowl -->
-    <path d="M14 10 L24 6 L34 8 L38 16 L34 24 L24 26 L14 24" stroke="#0891b2" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
-    <!-- Internal data grid lines -->
-    <line x1="24" y1="6" x2="24" y2="26" stroke="#22d3ee" stroke-width="0.8" opacity="0.5"/>
-    <line x1="14" y1="16" x2="38" y2="16" stroke="#22d3ee" stroke-width="0.8" opacity="0.5"/>
-    <!-- Corner accent node -->
-    <circle cx="24" cy="16" r="1.8" fill="#22d3ee"/>
-  </g>
-  <!-- Wordmark -->
-  <text x="52" y="34" font-family="Inter, system-ui, sans-serif" font-weight="700" font-size="22" fill="#1a365d" letter-spacing="-0.4">FIN-</text>
-  <text x="103" y="34" font-family="Inter, system-ui, sans-serif" font-weight="700" font-size="22" fill="#0891b2" letter-spacing="-0.4">ANYTHING</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="405" height="405" viewBox="0 0 405 405" fill="none">
+  <rect width="405" height="405" fill="#00A886"/>
+  <circle cx="202.5" cy="202.5" r="202.5" fill="#00A886"/>
+
+  <path
+    d="M1047 -229V-334H985Q736 -334 651.5 -260.0Q567 -186 567 35V293Q567 443 513.0 501.0Q459 559 317 559H256V664H317Q459 664 513.0 722.0Q567 780 567 930V1188Q567 1409 651.5 1482.5Q736 1556 985 1556H1047V1452H979Q838 1452 795.0 1408.0Q752 1364 752 1223V936Q752 778 702.0 710.0Q652 642 522 612Q654 578 703.0 511.0Q752 444 752 287V0Q752 -141 795.0 -185.0Q838 -229 979 -229Z"
+    fill="#FFFFFF"
+    transform="matrix(0.0745891277 0 0 0.1211640212 46.9051833 130.4687831)"
+  />
+
+  <path
+    d="M256 -229H326Q466 -229 508.5 -185.5Q551 -142 551 0V287Q551 444 600.0 511.0Q649 578 780 612Q650 642 600.5 710.0Q551 778 551 936V1223Q551 1365 508.5 1408.5Q466 1452 326 1452H256V1556H319Q568 1556 651.5 1482.5Q735 1409 735 1188V930Q735 780 789.0 722.0Q843 664 985 664H1047V559H985Q843 559 789.0 501.0Q735 443 735 293V35Q735 -186 651.5 -260.0Q568 -334 319 -334H256Z"
+    fill="#FFFFFF"
+    transform="matrix(0.0733249052 0 0 0.1211640212 265.2288243 130.4687831)"
+  />
+
+  <rect x="198" y="107" width="26" height="26" fill="#FFFFFF" />
+  <rect x="153" y="125" width="26" height="26" fill="#FFFFFF" />
+  <rect x="234" y="126" width="26" height="26" fill="#FFFFFF" />
+  <rect x="144" y="170" width="26" height="26" fill="#FFFFFF" />
+  <rect x="190" y="188" width="26" height="26" fill="#FFFFFF" />
+  <rect x="234" y="206" width="26" height="26" fill="#FFFFFF" />
+  <rect x="136" y="251" width="26" height="26" fill="#FFFFFF" />
+  <rect x="226" y="251" width="26" height="26" fill="#FFFFFF" />
+  <rect x="181" y="269" width="26" height="26" fill="#FFFFFF" />
 </svg>

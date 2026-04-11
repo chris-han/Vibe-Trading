@@ -1,35 +1,41 @@
-"""Swarm Worker: standalone worker execution engine based on the SubagentTool ReAct pattern.
-
-Reuses the SubagentTool ReAct loop (ChatLLM.chat + manual for-loop) without
-instantiating AgentLoop, keeping the agent core unchanged.
-"""
+"""Swarm Worker: executes per-task agents using Hermes AIAgent."""
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from src.agent.context import ContextBuilder
-from src.agent.skills import SkillsLoader
-from src.providers.chat import ChatLLM
+from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
 from src.swarm.models import (
     SwarmAgentSpec,
     SwarmEvent,
     SwarmTask,
     WorkerResult,
 )
-from src.tools import build_filtered_registry
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MAX_ITERATIONS = int(os.getenv("SWARM_WORKER_MAX_ITER", "50"))
-_DEFAULT_TIMEOUT_SECONDS = int(os.getenv("SWARM_WORKER_TIMEOUT", "300"))
-_MAX_TOKEN_ESTIMATE = 60_000
+_DEFAULT_MAX_ITERATIONS = 50
+_BACKTEST_WORKFLOW_HINT = (
+    "- For any new backtest, call `setup_backtest_run(config_json=..., signal_engine_py=...)` before `backtest(run_dir=...)`.\n"
+    "- Never ask the user to create `config.json` or `code/signal_engine.py` manually when the setup tool can write them.\n"
+)
+
+_DOCUMENT_WORKFLOW_HINT = (
+    "- If the task includes an exact local PDF path, call `read_document(file_path=...)` before summarizing the document.\n"
+    "- Never invent a PDF filename; only call `read_document` when the exact path is known.\n"
+    "- If no local path is available, use read_url or browser tools to fetch the report from the source site.\n"
+    "- If no local path is available, use `read_url` or browser tools to fetch the report from the source site.\n"
+    "- Prefer targeted page ranges first for long filings or reports.\n"
+    "- OCR is feature-flagged through `HERMES_ENABLE_PDF_OCR` and may be unavailable.\n"
+)
+
+_MARKET_DATA_WORKFLOW_HINT = (
+    "- `execute_code` is forbidden in this runtime. Use `write_file` plus `bash` from agent/ instead.\n"
+    "- **NEVER use curl/requests/urllib to fetch market data.** Call `load_skill('yfinance')` first, then write a Python script.\n"
+)
 
 
 def _emit(
@@ -63,73 +69,33 @@ def _emit(
         logger.warning("Event callback failed for %s", event_type, exc_info=True)
 
 
-def _filter_skill_descriptions(loader: SkillsLoader, skill_names: list[str]) -> str:
-    """Return skill descriptions filtered to the given whitelist.
+def _format_skill_hint(skill_names: list[str]) -> str:
+    """Return a brief skill menu for the system prompt.
+
+    Full skill content is loaded on-demand by the Hermes load_skill tool.
 
     Args:
-        loader: SkillsLoader instance with all skills loaded.
-        skill_names: Skill names to include. Empty list means include all.
+        skill_names: Skill names from the agent spec whitelist.
 
     Returns:
-        Formatted skill descriptions string.
+        Formatted hint string.
     """
     if not skill_names:
-        return loader.get_descriptions()
-    lines: list[str] = []
-    for skill in loader.skills:
-        if skill.name in skill_names:
-            lines.append(f"  - {skill.name}: {skill.description}")
-    return "\n".join(lines) if lines else "(no matching skills)"
-
-
-def _estimate_tokens(
-    messages: list[dict],
-    response: object,
-) -> tuple[int, int]:
-    """Estimate token usage for a single LLM call.
-
-    Tries to read actual token counts from the LLM response metadata
-    (LangChain's usage_metadata). Falls back to character-length estimation
-    (len // 4) if metadata is unavailable.
-
-    Args:
-        messages: Messages sent to the LLM for this call.
-        response: LLMResponse from ChatLLM.chat().
-
-    Returns:
-        Tuple of (input_tokens, output_tokens).
-    """
-    from src.providers.chat import LLMResponse
-
-    input_tokens = 0
-    output_tokens = 0
-
-    # response is an LLMResponse; it doesn't carry raw metadata.
-    # Estimate: input = serialized messages length // 4, output = content length // 4
-    try:
-        input_tokens = len(json.dumps(messages, ensure_ascii=False)) // 4
-    except Exception:
-        input_tokens = 0
-
-    if isinstance(response, LLMResponse):
-        output_tokens = len(response.content or "") // 4
-    else:
-        output_tokens = 0
-
-    return input_tokens, output_tokens
+        return "(use skills_list to discover available finance skills)"
+    return "\n".join(f"  - {name}" for name in skill_names)
 
 
 def build_worker_prompt(
     agent_spec: SwarmAgentSpec,
     upstream_summaries: dict[str, str],
-    skill_descriptions: str,
+    skill_hint: str,
 ) -> str:
-    """Build the worker's system prompt with role, upstream context, and skills.
+    """Build the worker's system prompt with role, upstream context, and skill hints.
 
     Args:
         agent_spec: The agent's role specification.
         upstream_summaries: Mapping of context_key -> upstream task summary.
-        skill_descriptions: Pre-filtered skill description text.
+        skill_hint: Brief list of relevant skill names for this worker.
 
     Returns:
         Complete system prompt string for the worker LLM.
@@ -149,9 +115,9 @@ def build_worker_prompt(
         agent_spec.system_prompt.replace("{upstream_context}", upstream_block),
     ]
 
-    if skill_descriptions and skill_descriptions != "(no matching skills)":
+    if skill_hint:
         prompt_parts.append(
-            f"## Available Skills (use load_skill to access full documentation)\n\n{skill_descriptions}"
+            f"## Available Finance Skills (use load_skill <name> to access full documentation)\n\n{skill_hint}"
         )
 
     prompt_parts.append(
@@ -160,20 +126,19 @@ def build_worker_prompt(
         "**Phase 1 — Plan (0 tool calls):** Before calling any tool, state your plan in 3-5 bullet points.\n\n"
         "**Phase 2 — Execute (≤15 tool calls):**\n"
         "- `load_skill` first to get data access methods and analysis patterns.\n"
-        "- Write ONE focused Python script via `write_file`, then run it with `bash python script.py`.\n"
+        f"{_MARKET_DATA_WORKFLOW_HINT}"
+        "- Prefer writing one focused Python script with write_file, then execute it with bash.\n"
+        "- Write ONE focused Python script via `write_file`, then change into agent/ and run it with `./.venv/bin/python`.\n"
+        "- Install packages only from agent/ with `./.venv/bin/python -m pip`. Do NOT call `pip` or `pip3` directly.\n"
         "- Do NOT write long Python code inside bash. Use write_file + bash.\n"
         "- Do NOT fetch data with curl/requests. Use the patterns from load_skill (yfinance, OKX API via Python).\n"
+        f"{_BACKTEST_WORKFLOW_HINT}"
+        f"{_DOCUMENT_WORKFLOW_HINT}"
         "- If a script fails, read the error, fix with `edit_file`, re-run. Max 2 retries per script.\n\n"
         "**Phase 3 — Summarize (0 tool calls):**\n"
         "- Write your final findings as a concise markdown summary directly in your response.\n"
         "- Include specific numbers, dates, and actionable conclusions.\n"
         "- Respond in the same language as the task prompt."
-    )
-
-    now = datetime.now()
-    prompt_parts.append(
-        f"## Current Date & Time\n\n"
-        f"Today is {now.strftime('%A, %B %d, %Y %H:%M (local)')}."
     )
 
     return "\n\n".join(prompt_parts)
@@ -187,16 +152,7 @@ def run_worker(
     run_dir: Path,
     event_callback: Callable[[SwarmEvent], None] | None = None,
 ) -> WorkerResult:
-    """Execute a single worker task using the SubagentTool ReAct pattern.
-
-    Follows the exact same ReAct loop as SubagentTool:
-      1. Build filtered ToolRegistry from agent_spec.tools
-      2. Create ChatLLM with agent_spec.model_name
-      3. Build system prompt with role + upstream summaries + filtered skills
-      4. Resolve task.prompt_template with user_vars
-      5. Run ReAct loop (for iteration in range(max_iterations))
-      6. Write summary to artifacts/{agent_id}/summary.md
-      7. Return WorkerResult
+    """Execute a single worker task using Hermes AIAgent.
 
     Args:
         agent_spec: Agent role specification with tools/skills/model config.
@@ -209,25 +165,21 @@ def run_worker(
     Returns:
         WorkerResult with status, summary, artifacts, and iteration count.
     """
+    import os
+    import sys
+    prepare_hermes_project_context(chdir=True)
+    _HERMES = Path(__file__).resolve().parents[3] / "hermes-agent"
+    if str(_HERMES) not in sys.path:
+        sys.path.insert(0, str(_HERMES))
+    from run_agent import AIAgent
+
     agent_id = agent_spec.id
     task_id = task.id
     max_iterations = agent_spec.max_iterations or _DEFAULT_MAX_ITERATIONS
-    timeout = agent_spec.timeout_seconds or _DEFAULT_TIMEOUT_SECONDS
 
     _emit(event_callback, "worker_started", agent_id, task_id)
 
-    # 1. Build filtered tool registry
-    registry = build_filtered_registry(agent_spec.tools)
-
-    # 2. Create LLM
-    llm = ChatLLM(model_name=agent_spec.model_name)
-
-    # 3. Build system prompt with filtered skills
-    skills_loader = SkillsLoader()
-    skill_desc = _filter_skill_descriptions(skills_loader, agent_spec.skills)
-    system_prompt = build_worker_prompt(agent_spec, upstream_summaries, skill_desc)
-
-    # 4. Resolve prompt template with user vars
+    # Resolve prompt template with user vars
     try:
         user_prompt = task.prompt_template.format(**user_vars)
     except KeyError as exc:
@@ -238,167 +190,95 @@ def run_worker(
             input_tokens=0, output_tokens=0,
         )
 
-    # 5. Build initial messages
-    messages: list[dict] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-
-    # 6. ReAct loop (EXACTLY like SubagentTool)
     artifact_dir = run_dir / "artifacts" / agent_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    t0 = time.monotonic()
-    iteration = 0
-    summary = ""
-    total_input_tokens = 0
-    total_output_tokens = 0
+    # Build system prompt with role and upstream context
+    skill_hint = _format_skill_hint(agent_spec.skills)
+    system_prompt = build_worker_prompt(agent_spec, upstream_summaries, skill_hint)
 
-    # Threshold for injecting a "wrap up" nudge (80% of budget)
-    wrap_up_at = max(1, int(max_iterations * 0.8))
-    last_assistant_content = ""
+    # Wire Hermes callbacks to swarm events
+    def _on_tool_progress(event_type: str, tool_name: str, preview: str, args: dict, **kwargs) -> None:
+        if event_type == "tool.started":
+            _emit(event_callback, "tool_call", agent_id, task_id,
+                  {"tool": tool_name, "args": args or {}})
+        elif event_type == "tool.completed":
+            _emit(event_callback, "tool_result", agent_id, task_id,
+                  {"tool": tool_name, "is_error": kwargs.get("is_error", False)})
 
-    _KEEP_RECENT_TOOLS = 3
+    def _on_stream_delta(delta: str | None) -> None:
+        if delta:
+            _emit(event_callback, "worker_text", agent_id, task_id, {"content": delta})
 
-    for iteration in range(max_iterations):
-        # Microcompact: clear old tool results to prevent token bloat
-        tool_msgs = [m for m in messages if m.get("role") == "tool"]
-        if len(tool_msgs) > _KEEP_RECENT_TOOLS:
-            for msg in tool_msgs[:-_KEEP_RECENT_TOOLS]:
-                content = msg.get("content", "")
-                if isinstance(content, str) and len(content) > 100:
-                    msg["content"] = "[cleared]"
-
-        # Check timeout
-        elapsed = time.monotonic() - t0
-        if elapsed > timeout:
-            summary = last_assistant_content or f"Worker timed out after {elapsed:.0f}s ({iteration} iterations)"
-            _emit(event_callback, "worker_timeout", agent_id, task_id, {"elapsed": elapsed})
-            _write_summary(artifact_dir, summary)
-            return WorkerResult(
-                status="timeout",
-                summary=summary,
-                artifact_paths=_collect_artifacts(artifact_dir),
-                iterations=iteration,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
+    def _on_tool_generation(tool_name: str) -> None:
+        if tool_name == "execute_code":
+            logger.error(
+                "Worker %s/%s permission_denied execute_code attempted by model; "
+                "toolset is disabled for Vibe-Trading swarm runtime",
+                agent_id,
+                task_id,
             )
 
-        # Check token estimate
-        token_estimate = len(json.dumps(messages, ensure_ascii=False)) // 4
-        if token_estimate > _MAX_TOKEN_ESTIMATE:
-            summary = last_assistant_content or f"Worker context too large (~{token_estimate} tokens, {iteration} iterations)"
-            _emit(event_callback, "worker_token_limit", agent_id, task_id, {"tokens": token_estimate})
-            _write_summary(artifact_dir, summary)
-            return WorkerResult(
-                status="token_limit",
-                summary=summary,
-                artifact_paths=_collect_artifacts(artifact_dir),
-                iterations=iteration,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-            )
+    ensure_runtime_env()
+    agent_kwargs = get_hermes_agent_kwargs()
 
-        # Inject wrap-up nudge when approaching iteration limit
-        if iteration == wrap_up_at:
-            remaining = max_iterations - iteration
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"[SYSTEM] You have {remaining} iterations remaining. "
-                    "Stop calling tools and immediately output your final analysis summary as plain text. "
-                    "Do not call any more tools."
-                ),
-            })
-
-        # On last iteration, call LLM without tool definitions to force text output
-        is_last_iteration = iteration == max_iterations - 1
-        tool_defs = None if is_last_iteration else registry.get_definitions()
-
-        # Call LLM with remaining timeout
-        try:
-            remaining_timeout = max(10, int(timeout - elapsed))
-            response = llm.chat(messages, tools=tool_defs, timeout=remaining_timeout)
-        except Exception as exc:
-            error_msg = f"LLM call failed at iteration {iteration}: {exc}"
-            logger.warning(error_msg)
-            _emit(event_callback, "worker_failed", agent_id, task_id, {"error": error_msg})
-            return WorkerResult(
-                status="failed",
-                summary=last_assistant_content or "",
-                artifact_paths=_collect_artifacts(artifact_dir),
-                iterations=iteration,
-                error=error_msg,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-            )
-
-        # Accumulate token counts
-        iter_in, iter_out = _estimate_tokens(messages, response)
-        total_input_tokens += iter_in
-        total_output_tokens += iter_out
-
-        # Emit agent thinking text for live streaming
-        if response.content and response.content.strip():
-            _emit(event_callback, "worker_text", agent_id, task_id,
-                  {"content": response.content, "iteration": iteration})
-
-        # Track last meaningful assistant content
-        if response.content and len(response.content.strip()) > 20:
-            last_assistant_content = response.content
-
-        # If no tool calls, this is the final response
-        if not response.has_tool_calls:
-            summary = response.content or last_assistant_content or "(no summary)"
-            _emit(event_callback, "worker_completed", agent_id, task_id, {"iterations": iteration + 1})
-            _write_summary(artifact_dir, summary)
-            return WorkerResult(
-                status="completed",
-                summary=summary,
-                artifact_paths=_collect_artifacts(artifact_dir),
-                iterations=iteration + 1,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-            )
-
-        # Append assistant message with tool calls
-        messages.append(
-            ContextBuilder.format_assistant_tool_calls(
-                response.tool_calls, content=response.content
-            )
-        )
-
-        # Execute each tool call — inject run_dir so tools write inside artifact_dir
-        for tc in response.tool_calls:
-            _emit(
-                event_callback, "tool_call", agent_id, task_id,
-                {"tool": tc.name, "iteration": iteration},
-            )
-            tc_start = time.monotonic()
-            args = {**tc.arguments, "run_dir": str(artifact_dir)}
-            result = registry.execute(tc.name, args)
-            tc_elapsed = time.monotonic() - tc_start
-            _emit(
-                event_callback, "tool_result", agent_id, task_id,
-                {"tool": tc.name, "elapsed_ms": int(tc_elapsed * 1000),
-                 "status": "ok", "iteration": iteration},
-            )
-            messages.append(
-                ContextBuilder.format_tool_result(tc.id, tc.name, result[:10_000])
-            )
-
-    # Hit iteration limit — use last meaningful content as summary
-    summary = last_assistant_content or f"Worker hit iteration limit ({max_iterations} iterations)"
-    _emit(event_callback, "worker_iteration_limit", agent_id, task_id)
-    _write_summary(artifact_dir, summary)
-    return WorkerResult(
-        status="completed",
-        summary=summary,
-        artifact_paths=_collect_artifacts(artifact_dir),
-        iterations=max_iterations,
-        input_tokens=total_input_tokens,
-        output_tokens=total_output_tokens,
+    agent = AIAgent(
+        model=agent_spec.model_name or os.getenv("HERMES_MODEL", ""),
+        max_iterations=max_iterations,
+        quiet_mode=True,
+        session_id=f"swarm-{agent_id}-{task_id}",
+        enabled_toolsets=[
+            "terminal",
+            "file",
+            "browser",
+            "skills",
+            "todo",
+            "memory",
+            "session_search",
+            "delegation",
+            "cronjob",
+            "research",
+            "compat",
+            "vibe_trading_finance",
+        ],
+        disabled_toolsets=["code_execution"],
+        tool_progress_callback=_on_tool_progress,
+        tool_gen_callback=_on_tool_generation,
+        stream_delta_callback=_on_stream_delta,
+        ephemeral_system_prompt=system_prompt,
+        skip_context_files=True,
+        **agent_kwargs,
     )
+
+    from src.hermes_tool_adapter.vibe_trading_compat import reset_artifact_dir, set_artifact_dir
+    _ctx_token = set_artifact_dir(artifact_dir)
+    try:
+        raw = agent.run_conversation(user_message=user_prompt)
+        summary = (raw.get("final_response") or "").strip()
+        _write_summary(artifact_dir, summary)
+        _emit(event_callback, "worker_completed", agent_id, task_id)
+        return WorkerResult(
+            status="completed",
+            summary=summary,
+            artifact_paths=_collect_artifacts(artifact_dir),
+            iterations=raw.get("iterations", 0),
+            input_tokens=raw.get("input_tokens", 0),
+            output_tokens=raw.get("output_tokens", 0),
+        )
+    except Exception as exc:
+        error_msg = str(exc)
+        logger.warning("Worker %s failed: %s", agent_id, error_msg, exc_info=True)
+        _emit(event_callback, "worker_failed", agent_id, task_id, {"error": error_msg})
+        return WorkerResult(
+            status="failed",
+            summary="",
+            artifact_paths=_collect_artifacts(artifact_dir),
+            iterations=0,
+            error=error_msg,
+            input_tokens=0, output_tokens=0,
+        )
+    finally:
+        reset_artifact_dir(_ctx_token)
 
 
 def _write_summary(artifact_dir: Path, summary: str) -> None:
