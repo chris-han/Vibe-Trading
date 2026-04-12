@@ -17,6 +17,10 @@
       1775951357631661797,
       9048
     ],
+    "quant/portfolio-optimizer-comparison/SKILL.md": [
+      1775963014962709391,
+      5844
+    ],
     "research/bear-side-research/SKILL.md": [
       1775951357631661797,
       9657
@@ -75,6 +79,19 @@
       "category": "quant",
       "frontmatter_name": "multi-factor-alpha",
       "description": "Build cross-sectional multi-factor equity strategies with...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "portfolio-optimizer-comparison",
+      "category": "quant",
+      "frontmatter_name": "portfolio-optimizer-comparison",
+      "description": "Compare portfolio optimizers (risk_parity, equal_volatili...",
       "platforms": [],
       "conditions": {
         "fallback_for_toolsets": [],

@@ -606,7 +606,7 @@ This restores the original `AgentLoop` behavior and creates a durable source of 
 
 **Path contract**
 
-- Session runtime path: `backend/runs/<run_id>/req.json`
+- Session runtime path: `sessions/<sid>/runs/<run_id>/req.json`
 - Swarm runtime path: `<swarm_run_dir>/.../req.json` if the same bootstrap contract is applied at worker/task scope
 - The file is always written at the **root of the active run directory**, not under `artifacts/` or `logs/`
 
@@ -614,7 +614,7 @@ This restores the original `AgentLoop` behavior and creates a durable source of 
 
 - `RunStateStore.save_request(run_dir, prompt, {"session_id": sid})`
 - This produces `req.json` at:
-  - `/home/chris/repo/Vibe-Trading/backend/runs/<run_id>/req.json`
+  - `DATA_ROOT/sessions/<sid>/runs/<run_id>/req.json`
 
 **File schema**
 
@@ -1750,7 +1750,7 @@ flowchart LR
     MODELS["agent/src/session/models.py<br/>Session / Attempt / Event models"]
     BOOT["agent/src/backtest/bootstrap.py<br/>bootstrap_run_from_prompt"]
     SESSDIR["agent/sessions/&lt;session_id&gt;/"]
-    RUNSDIR["agent/runs/&lt;run_id&gt;/"]
+    RUNSDIR["agent/sessions/&lt;session_id&gt;/runs/&lt;run_id&gt;/"]
     UPLOADS["agent/uploads/"]
 
     API --> SVC
@@ -1774,7 +1774,7 @@ flowchart LR
     BOOT["agent/src/backtest/bootstrap.py<br/>prompt-to-run bootstrap"]
     CORE["agent/src/core/runner.py<br/>Runner subprocess wrapper"]
     ENGINE["agent/backtest/runner.py<br/>built-in execution engine"]
-    RUNDIR["agent/runs/&lt;run_id&gt;/"]
+    RUNDIR["agent/sessions/&lt;session_id&gt;/runs/&lt;run_id&gt;/"]
     CFG["config.json"]
     SIG["code/signal_engine.py"]
     ART["artifacts/*.csv"]
@@ -1814,10 +1814,10 @@ flowchart LR
 
 | Concern | Primary entry file(s) | Main dependencies | Persistent output |
 |---------|------------------------|-------------------|-------------------|
-| API + streaming | `agent/api_server.py` | `agent/src/session/service.py`, `agent/src/ui_services.py` | `agent/runs/`, `agent/sessions/`, `agent/uploads/` |
-| Session lifecycle | `agent/src/session/service.py` | `store.py`, `events.py`, `models.py`, `src/backtest/bootstrap.py` | `agent/sessions/<session_id>/` |
+| API + streaming | `agent/api_server.py` | `agent/src/session/service.py`, `agent/src/ui_services.py` | `agent/sessions/`, `agent/runs/` (legacy), `agent/uploads/` |
+| Session lifecycle | `agent/src/session/service.py` | `store.py`, `events.py`, `models.py`, `src/backtest/bootstrap.py` | `agent/sessions/<session_id>/` including `runs/<run_id>/` |
 | Hermes finance tools | `.hermes/plugins/vibe-trading/plugin.yaml` | `agent/src/hermes_tool_adapter/vibe_trading_finance.py`, `vibe_trading_compat.py` | Registers runtime tools |
-| Backtest execution | `agent/src/tools/backtest_tool.py` | `agent/src/core/runner.py`, `agent/backtest/runner.py` | `agent/runs/<run_id>/artifacts/` |
+| Backtest execution | `agent/src/tools/backtest_tool.py` | `agent/src/core/runner.py`, `agent/backtest/runner.py` | `agent/sessions/<sid>/runs/<run_id>/artifacts/` |
 | Swarm execution | `agent/src/swarm/runtime.py` | `worker.py`, `store.py`, `task_store.py`, `mailbox.py`, `presets.py` | `agent/.swarm/runs/<run_id>/` |
 
 ### 6.1 ReAct Agent Loop (`agent/loop.py`)
@@ -1973,11 +1973,11 @@ session.created
 
 ---
 
-### 6.9 File I/O Rules
+### 6.9 Filesystem & File I/O Specification
 
-This section records the mandatory constraints for how skills and tools interact with the filesystem, and how the runtime enforces them.
+This is the single authoritative reference for filesystem layout, I/O guardrails, artifact isolation, and directory conventions. All other sections that touch file paths defer here.
 
-#### 6.9.1 Rules
+#### 6.9.1 Guardrail Rules
 
 | Rule | Applies To | Requirement |
 |------|-----------|-------------|
@@ -1985,9 +1985,9 @@ This section records the mandatory constraints for how skills and tools interact
 | **No absolute paths in skills** | All skill markdown files | Skills must not contain hardcoded absolute paths (`/home/...`, `/Users/...`, `/root/...`, etc.). All file references must be relative (e.g. `code/signal_engine.py`, `artifacts/metrics.csv`). |
 | **No absolute paths in tool schemas** | All tool `parameters` descriptions exposed to the model | Tool schema descriptions must describe paths as relative to `run_dir`. The model must never be told to supply an absolute path. |
 | **Absolute path resolution is the tool layer's responsibility** | `edit_file_tool.py`, `factor_analysis_tool.py`, and any tool accepting path parameters | Tools resolve relative paths to absolute using `safe_path(relative, run_dir)` internally. The model only ever supplies relative paths. |
-| **Data root is config, not prompt** | `api_server.py`, `session/service.py`, `task_tools.py` | All runtime output directories (`runs/`, `sessions/`, `uploads/`, `.tasks/`, `.swarm/`) are derived from `TERMINAL_CWD` at startup. No absolute path is injected into the agent prompt. |
+| **Data root is config, not prompt** | `api_server.py`, `session/service.py`, `task_tools.py` | All runtime output directories are derived from `TERMINAL_CWD` at startup. No absolute path is injected into the agent prompt. |
 
-#### 6.9.2 `TERMINAL_CWD` — File-Tool Sandbox Root
+#### 6.9.2 `TERMINAL_CWD` — Sandbox Root
 
 `TERMINAL_CWD` is the single configuration variable that controls where all runtime-generated files land.
 
@@ -1999,37 +1999,211 @@ TERMINAL_CWD=/data   →  /data/                (absolute: used as-is)
 TERMINAL_CWD=<unset> →  agent/                (fallback)
 ```
 
-**Output directory layout** (all under `DATA_ROOT`):
-
-```
-DATA_ROOT/
-├── runs/           ← backtest run directories
-├── sessions/       ← session store + uploads
-│   └── <sid>/
-│       └── uploads/
-├── uploads/        ← legacy fallback uploads dir
-└── .swarm/runs/    ← swarm run directories
-```
-
 `DATA_ROOT` is computed once at process startup in `api_server.py` and passed into `SessionService`, `SwarmStore`, and `SessionStore` as constructor arguments. No component derives its output path independently from `__file__`.
 
 **Per-session tool-layer CWD** is pinned via `register_task_env_overrides(session_id, {"cwd": str(file_root)})` so that Hermes file tools (`search_files`, `read_file`, `write_file`) resolve relative paths from the correct root for each session without any absolute path appearing in the prompt.
 
-#### 6.9.3 Skill Compliance — Syntax Validation Pattern
+#### 6.9.3 Directory Layout
 
-Skills that need to validate generated Python code must use `py_compile` via `bash`, not `open()`:
+**Data root tree** (all runtime artifacts live under `DATA_ROOT`):
 
 ```
-# Compliant
-bash("python -m py_compile code/signal_engine.py && echo OK")
-
-# Forbidden — uses open() directly
-bash("python -c \"import ast; ast.parse(open('code/signal_engine.py').read()); print('OK')\"")
+DATA_ROOT/
+├── sessions/
+│   └── <sid>/
+│       ├── session.json
+│       ├── events.jsonl
+│       ├── attempts/<attempt_id>/attempt.json
+│       ├── uploads/
+│       └── runs/               ← run directories scoped to this session
+│           └── <run_id>/
+│               ├── req.json    ← original prompt + context (request persistence)
+│               ├── config.json ← backtest configuration
+│               ├── state.json  ← run status: {"status": "success|failed", ...}
+│               ├── report.md   ← agent final response
+│               ├── code/
+│               │   └── signal_engine.py  ← generated strategy module
+│               ├── scripts/
+│               │   └── <name>.py         ← other agent-generated scripts
+│               ├── logs/
+│               │   ├── runner_stdout.txt
+│               │   └── runner_stderr.txt
+│               └── artifacts/
+│                   ├── equity.csv
+│                   ├── metrics.csv
+│                   ├── trades.csv
+│                   └── <agent_id>/       ← per-agent subdirs in swarm runs
+├── runs/                       ← legacy global runs (backward compat only)
+├── uploads/                    ← legacy fallback uploads
+└── .swarm/runs/
+    └── <uuid>/
+        ├── run.json
+        ├── events.jsonl
+        └── tasks/<task_id>.json
 ```
 
-`py_compile` reads the file itself as a subprocess — the skill never touches the file directly.
+**Key rules:**
+- Session-mode run directories are created under `sessions/<sid>/runs/` — deleting a session removes all its runs atomically.
+- The global `runs/` root is retained only for backward compatibility with pre-migration runs and for non-session (swarm/CLI) contexts.
+- The API layer (`_resolve_run_dir`, `_collect_run_dirs`) searches both roots in order.
 
-#### 6.9.4 Tool Compliance — Path Resolution Contract
+**Runtime artifact directories table:**
+
+| Directory | Purpose | Governed by |
+|-----------|---------|-------------|
+| `sessions/<sid>/` | Session store, uploads, and run artifacts | `DATA_ROOT` via `TERMINAL_CWD` |
+| `sessions/<sid>/runs/<run_id>/` | Per-run artifacts for session-mode runs | `DATA_ROOT` via `TERMINAL_CWD` |
+| `runs/<run_id>/` | Legacy global runs (backward compat) | `DATA_ROOT` via `TERMINAL_CWD` |
+| `uploads/` | Legacy fallback uploads | `DATA_ROOT` via `TERMINAL_CWD` |
+| `.swarm/runs/<run_id>/` | Swarm run state | `DATA_ROOT` via `TERMINAL_CWD` |
+| `.tasks/` | Task manager state | `TASKS_DIR` via `TERMINAL_CWD` |
+
+#### 6.9.4 Design-Time vs Runtime Directories
+
+**Design-time directories** — source code, checked into version control. File I/O rules do not apply here.
+
+| Directory | Contents |
+|-----------|----------|
+| `agent/backtest/` | Backtest execution engine: `runner.py`, `engines/`, `loaders/`, `optimizers/`, `metrics.py` |
+| `agent/config/swarm/` | Swarm preset YAML configurations |
+| `agent/src/` | Full application source |
+| `agent/tests/` | Test suite |
+
+**`agent/scripts/` does not exist** and must never be created. It was deleted after being identified as stale model-generated artifacts from a misconfigured `TERMINAL_CWD` era.
+
+**Read-only skill scripts** — source-tracked examples inside skill directories:
+
+| Skill | Path |
+|-------|------|
+| `okx-market` | `agent/src/skills/okx-market/scripts/` |
+| `tushare` | `agent/src/skills/tushare/scripts/` |
+| *(future skills)* | `agent/src/skills/<skill-name>/scripts/` |
+
+These are documentation support files loaded by the agent via `read_file`. The agent never writes to them.
+
+#### 6.9.5 Agent-Generated Scripts Convention
+
+All scripts the agent produces during a session must be written into the run directory — never into design-time directories.
+
+| Path pattern | Created when | Owner |
+|-------------|-------------|-------|
+| `code/signal_engine.py` | Backtest workflow — hardcoded by `backtest/runner.py` | Agent writes via file tools |
+| `scripts/<name>.py` | Any other agent-generated script (data fetch, analysis, etc.) | Agent writes via file tools |
+| `agent/scripts/<name>.py` | **Never** | Developer only, source-tracked |
+| `agent/src/skills/*/scripts/<name>.py` | **Never** | Developer only, source-tracked |
+
+The `code/` subdirectory is separate from `scripts/` because `backtest/runner.py` loads `signal_engine.py` as a Python module via `importlib`; the stable relative path `code/signal_engine.py` is a hardcoded contract.
+
+**Common misfire:** If `TERMINAL_CWD` points at the `agent/` root, the model creates `agent/code/signal_engine.py` outside any run directory. Ensure `TERMINAL_CWD` resolves to the user-scoped sandbox (e.g. `agent/chris/`) so artifacts land in `agent/chris/sessions/<sid>/runs/<run_id>/`.
+
+#### 6.9.6 Artifact Directory Isolation (Runtime Enforcement)
+
+**Problem:** Agent-executed code (`write_file`, `bash`, agent-generated scripts calling `pd.to_csv()`) can write files outside the run directory without enforcement.
+
+**Three escape paths:**
+1. `write_file` tool — explicit path argument
+2. `bash` tool — relative writes inherit process cwd
+3. Agent-generated scripts executed via bash — bypass all tool-level guards
+
+**Guard: Artifact Directory Context Variable**
+
+File: `agent/src/hermes_tool_adapter/vibe_trading_compat.py`
+
+A `contextvars.ContextVar` holds the active artifact directory for the current thread/async context:
+
+```python
+_artifact_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "artifact_dir", default=None
+)
+```
+
+Set before agent invocation, reset in `finally`:
+
+```python
+# Single-agent session (service.py)
+_ctx_token = set_artifact_dir(run_dir / "artifacts")
+_runs_token = set_session_runs_dir(session_runs_dir)
+try:
+    agent.run_conversation(...)
+finally:
+    reset_artifact_dir(_ctx_token)
+    reset_session_runs_dir(_runs_token)
+
+# Swarm worker (worker.py)
+_ctx_token = set_artifact_dir(run_dir / "artifacts" / agent_id)
+try:
+    agent.run_conversation(...)
+finally:
+    reset_artifact_dir(_ctx_token)
+```
+
+**Critical: Context Propagation into Thread Pool Workers**
+
+Hermes runs concurrent tool calls via `ThreadPoolExecutor`. Python's `contextvars` are **not** automatically inherited by spawned threads — each thread starts with the default context, causing `_artifact_dir_var` and `_session_runs_dir_var` to return `None`.
+
+Fix applied in `hermes-agent/run_agent.py` — capture context before submitting to the executor:
+
+```python
+ctx = contextvars.copy_context()
+with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    for i, (tc, name, args) in enumerate(parsed_calls):
+        f = executor.submit(ctx.run, _run_tool, i, tc, name, args)
+```
+
+Using `ctx.run(fn, *args)` as the submitted callable ensures each worker thread inherits the calling context's variable values. Without this, tools like `setup_backtest_run` would fall back to the global `runs/` directory regardless of which session invoked them.
+
+**Guard: Write Path Resolution (`_resolve_write_path`)**
+
+All `write_file` calls pass through `_resolve_write_path(requested: str) -> Path`:
+
+| Input path type | Behaviour |
+|-----------------|-----------|
+| Absolute, inside `artifact_dir` | Passed through unchanged |
+| Absolute, **outside** `artifact_dir` | Warning logged; redirected to `artifact_dir / filename` |
+| Relative | Anchored to `artifact_dir` |
+| No `artifact_dir` set | No redirect, returned as-is |
+
+**Guard: Bash Tool CWD Enforcement**
+
+File: `agent/src/hermes_tool_adapter/vibe_trading_compat.py` — `_bash()`
+
+```python
+def _bash(args: dict, **_) -> str:
+    run_dir = args.get("run_dir") or _artifact_dir_var.get()
+    tool = BashTool()
+    return tool.execute(command=args.get("command", ""), run_dir=run_dir)
+```
+
+`cwd` is forced to `artifact_dir`, so any bash command — including agent-generated scripts calling `pd.to_csv('output.csv')` — writes relative paths inside the run's artifact directory.
+
+**Enforcement Summary:**
+
+| Escape path | Guard | Implementation |
+|-------------|-------|----------------|
+| `write_file` — relative path | `_resolve_write_path` anchors to `artifact_dir` | `vibe_trading_compat.py` |
+| `write_file` — absolute out-of-tree | Redirected to `artifact_dir / filename` with warning | `vibe_trading_compat.py` |
+| `bash` — relative cwd writes | `cwd` forced to `artifact_dir` | `vibe_trading_compat._bash()` |
+| Agent-generated scripts via bash | Inherits enforced cwd | `vibe_trading_compat._bash()` |
+| Missing `state.json` on backtest run dir | Propagated after `run_id` redirect | `session/service.py` |
+| Context vars lost in thread pool workers | `copy_context()` propagated into each `executor.submit` | `hermes-agent/run_agent.py` |
+
+#### 6.9.7 State File Propagation
+
+The session service creates a **wrapper run dir** (with `req.json`) and calls `mark_success(run_dir)`. The backtest engine may create its **own** run dir (with `config.json` + `artifacts/`). The `result["run_id"]` is then redirected to the backtest dir.
+
+To ensure the returned `run_id` always has a `state.json` the frontend can resolve:
+
+```python
+# agent/src/session/service.py
+actual_run_dir = latest_backtest_run_dir or latest_prepared_run_dir or result.get("run_dir")
+if actual_run_dir and actual_run_dir != str(run_dir):
+    if result.get("status") == "success":
+        state_store.mark_success(Path(actual_run_dir))
+    else:
+        state_store.mark_failure(Path(actual_run_dir), str(result.get("reason", "")))
+```
+
+#### 6.9.8 Tool Compliance — Path Resolution Contract
 
 Any tool that accepts a path parameter must:
 
@@ -2039,129 +2213,63 @@ Any tool that accepts a path parameter must:
 4. Never pass a raw model-supplied path to any filesystem operation
 
 ```python
-# Compliant pattern (edit_file_tool.py, factor_analysis_tool.py)
+# Compliant (edit_file_tool.py, factor_analysis_tool.py)
 resolved = _safe_path(kwargs["path"], Path(run_dir))
 resolved.read_text(...)
 
-# Forbidden — passes model-supplied path directly to filesystem
+# Forbidden
 Path(kwargs["path"]).read_text(...)
 ```
 
-#### 6.9.5 Internal Tool State — `task_tools.py`
+#### 6.9.9 Skill Compliance — Syntax Validation Pattern
 
-`TaskManager`'s `.tasks` directory is derived from `DATA_ROOT` (via `TERMINAL_CWD`) at module import time, not hardcoded relative to the source file:
+Skills validating generated Python code must use `py_compile` via `bash`, not `open()`:
+
+```bash
+# Compliant
+bash("python -m py_compile code/signal_engine.py && echo OK")
+
+# Forbidden — skill touches the file directly
+bash("python -c \"import ast; ast.parse(open('code/signal_engine.py').read()); print('OK')\"")
+```
+
+#### 6.9.10 Internal Tool State — `task_tools.py`
+
+`TaskManager`'s `.tasks` directory must derive from `DATA_ROOT`, not from `__file__`:
 
 ```python
-# Resolved from TERMINAL_CWD at startup
+# Correct
 TASKS_DIR = DATA_ROOT / ".tasks"
 
 # Forbidden
 TASKS_DIR = Path(__file__).resolve().parents[2] / ".tasks"
 ```
 
-#### 6.9.6 Design-Time vs Runtime Directories in `agent/`
+#### 6.9.11 Fallback Runs Directory — `setup_backtest_run`
 
-Exactly four subdirectories under `agent/` are **design-time application code** checked into source control. Everything else is a **runtime artifact** created by Hermes file tools and therefore governed by the file I/O rules above.
+When no session context var is set (CLI / swarm / direct plugin invocation), `setup_backtest_run` must still land runs under `DATA_ROOT/runs/`, not under the source-code root.
 
-**Design-time directories (source code — do not apply file I/O rules here):**
+File: `agent/src/hermes_tool_adapter/vibe_trading_finance.py`
 
-| Directory | Contents |
-|-----------|----------|
-| `agent/backtest/` | Backtest execution engine: `runner.py`, `engines/`, `loaders/`, `optimizers/`, `metrics.py` |
-| `agent/config/swarm/` | Swarm preset YAML configurations |
-| `agent/src/` | Full application source: session management, tools, skills, swarm runtime, hermes adapter, etc. |
-| `agent/tests/` | Test suite |
-
-**Runtime artifact directories (created by Hermes tools — governed by file I/O rules):**
-
-| Directory | Purpose | Governed by |
-|-----------|---------|-------------|
-| `runs/<run_id>/` | Per-run backtest artifacts | `DATA_ROOT` via `TERMINAL_CWD` |
-| `sessions/<sid>/` | Session store + uploads | `DATA_ROOT` via `TERMINAL_CWD` |
-| `uploads/` | Legacy upload fallback | `DATA_ROOT` via `TERMINAL_CWD` |
-| `.swarm/runs/<run_id>/` | Swarm run state | `DATA_ROOT` via `TERMINAL_CWD` |
-| `.tasks/` | Task manager state | `TASKS_DIR` via `TERMINAL_CWD` |
-| `<TERMINAL_CWD>/` (e.g. `chris/`) | User-scoped sandbox root | `TERMINAL_CWD` env var |
-
-**`agent/scripts/` does not exist.** It was deleted after being identified as a directory of stale model-generated artifacts produced by the old wrong-`TERMINAL_CWD` era. There is no developer-authored `agent/scripts/` and none should be created. The Hermes agent must never write into `agent/scripts/`.
-
-**The only legitimate `scripts/` directories in this repo are skill-local ones.** A skill may contain a `scripts/` subdirectory holding source-tracked example files that document the skill's API:
-
-| Skill | Path | Status |
-|-------|------|--------|
-| `okx-market` | `agent/src/skills/okx-market/scripts/` | Source-tracked — `market_data_example.py`, `candle_data_example.py` |
-| `tushare` | `agent/src/skills/tushare/scripts/` | Source-tracked — `stock_data_example.py`, `fund_data_example.py` |
-| *(future skills)* | `agent/src/skills/<skill-name>/scripts/` | Source-tracked when added |
-
-These files are skill documentation support files linked from `SKILL.md`. They are read by the agent via `read_file` as reference material, but the agent never writes to them. Any new skill may add its own `scripts/` subdir following the same convention — developer-authored, source-tracked, read-only at runtime.
-
-#### 6.9.7 Where and When Agent-Generated Scripts Are Created
-
-When the agent produces any Python script during a session (data fetching, analysis, factor computation, etc.), it must write the file into the run directory — **never into any design-time directory**.
-
-**Convention for agent-generated scripts:**
-
-```
-runs/<run_id>/
-├── req.json
-├── config.json
-├── code/
-│   └── signal_engine.py        ← strategy module (backtest-specific)
-├── scripts/
-│   └── <anything>.py           ← other agent-generated Python scripts
-└── artifacts/
-    ├── equity.csv
-    └── ...
-```
-
-| Path pattern | Created when | Owner |
-|-------------|-------------|-------|
-| `runs/<run_id>/code/signal_engine.py` | Backtest workflow — hardcoded by `backtest/runner.py` | Agent writes via file tools |
-| `runs/<run_id>/scripts/<name>.py` | Any other script the agent generates (data fetch, analysis, etc.) | Agent writes via file tools |
-| `agent/scripts/<name>.py` | **Never** — read-only at runtime | Developer writes, source-tracked |
-| `agent/src/skills/*/scripts/<name>.py` | **Never** — read-only at runtime | Developer writes, source-tracked |
-
-**Triggering conditions for script creation:**
-
-- The user asks to fetch or analyse data that doesn't fit an existing tool
-- The agent decides to write a helper script and execute it via `bash`
-- A skill instructs the agent to produce supporting code
-
-In all these cases the correct location is `runs/<run_id>/scripts/` (relative path: `scripts/<name>.py` from within the run directory), governed by `TERMINAL_CWD` via `DATA_ROOT`.
-
-**Skills must instruct the agent to write scripts into `scripts/`, not the run-dir root, `agent/scripts/`, or any absolute path.** The skill-local `scripts/` subdirectory (e.g. `skills/tushare/scripts/`) contains only static examples; the agent loads those as references via `read_file` but does not write to them.
-
-#### 6.9.8 The `code/` Subdirectory Convention in Run Directories
-
-Each run directory contains a `code/` subdirectory for the model-generated strategy code:
-
-```
-runs/<run_id>/
-├── req.json                    ← request persistence
-├── config.json                 ← backtest config
-├── code/
-│   └── signal_engine.py        ← model-generated strategy (runtime artifact)
-└── artifacts/
-    ├── equity.csv
-    ├── metrics.csv
-    └── ...
-```
-
-`backtest/runner.py` hardcodes this convention:
 ```python
-signal_path = run_dir / "code" / "signal_engine.py"
+def _get_fallback_runs_dir() -> Path:
+    """Return DATA_ROOT/runs as the fallback for non-session (CLI/swarm) contexts."""
+    try:
+        from runtime_env import get_data_root
+        return get_data_root() / "runs"
+    except Exception:
+        return _AGENT_ROOT / "runs"  # last-resort only
+
+
+def _setup_backtest_run(args: dict, **_) -> str:
+    ctx_runs_dir = _session_runs_dir_var.get()
+    base_dir = ctx_runs_dir if ctx_runs_dir is not None else _get_fallback_runs_dir()
+    ...
 ```
 
-This `code/` subdir is **not related to `agent/scripts/`**:
+`get_data_root()` reads `TERMINAL_CWD` at call time, so the fallback honours the user-scoped sandbox (e.g. `agent/chris/runs/`) rather than hardcoding `agent/runs/`.
 
-| Path | Kind | Owner |
-|------|------|-------|
-| `runs/<run_id>/code/signal_engine.py` | Runtime artifact — model-generated strategy | Hermes file tools write it |
-| `agent/scripts/*.py` | Design-time — static hand-written analysis scripts | Checked into source control |
-
-**Why a separate `code/` dir?** The `code/` subdir within each run directory separates the importable Python module (`signal_engine.py`) from the data artifacts in `artifacts/`. The backtest runner loads it as a Python module via `importlib`, which requires a stable relative path — `code/signal_engine.py` is that stable path.
-
-**Common misfire:** If `TERMINAL_CWD` is misconfigured to point at the `agent/` root, the model writing `code/signal_engine.py` creates `agent/code/signal_engine.py` — a stale artifact outside any run directory. The fix is to ensure `TERMINAL_CWD` always resolves to the user-scoped sandbox root (e.g. `agent/chris/`) so `runs/` exists under it and the model writes into `agent/chris/runs/<run_id>/code/signal_engine.py` as intended.
+**Why this matters:** the previous fallback was `_AGENT_ROOT / "runs"` which resolves to `agent/runs/` regardless of `TERMINAL_CWD`. This created a second stray runs folder alongside the session-scoped hierarchy whenever a tool call ran in a new thread that didn't inherit the context var.
 
 ---
 
@@ -2282,45 +2390,15 @@ Thought (LLM reasoning) → Action (Tool call) → Observation (Tool result) →
 
 ## 8. Data Flow
 
-### 8.1 Run Directory Structure
+### 8.1 Run & Session Directory Structure
 
-```
-runs/
-└── YYYYMMDD_HHMMSS_ffffff_xxxxxx/
-    ├── config.json              # Backtest config (top-level)
-    ├── req.json                 # User request
-    ├── planner_output.json      # Planning output
-    ├── design_spec.json         # Strategy design
-    ├── judge_decision.json      # Judge review
-    ├── data_api_spec.yaml       # Data API specification
-    ├── state.json               # Run status
-    ├── trace.jsonl              # Execution trace
-    ├── transcript_*.jsonl       # Compressed transcripts
-    ├── code/
-    │   └── signal_engine.py     # Strategy code
-    ├── logs/
-    │   ├── runner_stdout.txt
-    │   └── runner_stderr.txt
-    └── artifacts/
-        ├── equity.csv           # Equity curve
-        ├── metrics.csv          # Performance metrics
-        ├── trades.csv           # Trade log
-        └── positions.csv        # Position history
-```
+See [§6.9.3 Directory Layout](#693-directory-layout) for the canonical annotated tree. Summary:
 
-### 8.2 Swarm Run Directory Structure
+- Session-mode runs: `sessions/<sid>/runs/<run_id>/`
+- Swarm runs: `.swarm/runs/<uuid>/`
+- Legacy global runs: `runs/<run_id>/` (backward compat)
 
-```
-.swarm/runs/
-└── {uuid}/
-    ├── run.json                 # SwarmRun state
-    ├── events.jsonl             # Event log
-    └── tasks/
-        └── {task_id}.json       # Task states
-    └── artifacts/
-        └── {agent_id}/
-            └── summary.md       # Worker output
-```
+All paths are relative to `DATA_ROOT` (resolved from `TERMINAL_CWD`).
 
 ---
 
@@ -3057,122 +3135,14 @@ def _parse_run_directory(self, run_dir: Path) -> Dict:
 
 ## 15. Runtime Artifact File Control
 
-### 15.1 Problem Statement
+> All file isolation and artifact containment rules have been consolidated into [§6.9 Filesystem & File I/O Specification](#69-filesystem--file-io-specification).
 
-Agent-executed code (via `write_file` tool, `bash` tool, or agent-generated scripts calling `pandas.to_csv()`, `open()`, etc.) must never write files outside the current run's designated directory. Without enforcement, stray files accumulate in the agent root (e.g., `agent/nvda_risk_metrics.csv`), polluting the workspace and making run isolation impossible.
-
-Three escape paths exist:
-1. **`write_file` tool** — explicit file write via tool call
-2. **`bash` tool** — shell command inherits process cwd; relative writes land there
-3. **Agent-generated scripts executed via bash** — e.g., `python script.py` where the script calls `pd.to_csv('output.csv')` — bypasses all tool-level guards
-
-### 15.2 Artifact Directory Context Variable
-
-**File:** `agent/src/hermes_tool_adapter/vibe_trading_compat.py`
-
-A per-invocation context variable (`contextvars.ContextVar`) holds the active artifact directory for the current thread/async context:
-
-```python
-_artifact_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
-    "artifact_dir", default=None
-)
-
-def set_artifact_dir(path: Path) -> contextvars.Token:
-    return _artifact_dir_var.set(path)
-
-def reset_artifact_dir(token: contextvars.Token) -> None:
-    _artifact_dir_var.reset(token)
-```
-
-This is set **before** any agent invocation and reset in `finally` blocks:
-
-```python
-# Single-agent session (service.py)
-_ctx_token = set_artifact_dir(run_dir / "artifacts")
-try:
-    agent.run_conversation(...)
-finally:
-    reset_artifact_dir(_ctx_token)
-
-# Swarm worker (worker.py)
-_ctx_token = set_artifact_dir(run_dir / "artifacts" / agent_id)
-try:
-    agent.run_conversation(...)
-finally:
-    reset_artifact_dir(_ctx_token)
-```
-
-### 15.3 Write Path Resolution (`_resolve_write_path`)
-
-All `write_file` tool calls pass through `_resolve_write_path(requested: str) -> Path`:
-
-| Input path type | Behaviour |
-|-----------------|-----------|
-| Absolute, inside `artifact_dir` | Passed through unchanged |
-| Absolute, **outside** `artifact_dir` | Warning logged; redirected to `artifact_dir / filename` |
-| Relative (e.g., `output.csv`, `subdir/file.csv`) | Anchored to `artifact_dir` |
-| No `artifact_dir` set | No redirect, returned as-is |
-
-### 15.4 Bash Tool CWD Enforcement
-
-**File:** `agent/src/hermes_tool_adapter/vibe_trading_compat.py` — `_bash()`
-
-The bash tool adapter sets `cwd` to the active `artifact_dir` when no explicit `run_dir` is passed:
-
-```python
-def _bash(args: dict, **_) -> str:
-    run_dir = args.get("run_dir") or _artifact_dir_var.get()
-    tool = BashTool()
-    return tool.execute(command=args.get("command", ""), run_dir=run_dir)
-```
-
-This ensures that any bash command — including running agent-generated Python scripts that perform direct I/O — executes with `cwd = artifact_dir`. Relative file writes from those scripts (e.g., `pd.to_csv('result.csv')`) therefore land inside the run's artifact directory.
-
-### 15.5 Run Directory Structure
-
-Every run gets an isolated directory under `agent/runs/<run_id>/`:
-
-```
-runs/
-└── 20260411_191555_83_c9f3a1/
-    ├── config.json          # Backtest configuration
-    ├── req.json             # Original prompt + session context  (session runs)
-    ├── state.json           # Final status: {"status": "success|failed", "reason": "..."}
-    ├── report.md            # Agent's final response text
-    ├── artifacts/           # All tool/agent file output lands here
-    │   ├── equity.csv
-    │   ├── metrics.csv
-    │   ├── trades.csv
-    │   └── <agent_id>/      # Per-agent subdirs in swarm runs
-    │       └── summary.md
-    ├── code/                # Generated strategy code files
-    └── logs/                # Execution logs
-```
-
-### 15.6 State File Propagation
-
-The session service creates a **wrapper run dir** (with `req.json`) and calls `mark_success(run_dir)`. However, the backtest engine creates its **own run dir** (with `config.json` + `artifacts/`). The `result["run_id"]` is then redirected to the backtest dir.
-
-To ensure the returned `run_id` always has a `state.json` the frontend can resolve:
-
-```python
-actual_run_dir = latest_backtest_run_dir or latest_prepared_run_dir or result.get("run_dir")
-if actual_run_dir and actual_run_dir != str(run_dir):
-    # Propagate state.json to the run dir returned to the frontend
-    if result.get("status") == "success":
-        state_store.mark_success(Path(actual_run_dir))
-    else:
-        state_store.mark_failure(Path(actual_run_dir), str(result.get("reason", "")))
-```
-
-**File:** `agent/src/session/service.py`
-
-### 15.7 Enforcement Summary
-
-| Escape path | Guard | Implementation |
-|-------------|-------|----------------|
-| `write_file` tool — relative path | `_resolve_write_path` anchors to `artifact_dir` | `vibe_trading_compat.py` |
-| `write_file` tool — absolute out-of-tree | Redirected to `artifact_dir / filename` with warning | `vibe_trading_compat.py` |
-| `bash` tool — relative cwd writes | `cwd` forced to `artifact_dir` | `vibe_trading_compat._bash()` |
-| Agent-generated scripts via bash | Inherits enforced cwd; relative writes captured | `vibe_trading_compat._bash()` |
-| Missing `state.json` on backtest run dir | Propagated after `run_id` redirect | `session/service.py` |
+| Old subsection | Canonical location |
+|---|---|
+| 15.1 Problem Statement | §6.9.6 |
+| 15.2 Artifact Directory Context Variable | §6.9.6 |
+| 15.3 Write Path Resolution | §6.9.6 |
+| 15.4 Bash Tool CWD Enforcement | §6.9.6 |
+| 15.5 Run Directory Structure | §6.9.3 |
+| 15.6 State File Propagation | §6.9.7 |
+| 15.7 Enforcement Summary | §6.9.6 |

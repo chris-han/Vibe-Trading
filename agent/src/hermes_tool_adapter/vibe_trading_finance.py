@@ -40,6 +40,15 @@ if _HERMES_ROOT.exists() and str(_HERMES_ROOT) not in sys.path:
     sys.path.insert(0, str(_HERMES_ROOT))
 
 
+def _get_fallback_runs_dir() -> Path:
+    """Return DATA_ROOT/runs as the fallback for non-session (CLI/swarm) contexts."""
+    try:
+        from runtime_env import get_data_root
+        return get_data_root() / "runs"
+    except Exception:
+        return _AGENT_ROOT / "runs"
+
+
 def _setup_backtest_run(args: dict, **_) -> str:
     """Create a timestamped run directory and write config.json + signal_engine.py."""
     try:
@@ -47,7 +56,7 @@ def _setup_backtest_run(args: dict, **_) -> str:
         from datetime import datetime
 
         ctx_runs_dir = _session_runs_dir_var.get()
-        base_dir = ctx_runs_dir if ctx_runs_dir is not None else _AGENT_ROOT / "runs"
+        base_dir = ctx_runs_dir if ctx_runs_dir is not None else _get_fallback_runs_dir()
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
         suffix = uuid.uuid4().hex[:6]
