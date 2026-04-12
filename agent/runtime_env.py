@@ -71,15 +71,15 @@ def _resolve_backend_python() -> Path:
 
 
 def prepare_hermes_project_context(*, chdir: bool = False) -> Path:
-    """Prepare cwd/env so Hermes can discover repo-local project plugins.
+    """Prepare repo-root context for Vibe-Trading Hermes entrypoints.
 
-    Hermes project plugins are resolved from ``Path.cwd() / ".hermes/plugins"``.
-    Vibe-Trading keeps its Hermes plugin at the repository root, so callers that
-    launch from ``agent/`` must opt into the repo root working directory before
-    importing ``run_agent``.
+    This helper sets ``VIBE_TRADING_ROOT`` and can optionally ``chdir`` to the
+    repository root before importing ``run_agent``. The Vibe-Trading plugin is
+    packaged as a Hermes entry-point plugin from ``src.plugins.vibe_trading``,
+    so project-plugin env flags and repo-local plugin directories are not
+    required for plugin discovery.
     """
     _set_env_if_missing_or_blank("VIBE_TRADING_ROOT", str(_REPO_ROOT))
-    _set_env_if_missing_or_blank("HERMES_ENABLE_PROJECT_PLUGINS", "true")
     if chdir:
         os.chdir(_REPO_ROOT)
     return _REPO_ROOT

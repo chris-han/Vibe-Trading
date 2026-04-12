@@ -238,8 +238,7 @@ def run_worker(
             "delegation",
             "cronjob",
             "research",
-            "compat",
-            "vibe_trading_finance",
+            "vibe_trading",
         ],
         disabled_toolsets=["code_execution"],
         tool_progress_callback=_on_tool_progress,
@@ -250,10 +249,15 @@ def run_worker(
         **agent_kwargs,
     )
 
-    from src.hermes_tool_adapter.vibe_trading_compat import reset_artifact_dir, set_artifact_dir
-    _ctx_token = set_artifact_dir(artifact_dir)
+    # Configure hermes built-in file/terminal tools to write into the artifact dir.
     try:
-        raw = agent.run_conversation(user_message=user_prompt)
+        from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
+        register_task_env_overrides(str(task_id), {"cwd": str(artifact_dir)})
+        _hermes_overrides_set = True
+    except Exception:
+        _hermes_overrides_set = False
+    try:
+        raw = agent.run_conversation(user_message=user_prompt, task_id=str(task_id))
         summary = (raw.get("final_response") or "").strip()
         _write_summary(artifact_dir, summary)
         _emit(event_callback, "worker_completed", agent_id, task_id)
@@ -278,7 +282,11 @@ def run_worker(
             input_tokens=0, output_tokens=0,
         )
     finally:
-        reset_artifact_dir(_ctx_token)
+        if _hermes_overrides_set:
+            try:
+                clear_task_env_overrides(str(task_id))
+            except Exception:
+                pass
 
 
 def _write_summary(artifact_dir: Path, summary: str) -> None:

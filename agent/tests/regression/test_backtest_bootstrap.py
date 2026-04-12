@@ -173,7 +173,7 @@ def test_run_backtest_resolves_single_nested_prepared_run_dir(tmp_path):
 
 
 def test_setup_backtest_run_sanitizes_invalid_signal_engine_annotations(tmp_path):
-    from src.hermes_tool_adapter.vibe_trading_finance import _setup_backtest_run
+    from src.vibe_trading_helper import _setup_backtest_run
 
     raw = _setup_backtest_run(
         {
@@ -210,7 +210,7 @@ def test_setup_backtest_run_sanitizes_invalid_signal_engine_annotations(tmp_path
 
 
 def test_setup_backtest_run_decodes_escaped_newline_source(tmp_path):
-    from src.hermes_tool_adapter.vibe_trading_finance import _setup_backtest_run
+    from src.vibe_trading_helper import _setup_backtest_run
 
     raw = _setup_backtest_run(
         {

@@ -6,7 +6,7 @@
 wrapper that calls Hermes `AIAgent` directly. The custom `src/agent/`, `src/providers/`,
 and `src/skills/` layers are **removed**; their job is done by Hermes. The application
 still owns its backend/domain implementations in `src/tools/` plus the Hermes-facing
-tool definitions in `src/hermes_tool_adapter/`. Only the API surface, SSE bus, session/swarm
+tool definitions in `src/vibe_trading_helper.py` and `agent/src/plugins/vibe_trading/`. Only the API surface, SSE bus, session/swarm
 stores, models, and Hermes runtime integration remain in Vibe-Trading.
 
 A `HermesAdapter` shim was initially considered but rejected: it creates a permanent
@@ -34,7 +34,7 @@ React UI -> FastAPI (api_server.py)           [UNCHANGED]
               -> SessionService               [KEPT: stores + SSE only]
                   -> AIAgent (Hermes direct)  [REPLACES AgentLoop]
                        -> hermes-agent toolsets (file, web, bash, ...)
-                       -> vibe_trading_finance plugin toolset [NEW]
+                       -> vibe_trading plugin toolset [NEW]
               -> WorkflowRuntime                 [KEPT: DAG orchestration only]
                   -> AIAgent per task         [REPLACES worker.py]
 
@@ -55,7 +55,7 @@ KEPT
   agent/src/core/state.py       (RunStateStore - run dir creation/status)
   agent/src/backtest/           (backtest engine - kept as finance domain)
   agent/src/tools/              (backend/domain implementations used by Hermes-facing wrappers)
-  agent/src/hermes_tool_adapter/ (Hermes-facing tool definitions owned by Vibe-Trading)
+    agent/src/vibe_trading_helper.py (shared Vibe-Trading plugin/runtime implementation)
   agent/src/ui_services.py      (run analysis helpers)
   hermes-agent/                 (used as library/runtime, no app-specific tool code)
 ```
@@ -88,28 +88,29 @@ These become the migration safety net in Phase 4.
 
 ## Phase 1: Hermes Runtime Plugin Integration (Week 1, Day 1-2)
 
-Create application-owned Hermes tool definition modules under `agent/src/hermes_tool_adapter/`
-and register them through the repo-local Hermes plugin in `.hermes/plugins/vibe-trading/`.
+Create application-owned Hermes plugin/runtime modules under `agent/src/` and `agent/src/plugins/vibe_trading/`
+and register them through the installed Hermes entry-point plugin in `agent/src/plugins/vibe_trading/`.
 The schemas and handlers stay in the Vibe-Trading application layer; Hermes loads them
-at runtime through project plugin discovery.
+at runtime through `hermes_agent.plugins` entry-point discovery.
 
 ### 1.1 Files
 
 ```text
-agent/src/hermes_tool_adapter/vibe_trading_finance.py
-agent/src/hermes_tool_adapter/vibe_trading_compat.py
-.hermes/plugins/vibe-trading/plugin.yaml
-.hermes/plugins/vibe-trading/__init__.py
+agent/src/vibe_trading_helper.py
+agent/src/hermes_tool_adapter/vibe_trading_compat.py (deleted)
+agent/src/plugins/vibe_trading/__init__.py
+agent/src/plugins/vibe_trading/schemas.py
+agent/src/plugins/vibe_trading/tools.py
 ```
 
 ### 1.2 Runtime Registration Flow
 
-1. Hermes starts from the Vibe-Trading repo root.
-2. `HERMES_ENABLE_PROJECT_PLUGINS=true` is set.
-3. Hermes discovers `.hermes/plugins/vibe-trading/plugin.yaml`.
+1. Hermes starts with the Vibe-Trading agent package installed in its runtime environment.
+2. `agent/pyproject.toml` exposes `vibe-trading = "src.plugins.vibe_trading"` in the `hermes_agent.plugins` group.
+3. Hermes discovers that plugin entry point.
 4. The plugin imports:
-   - `src.hermes_tool_adapter.vibe_trading_finance`
-   - `src.hermes_tool_adapter.vibe_trading_compat`
+    - `src.vibe_trading_helper`
+    - `src.hermes_tool_adapter.vibe_trading_compat` (deleted)
 5. The plugin calls `ctx.register_tool(...)` for each exported tool spec.
 
 ### 1.3 Tool Compatibility Matrix
@@ -123,10 +124,10 @@ agent/src/hermes_tool_adapter/vibe_trading_compat.py
 | `WebReaderTool`         | `web_reader_tool.py`            | Use Hermes      |
 | `DocReaderTool`         | `file_tools.py` (PDF extract)   | Use Hermes      |
 | `LoadSkillTool`         | Hermes skill system             | Use Hermes      |
-| `BacktestTool`          | `vibe_trading_finance.backtest` | Plugin toolset |
-| `FactorAnalysisTool`    | `vibe_trading_finance`          | Plugin toolset |
-| `OptionsPricingTool`    | `vibe_trading_finance`          | Plugin toolset |
-| `PatternTool`           | `vibe_trading_finance`          | Plugin toolset |
+| `BacktestTool`          | `vibe_trading.backtest` | Plugin toolset |
+| `FactorAnalysisTool`    | `vibe_trading`          | Plugin toolset |
+| `OptionsPricingTool`    | `vibe_trading`          | Plugin toolset |
+| `PatternTool`           | `vibe_trading`          | Plugin toolset |
 | `SubagentTool`          | `delegate_tool.py`              | Use Hermes      |
 | `SwarmTool`             | WorkflowRuntime (API call)         | Keep in API     |
 | `CompactTool`           | Built-in Hermes compression     | Remove          |
@@ -188,7 +189,7 @@ async def _run_with_agent(self, attempt: Attempt, messages: list = None) -> Dict
         max_iterations=50,
         quiet_mode=True,
         session_id=sid,
-        enabled_toolsets=["development", "research", "vibe_trading_finance"],
+        enabled_toolsets=["development", "research", "vibe_trading"],
         tool_progress_callback=_on_tool_progress,
         stream_delta_callback=_on_delta,
         ephemeral_system_prompt=f"Run directory: {run_dir}\nSession: {sid}",
@@ -297,7 +298,7 @@ def run_worker(
         max_iterations=agent_spec.max_iterations or 50,
         quiet_mode=True,
         session_id=f"swarm-{task_id}",
-        enabled_toolsets=["development", "research", "vibe_trading_finance"],
+        enabled_toolsets=["development", "research", "vibe_trading"],
         tool_progress_callback=_on_progress,
         ephemeral_system_prompt=system_prompt + f"\nRun directory: {artifact_dir}",
         skip_context_files=True,
@@ -431,7 +432,7 @@ cd agent && uv run pytest \
 
 | Area | Status | Current implementation |
 |---|---|---|
-| Hermes project plugin registration | ✅ Complete | `.hermes/plugins/vibe-trading/` loads `vibe_trading_finance` and `vibe_trading_compat` |
+| Hermes entry-point plugin registration | ✅ Complete | `agent/src/plugins/vibe_trading/` loads `src.vibe_trading_helper` |
 | Session execution migrated to Hermes | ✅ Complete | `agent/src/session/service.py::_run_with_agent()` uses `AIAgent.run_conversation()` |
 | Swarm worker execution migrated to Hermes | ✅ Complete | `agent/src/swarm/worker.py` runs one `AIAgent` per task |
 | Legacy `src/agent/` / `src/providers/` layers | ✅ Removed | No longer part of runtime path |
@@ -447,7 +448,7 @@ When replaying this migration after an upstream Hermes update, the following beh
 
 1. **No app-specific patches inside `hermes-agent/`**
    - Hermes remains vendored/upstream-owned.
-   - All Vibe-Trading behavior lives in app-owned files under `agent/src/hermes_tool_adapter/`, `agent/src/session/`, `agent/src/swarm/`, and `.hermes/plugins/vibe-trading/`.
+    - All Vibe-Trading behavior lives in app-owned files under `agent/src/vibe_trading_helper.py`, `agent/src/plugins/vibe_trading/`, `agent/src/session/`, and `agent/src/swarm/`.
 
 2. **All runtime writes stay inside the active run directory**
    - `write_file` relative/out-of-tree paths are redirected into the active artifact directory.
@@ -477,10 +478,11 @@ cd ../agent && uv pip install -e .
 
 These files are the canonical Vibe-Trading migration surface and must remain intact after the update:
 
-- `.hermes/plugins/vibe-trading/plugin.yaml`
-- `.hermes/plugins/vibe-trading/__init__.py`
-- `agent/src/hermes_tool_adapter/vibe_trading_finance.py`
-- `agent/src/hermes_tool_adapter/vibe_trading_compat.py`
+- `agent/src/plugins/vibe_trading/__init__.py`
+- `agent/src/plugins/vibe_trading/schemas.py`
+- `agent/src/plugins/vibe_trading/tools.py`
+- `agent/src/vibe_trading_helper.py`
+- `agent/src/hermes_tool_adapter/vibe_trading_compat.py` (deleted)
 - `agent/src/session/service.py`
 - `agent/src/swarm/worker.py`
 - `agent/src/core/state.py`
@@ -490,7 +492,7 @@ These files are the canonical Vibe-Trading migration surface and must remain int
 
 After any upstream sync, explicitly verify these implementation details still exist:
 
-- `vibe_trading_compat.py`
+- `vibe_trading_compat.py` (deleted)
   - `_artifact_dir_var` context variable
   - `set_artifact_dir()` / `reset_artifact_dir()`
   - `_resolve_write_path()` redirect logic
@@ -526,7 +528,7 @@ If unexpected outputs appear there, treat it as a regression in artifact control
 ```
 Week 1
   Day 1:   Phase 0 -- snapshot SSE event shapes
-  Day 2:   Phase 1 -- Hermes plugin + agent/src/hermes_tool_adapter
+    Day 2:   Phase 1 -- Hermes plugin + app-owned plugin runtime module
   Day 3-4: Phase 2 -- rewrite SessionService._run_with_agent()
   Day 5:   Phase 3 -- rewrite swarm worker.py
 
@@ -557,9 +559,9 @@ Week 3+
 
 | File / Path | Migration action | Current status |
 |---|---|---|
-| `agent/src/hermes_tool_adapter/vibe_trading_finance.py` | **CREATE** finance tool definitions | Active, app-owned integration surface |
-| `agent/src/hermes_tool_adapter/vibe_trading_compat.py` | **CREATE** compatibility/runtime control definitions | Active; includes artifact path redirection + bash cwd hardening |
-| `.hermes/plugins/vibe-trading/` | **CREATE** runtime registration plugin | Active; this is the preferred hook point for replaying the migration |
+| `agent/src/vibe_trading_helper.py` | **CREATE** plugin tool definitions | Active, app-owned integration surface |
+| `agent/src/hermes_tool_adapter/vibe_trading_compat.py` | **CREATE** compatibility/runtime control definitions | Deleted; replaced by Hermes built-ins + `register_task_env_overrides` |
+| `agent/src/plugins/vibe_trading/` | **CREATE** runtime registration plugin | Active; this is the preferred hook point for replaying the migration |
 | `agent/src/session/service.py` | **REWRITE** `_run_with_agent()` + `cancel_current()` | Active; direct Hermes execution + final `run_id` state propagation |
 | `agent/src/swarm/worker.py` | **REWRITE** `run_worker()` | Active; per-worker artifact isolation enforced |
 | `agent/src/agent/hermes_adapter.py` | **DELETE** | Abandoned; do not reintroduce |
@@ -570,8 +572,8 @@ Week 3+
 | `frontend/src/pages/RunDetail.tsx` | **PATCH** | UI hardening for `unknown` vs `failed` run status |
 
 **App-owned files that should remain stable across upstream Hermes updates:**
-- `.hermes/plugins/vibe-trading/*`
-- `agent/src/hermes_tool_adapter/*`
+- `agent/src/plugins/vibe_trading/*`
+- `agent/src/vibe_trading_helper.py`
 - `agent/src/session/service.py`
 - `agent/src/swarm/worker.py`
 - `agent/src/core/state.py`

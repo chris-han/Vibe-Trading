@@ -70,8 +70,6 @@ RUN pip install --no-cache-dir -e .
 # Default port
 EXPOSE 8899
 
-ENV HERMES_ENABLE_PROJECT_PLUGINS=true
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8899/health')" || exit 1

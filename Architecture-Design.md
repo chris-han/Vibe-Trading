@@ -185,18 +185,42 @@ The Vibe-Trading Agent is a sophisticated AI-powered finance research and backte
 
 #### Current Vibe-Trading on Hermes Integration
 
-The current migration path does **not** register Vibe-Trading tools as Hermes built-ins.
+Vibe-Trading registers only its **finance-domain tools** as a Hermes plugin. All generic utility tools (file I/O, bash, web, tasks, skills, context compression) are provided by Hermes built-in toolsets and are no longer duplicated in the adapter layer.
 
-- Vibe-Trading tool definitions live in:
-  - `/home/chris/repo/Vibe-Trading/agent/src/hermes_tool_adapter/vibe_trading_finance.py`
-  - `/home/chris/repo/Vibe-Trading/agent/src/hermes_tool_adapter/vibe_trading_compat.py`
-- Those modules export schemas and handlers, but do not call `registry.register(...)` at import time.
-- Runtime registration is performed by a repo-local Hermes plugin:
-  - `/home/chris/repo/Vibe-Trading/.hermes/plugins/vibe-trading/`
-- Hermes discovers that plugin only when:
-  - the working directory is `/home/chris/repo/Vibe-Trading`
-  - `HERMES_ENABLE_PROJECT_PLUGINS=true`
-This is the preferred SDK-style integration because it avoids source-level changes to Hermes core and keeps Vibe-Trading as a project-scoped extension.
+**What was removed — compat toolset fully deleted:**
+
+| Former compat tool | Hermes built-in replacement | Hermes toolset |
+|--------------------|-----------------------------|----------------|
+| `write_file` | `write_file` (hermes) + `register_task_env_overrides` for per-session CWD | `file` |
+| `bash` | `terminal` (hermes) + `register_task_env_overrides` for per-session CWD | `terminal` |
+| `edit_file` | `patch` / `str_replace_file` (hermes) | `file` |
+| `read_url` | `web_extract` | `research` |
+| `subagent` | `delegate_task` | `delegation` |
+| `background_run` + `check_background` | `terminal(background=true)` + `process` | `terminal` |
+| `task_create/update/list/get` | `todo` | `todo` |
+| `compact` | Automatic `ContextCompressor` (50% threshold) + gateway hygiene (85%) | built-in |
+| `load_skill` | `skill_view` / `skills_list` via `skills.external_dirs` | `skills` |
+
+**What remains — finance plugin only:**
+
+- Vibe-Trading plugin tool definitions live in:
+    - `/home/chris/repo/Vibe-Trading/agent/src/vibe_trading_helper.py`
+- `vibe_trading_compat.py` has been **deleted**.
+- Runtime registration is performed by a Hermes entry-point plugin package:
+    - `/home/chris/repo/Vibe-Trading/agent/src/plugins/vibe_trading/`
+- The plugin package now uses:
+        - `agent/src/plugins/vibe_trading/__init__.py`
+        - `agent/src/plugins/vibe_trading/schemas.py`
+        - `agent/src/plugins/vibe_trading/tools.py`
+- The plugin-local `schemas.py` and `tools.py` provide the Hermes-facing registration surface.
+- The shared app/runtime module `agent/src/vibe_trading_helper.py` remains the importable Python surface for session helpers and shared implementation logic.
+- `agent/pyproject.toml` exports the Hermes entry point `vibe-trading = "src.plugins.vibe_trading"`.
+- Hermes discovers that plugin through the installed `hermes_agent.plugins` entry-point group.
+
+**Skills discovery** — no compat wrapper needed:
+
+- `~/.hermes/config.yaml` contains `skills.external_dirs: [/home/chris/repo/Vibe-Trading/agent/src/skills]`
+- Hermes `skill_view` / `skills_list` (built-in `skills` toolset) natively find all VT skills.
 
 Recommendation: do not rely on injecting the repo root into the model's ephemeral system prompt to make tools or plugins discoverable. Instead configure the agent runtime and file/terminal tools to start in the project root (for example by setting the `TERMINAL_CWD` environment variable or calling the repo helper `prepare_hermes_project_context()` before agent construction). Tools read `TERMINAL_CWD` at init time to determine their default working directory; setting it ensures plugin discovery and file operations begin from the correct repo root.
 
@@ -1768,8 +1792,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    PLUGIN[".hermes/plugins/vibe-trading/plugin.yaml<br/>project plugin entry"]
-    ADAPTER["agent/src/hermes_tool_adapter/vibe_trading_finance.py<br/>tool schemas + handlers"]
+    PLUGIN["agent/src/plugins/vibe_trading/__init__.py<br/>entry-point plugin module"]
+    ADAPTER["agent/src/plugins/vibe_trading/schemas.py + tools.py<br/>plugin registration surface"]
+    RUNTIME["agent/src/vibe_trading_helper.py<br/>shared runtime helpers + implementation"]
     TOOL["agent/src/tools/backtest_tool.py<br/>run_backtest()"]
     BOOT["agent/src/backtest/bootstrap.py<br/>prompt-to-run bootstrap"]
     CORE["agent/src/core/runner.py<br/>Runner subprocess wrapper"]
@@ -1780,7 +1805,8 @@ flowchart LR
     ART["artifacts/*.csv"]
 
     PLUGIN --> ADAPTER
-    ADAPTER --> TOOL
+    ADAPTER --> RUNTIME
+    RUNTIME --> TOOL
     TOOL --> BOOT
     TOOL --> CORE
     CORE --> ENGINE
@@ -1816,7 +1842,7 @@ flowchart LR
 |---------|------------------------|-------------------|-------------------|
 | API + streaming | `agent/api_server.py` | `agent/src/session/service.py`, `agent/src/ui_services.py` | `agent/sessions/`, `agent/runs/` (legacy), `agent/uploads/` |
 | Session lifecycle | `agent/src/session/service.py` | `store.py`, `events.py`, `models.py`, `src/backtest/bootstrap.py` | `agent/sessions/<session_id>/` including `runs/<run_id>/` |
-| Hermes finance tools | `.hermes/plugins/vibe-trading/plugin.yaml` | `agent/src/hermes_tool_adapter/vibe_trading_finance.py`, `vibe_trading_compat.py` | Registers runtime tools |
+| Hermes plugin tools | `agent/src/plugins/vibe_trading/__init__.py` | `agent/src/plugins/vibe_trading/schemas.py`, `agent/src/plugins/vibe_trading/tools.py`, `agent/src/vibe_trading_helper.py` | Registers runtime tools |
 | Backtest execution | `agent/src/tools/backtest_tool.py` | `agent/src/core/runner.py`, `agent/backtest/runner.py` | `agent/sessions/<sid>/runs/<run_id>/artifacts/` |
 | Swarm execution | `agent/src/swarm/runtime.py` | `worker.py`, `store.py`, `task_store.py`, `mailbox.py`, `presets.py` | `agent/.swarm/runs/<run_id>/` |
 
@@ -1887,20 +1913,25 @@ Streamlined loop for RL training environments:
 - `pattern` - Pattern recognition
 - `compact` - Context compression
 
-For the Hermes-based migration, these Vibe-Trading-specific tools are not treated as Hermes built-ins. They are surfaced as plugin-provided Hermes toolsets:
+For the Hermes-based migration, only finance-domain tools are surfaced as a plugin-provided Hermes toolset:
 
-- `vibe_trading_finance`
-- `compat`
+- `vibe_trading` — 7 project tools registered via the installed Hermes entry-point plugin
+
+All generic utility tools (file I/O, terminal, web, tasks, skills, context compression) use **Hermes built-in toolsets** directly. The former `compat` toolset has been deleted.
 
 The runtime registration flow is:
 
-1. Hermes starts in the Vibe-Trading repo root.
-2. Hermes project plugins are enabled with `HERMES_ENABLE_PROJECT_PLUGINS=true`.
-3. Hermes discovers `.hermes/plugins/vibe-trading/plugin.yaml`.
-4. The plugin imports the exported tool specs from:
-   - `agent/src/hermes_tool_adapter/vibe_trading_finance.py`
-   - `agent/src/hermes_tool_adapter/vibe_trading_compat.py`
-5. The plugin registers those tools through `PluginContext.register_tool(...)`.
+1. Hermes starts with the Vibe-Trading agent package installed in its runtime environment.
+2. `agent/pyproject.toml` exposes the plugin entry point `vibe-trading = "src.plugins.vibe_trading"`.
+3. Hermes discovers that entry point through `hermes_agent.plugins`.
+4. The plugin imports package-local schema and handler modules:
+    - `agent/src/plugins/vibe_trading/schemas.py`
+    - `agent/src/plugins/vibe_trading/tools.py`
+5. Those package-local modules reuse shared implementation from:
+    - `agent/src/vibe_trading_helper.py`
+6. The plugin registers those 7 tools through `PluginContext.register_tool(...)`.
+
+The `enabled_toolsets` list in `service.py`, `swarm/worker.py`, and `cli.py` now uses `"vibe_trading"` to match the plugin/toolset name in the docs. The `skills` toolset discovers VT skills natively via `skills.external_dirs` in `~/.hermes/config.yaml`.
 
 ### 6.5 Skills System (`skills/`)
 
@@ -2105,87 +2136,55 @@ The `code/` subdirectory is separate from `scripts/` because `backtest/runner.py
 2. `bash` tool — relative writes inherit process cwd
 3. Agent-generated scripts executed via bash — bypass all tool-level guards
 
-**Guard: Artifact Directory Context Variable**
+**Guard: `register_task_env_overrides` (Hermes built-in mechanism)**
 
-File: `agent/src/hermes_tool_adapter/vibe_trading_compat.py`
+The former `vibe_trading_compat.py` custom `_artifact_dir_var` context variable and hand-written `_resolve_write_path` / `_bash` guards have been replaced by the Hermes-native `register_task_env_overrides` API. The remaining shared runtime state for session-scoped run creation lives in `agent/src/vibe_trading_helper.py`.
 
-A `contextvars.ContextVar` holds the active artifact directory for the current thread/async context:
-
-```python
-_artifact_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
-    "artifact_dir", default=None
-)
-```
-
-Set before agent invocation, reset in `finally`:
+Files: `agent/src/session/service.py`, `agent/src/swarm/worker.py`
 
 ```python
+from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
+
 # Single-agent session (service.py)
-_ctx_token = set_artifact_dir(run_dir / "artifacts")
-_runs_token = set_session_runs_dir(session_runs_dir)
+register_task_env_overrides(sid, {"cwd": str(run_dir / "artifacts")})
 try:
-    agent.run_conversation(...)
+    agent.run_conversation(
+        user_message=attempt.prompt,
+        conversation_history=history,
+        task_id=sid,          # must match the key passed to register_task_env_overrides
+    )
 finally:
-    reset_artifact_dir(_ctx_token)
+    clear_task_env_overrides(sid)
     reset_session_runs_dir(_runs_token)
 
 # Swarm worker (worker.py)
-_ctx_token = set_artifact_dir(run_dir / "artifacts" / agent_id)
+register_task_env_overrides(str(task_id), {"cwd": str(artifact_dir)})
 try:
-    agent.run_conversation(...)
+    agent.run_conversation(..., task_id=str(task_id))
 finally:
-    reset_artifact_dir(_ctx_token)
+    clear_task_env_overrides(str(task_id))
 ```
+
+This pins the `cwd` for all Hermes built-in file and terminal tools (`write_file`, `read_file`, `search_files`, `terminal`, `bash`) to the run's artifact directory, per session, without any custom wrapper code.
+
+**How `task_id` matching works:**
+
+Hermes resolves an `effective_task_id` inside `run_conversation()`. Passing `task_id=sid` makes that ID match the key used in `register_task_env_overrides(sid, ...)`, so the override takes effect for every tool call in the session. Without the explicit `task_id=sid` argument, Hermes would generate a random UUID per turn and the override would never be found.
 
 **Critical: Context Propagation into Thread Pool Workers**
 
-Hermes runs concurrent tool calls via `ThreadPoolExecutor`. Python's `contextvars` are **not** automatically inherited by spawned threads — each thread starts with the default context, causing `_artifact_dir_var` and `_session_runs_dir_var` to return `None`.
-
-Fix applied in `hermes-agent/run_agent.py` — capture context before submitting to the executor:
-
-```python
-ctx = contextvars.copy_context()
-with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-    for i, (tc, name, args) in enumerate(parsed_calls):
-        f = executor.submit(ctx.run, _run_tool, i, tc, name, args)
-```
-
-Using `ctx.run(fn, *args)` as the submitted callable ensures each worker thread inherits the calling context's variable values. Without this, tools like `setup_backtest_run` would fall back to the global `runs/` directory regardless of which session invoked them.
-
-**Guard: Write Path Resolution (`_resolve_write_path`)**
-
-All `write_file` calls pass through `_resolve_write_path(requested: str) -> Path`:
-
-| Input path type | Behaviour |
-|-----------------|-----------|
-| Absolute, inside `artifact_dir` | Passed through unchanged |
-| Absolute, **outside** `artifact_dir` | Warning logged; redirected to `artifact_dir / filename` |
-| Relative | Anchored to `artifact_dir` |
-| No `artifact_dir` set | No redirect, returned as-is |
-
-**Guard: Bash Tool CWD Enforcement**
-
-File: `agent/src/hermes_tool_adapter/vibe_trading_compat.py` — `_bash()`
-
-```python
-def _bash(args: dict, **_) -> str:
-    run_dir = args.get("run_dir") or _artifact_dir_var.get()
-    tool = BashTool()
-    return tool.execute(command=args.get("command", ""), run_dir=run_dir)
-```
-
-`cwd` is forced to `artifact_dir`, so any bash command — including agent-generated scripts calling `pd.to_csv('output.csv')` — writes relative paths inside the run's artifact directory.
+Hermes runs concurrent tool calls via `ThreadPoolExecutor`. The `register_task_env_overrides` lookup is keyed by `task_id` (a plain dict lookup), not by Python `contextvars`, so it is **thread-safe by design** — no `copy_context()` plumbing is needed at the VT layer. The fix in `hermes-agent/run_agent.py` that propagates `contextvars` for `_session_runs_dir_var` (used by `vibe_trading_helper`) still applies.
 
 **Enforcement Summary:**
 
 | Escape path | Guard | Implementation |
 |-------------|-------|----------------|
-| `write_file` — relative path | `_resolve_write_path` anchors to `artifact_dir` | `vibe_trading_compat.py` |
-| `write_file` — absolute out-of-tree | Redirected to `artifact_dir / filename` with warning | `vibe_trading_compat.py` |
-| `bash` — relative cwd writes | `cwd` forced to `artifact_dir` | `vibe_trading_compat._bash()` |
-| Agent-generated scripts via bash | Inherits enforced cwd | `vibe_trading_compat._bash()` |
+| `write_file` — relative path | `cwd` override anchors relative writes | `register_task_env_overrides` in `service.py` / `worker.py` |
+| `write_file` — absolute out-of-tree | Hermes `write_file` resolves relative to `cwd`; absolute paths pass through | caller's responsibility |
+| `bash` / `terminal` — relative cwd writes | `cwd` override applied to all terminal tool invocations | `register_task_env_overrides` in `service.py` / `worker.py` |
+| Agent-generated scripts via bash | Inherits enforced cwd | same |
 | Missing `state.json` on backtest run dir | Propagated after `run_id` redirect | `session/service.py` |
-| Context vars lost in thread pool workers | `copy_context()` propagated into each `executor.submit` | `hermes-agent/run_agent.py` |
+| Context vars lost in thread pool workers (finance tools) | `copy_context()` propagated into each `executor.submit` | `hermes-agent/run_agent.py` |
 
 #### 6.9.7 State File Propagation
 
@@ -2249,7 +2248,7 @@ TASKS_DIR = Path(__file__).resolve().parents[2] / ".tasks"
 
 When no session context var is set (CLI / swarm / direct plugin invocation), `setup_backtest_run` must still land runs under `DATA_ROOT/runs/`, not under the source-code root.
 
-File: `agent/src/hermes_tool_adapter/vibe_trading_finance.py`
+File: `agent/src/vibe_trading_helper.py`
 
 ```python
 def _get_fallback_runs_dir() -> Path:
@@ -2495,11 +2494,10 @@ def register(ctx):
     )
 ```
 
-Enable project-local plugin discovery before starting Hermes:
+Ensure Hermes is pointed at the intended home directory before starting:
 
 ```bash
-cd /home/chris/repo/Vibe-Trading
-export HERMES_ENABLE_PROJECT_PLUGINS=true
+export HERMES_HOME=/path/to/.hermes
 ```
 
 Legacy in-source registration is still shown below for the original standalone Vibe-Trading agent architecture:
@@ -3042,11 +3040,11 @@ platforms:
     platform_toolsets: ["hermes-api-server"]
 ```
 
-If the Vibe-Trading project plugin is required by this runtime, Hermes must also be started with:
+If the Vibe-Trading entry-point plugin is required by this runtime, Hermes must also be started with the Vibe-Trading agent package installed in the active Python environment:
 
 ```bash
-cd /home/chris/repo/Vibe-Trading
-export HERMES_ENABLE_PROJECT_PLUGINS=true
+cd /home/chris/repo/Vibe-Trading/agent
+uv pip install --python .venv/bin/python -e .
 ```
 
 **Step 4: Data Bridge**

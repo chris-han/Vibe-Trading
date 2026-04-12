@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -45,7 +45,16 @@ def _make_service(capture: EventCapture, base_dir: Path):
 
 def _run(coro):
     """Run a coroutine synchronously (avoids pytest-asyncio dependency)."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def _discard_task(coro):
+    coro.close()
+    return MagicMock()
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +80,7 @@ class TestBaselineSessionEvents:
         cap.events.clear()
 
         async def _run_test():
-            with patch("asyncio.create_task"):
+            with patch("asyncio.create_task", side_effect=_discard_task):
                 await svc.send_message(session.session_id, "hello")
 
         _run(_run_test())
@@ -89,7 +98,7 @@ class TestBaselineSessionEvents:
         cap.events.clear()
 
         async def _run_test():
-            with patch("asyncio.create_task"):
+            with patch("asyncio.create_task", side_effect=_discard_task):
                 await svc.send_message(session.session_id, "hello")
 
         _run(_run_test())

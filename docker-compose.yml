@@ -12,7 +12,6 @@ services:
     env_file:
       - agent/.env
     environment:
-      - HERMES_ENABLE_PROJECT_PLUGINS=true
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}

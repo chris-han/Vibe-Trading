@@ -104,11 +104,10 @@ def test_get_hermes_agent_kwargs_caps_azure_max_tokens(monkeypatch):
     assert kwargs["max_tokens"] == 4096
 
 
-def test_prepare_hermes_project_context_sets_project_plugin_env(monkeypatch):
-    monkeypatch.delenv("VIBE_TRADING_ROOT", raising=False)
-    monkeypatch.delenv("HERMES_ENABLE_PROJECT_PLUGINS", raising=False)
+def test_prepare_hermes_project_context_sets_repo_root(monkeypatch):
+  monkeypatch.delenv("VIBE_TRADING_ROOT", raising=False)
 
-    repo_root = runtime_env.prepare_hermes_project_context(chdir=False)
+  repo_root = runtime_env.prepare_hermes_project_context(chdir=False)
 
-    assert os.getenv("VIBE_TRADING_ROOT") == str(repo_root)
-    assert os.getenv("HERMES_ENABLE_PROJECT_PLUGINS") == "true"
+  assert os.getenv("VIBE_TRADING_ROOT") == str(repo_root)
+  assert os.getenv("HERMES_ENABLE_PROJECT_PLUGINS") in (None, "")

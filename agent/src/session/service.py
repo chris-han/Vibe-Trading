@@ -807,9 +807,9 @@ class SessionService:
         # TERMINAL_CWD is the global fallback; register_task_env_overrides pins
         # the exact session-scoped cwd in Hermes' tool layer so that file ops
         # and terminal commands resolve relative paths without any absolute path
-        # being injected via the prompt.  Plugin discovery still works because
-        # Hermes uses Path.cwd() (the Python process CWD), not TERMINAL_CWD, to
-        # find .hermes/plugins/.
+        # being injected via the prompt. The Vibe-Trading plugin loads through
+        # the installed Hermes entry-point package, so cwd is not part of
+        # plugin discovery.
         repo_root = prepare_hermes_project_context(chdir=False)
         agent_root = repo_root / "agent"
 
@@ -848,8 +848,7 @@ class SessionService:
                 "delegation",
                 "cronjob",
                 "research",
-                "compat",
-                "vibe_trading_finance",
+                "vibe_trading",
             ],
             disabled_toolsets=["code_execution"],
             tool_progress_callback=_on_tool_progress,
@@ -871,10 +870,17 @@ class SessionService:
 
         history = self._convert_messages_to_history(messages) if messages else []
 
-        from src.hermes_tool_adapter.vibe_trading_compat import reset_artifact_dir, set_artifact_dir
-        from src.hermes_tool_adapter.vibe_trading_finance import reset_session_runs_dir, set_session_runs_dir
-        _ctx_token = set_artifact_dir(run_dir / "artifacts")
+        from src.vibe_trading_helper import reset_session_runs_dir, set_session_runs_dir
         _runs_token = set_session_runs_dir(session_runs_dir)
+        # Configure hermes built-in file/terminal tools to write into the run's
+        # artifact directory instead of the process cwd.
+        try:
+            from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
+            register_task_env_overrides(sid, {"cwd": str(run_dir / "artifacts")})
+            _hermes_overrides_set = True
+        except Exception:
+            _hermes_overrides_set = False
+        (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
         try:
             loop = asyncio.get_event_loop()
             raw = await loop.run_in_executor(
@@ -882,6 +888,7 @@ class SessionService:
                 lambda: agent.run_conversation(
                     user_message=attempt.prompt,
                     conversation_history=history,
+                    task_id=sid,
                 ),
             )
             final_text = (raw.get("final_response") or "").strip()
@@ -914,8 +921,12 @@ class SessionService:
                 "run_id": run_dir.name,
             }
         finally:
-            reset_artifact_dir(_ctx_token)
             reset_session_runs_dir(_runs_token)
+            if _hermes_overrides_set:
+                try:
+                    clear_task_env_overrides(sid)
+                except Exception:
+                    pass
             self._active_loops.pop(sid, None)
 
         # Load metrics from the run output when available.

@@ -1,4 +1,4 @@
-"""Vibe-Trading finance tool definitions for Hermes runtime plugins."""
+"""Shared Vibe-Trading helper module for Hermes tool schemas and handlers."""
 
 from __future__ import annotations
 
@@ -31,7 +31,8 @@ def reset_session_runs_dir(token: contextvars.Token) -> None:
     """Reset the session runs directory context variable."""
     _session_runs_dir_var.reset(token)
 
-_AGENT_ROOT = Path(__file__).resolve().parents[2]
+
+_AGENT_ROOT = Path(__file__).resolve().parents[1]
 _HERMES_ROOT = _AGENT_ROOT.parent / "hermes-agent"
 
 if str(_AGENT_ROOT) not in sys.path:
@@ -197,7 +198,6 @@ def _run_swarm(args: dict, **_) -> str:
         preset_name = args["preset_name"]
         variables = args.get("variables") or {}
 
-        # Pre-flight: validate required variables before starting the run
         presets = {p["name"]: p for p in list_presets()}
         if preset_name not in presets:
             available = list(presets.keys())
@@ -220,7 +220,7 @@ def _run_swarm(args: dict, **_) -> str:
                 "provided_variables": variables,
             }, ensure_ascii=False)
 
-        swarm_dir = Path(__file__).resolve().parents[2] / ".swarm" / "runs"
+        swarm_dir = Path(__file__).resolve().parents[1] / ".swarm" / "runs"
         store = SwarmStore(base_dir=swarm_dir)
         runtime = WorkflowRuntime(store=store)
 
@@ -231,8 +231,6 @@ def _run_swarm(args: dict, **_) -> str:
         except ValueError as exc:
             return json.dumps({"status": "error", "error": f"DAG validation failed: {exc}"}, ensure_ascii=False)
 
-        # Poll until complete (max 40 minutes — investment_committee has 3 serial
-        # layers × 600s each = 1800s theoretical max; add buffer for startup overhead)
         for _ in range(480):
             time.sleep(5)
             current = store.load_run(run.id)
@@ -257,7 +255,6 @@ def _run_swarm(args: dict, **_) -> str:
     except Exception as exc:
         logger.exception("run_swarm error")
         return json.dumps({"status": "error", "error": str(exc)})
-
 
 
 _SETUP_BACKTEST_RUN_SCHEMA = {
@@ -402,8 +399,6 @@ _PATTERN_SCHEMA = {
     },
 }
 
-TOOLSET_NAME = "vibe_trading_finance"
-
 _LIST_SWARM_PRESETS_SCHEMA = {
     "name": "list_swarm_presets",
     "description": (
@@ -441,62 +436,4 @@ _RUN_SWARM_SCHEMA = {
     },
 }
 
-TOOL_REGISTRATIONS = [
-    {
-        "name": "setup_backtest_run",
-        "toolset": TOOLSET_NAME,
-        "schema": _SETUP_BACKTEST_RUN_SCHEMA,
-        "handler": _setup_backtest_run,
-        "emoji": "🗂️",
-        "description": _SETUP_BACKTEST_RUN_SCHEMA["description"],
-    },
-    {
-        "name": "backtest",
-        "toolset": TOOLSET_NAME,
-        "schema": _BACKTEST_SCHEMA,
-        "handler": _backtest,
-        "emoji": "📈",
-        "description": _BACKTEST_SCHEMA["description"],
-    },
-    {
-        "name": "factor_analysis",
-        "toolset": TOOLSET_NAME,
-        "schema": _FACTOR_ANALYSIS_SCHEMA,
-        "handler": _factor_analysis,
-        "emoji": "📊",
-        "description": _FACTOR_ANALYSIS_SCHEMA["description"],
-    },
-    {
-        "name": "options_pricing",
-        "toolset": TOOLSET_NAME,
-        "schema": _OPTIONS_PRICING_SCHEMA,
-        "handler": _options_pricing,
-        "emoji": "📉",
-        "description": _OPTIONS_PRICING_SCHEMA["description"],
-    },
-    {
-        "name": "pattern",
-        "toolset": TOOLSET_NAME,
-        "schema": _PATTERN_SCHEMA,
-        "handler": _pattern,
-        "emoji": "🕯️",
-        "description": _PATTERN_SCHEMA["description"],
-    },
-    {
-        "name": "list_swarm_presets",
-        "toolset": TOOLSET_NAME,
-        "schema": _LIST_SWARM_PRESETS_SCHEMA,
-        "handler": _list_swarm_presets,
-        "emoji": "🐝",
-        "description": _LIST_SWARM_PRESETS_SCHEMA["description"],
-    },
-    {
-        "name": "run_swarm",
-        "toolset": TOOLSET_NAME,
-        "schema": _RUN_SWARM_SCHEMA,
-        "handler": _run_swarm,
-        "emoji": "🐝",
-        "description": _RUN_SWARM_SCHEMA["description"],
-    },
-]
-
+TOOLSET_NAME = "vibe_trading"

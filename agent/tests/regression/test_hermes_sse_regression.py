@@ -37,7 +37,16 @@ sys.modules.setdefault("run_agent", _mock_run_agent)
 # ---------------------------------------------------------------------------
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def _discard_task(coro):
+    coro.close()
+    return MagicMock()
 
 
 class EventCapture:
@@ -86,7 +95,7 @@ class TestHermesSessionEvents:
         cap.events.clear()
 
         async def _t():
-            with patch("asyncio.create_task"):
+            with patch("asyncio.create_task", side_effect=_discard_task):
                 await svc.send_message(session.session_id, "hello")
 
         _run(_t())
@@ -103,7 +112,7 @@ class TestHermesSessionEvents:
         cap.events.clear()
 
         async def _t():
-            with patch("asyncio.create_task"):
+            with patch("asyncio.create_task", side_effect=_discard_task):
                 await svc.send_message(session.session_id, "hello")
 
         _run(_t())
@@ -332,7 +341,8 @@ class TestHermesSessionEvents:
         assert "Prefer writing one focused Python script with write_file, then execute it with bash." in prompt
 
     def test_hermes_toolset_selection_exposes_legacy_vt_aliases(self):
-        """Migrated Hermes runtime keeps old VT tool names available via compat aliases."""
+        """Compat toolset is now empty; all tools are provided by hermes built-in toolsets.
+        Vibe-Trading registers finance tools through the installed Hermes entry-point plugin."""
         import os
         import sys
         from pathlib import Path
@@ -343,8 +353,6 @@ class TestHermesSessionEvents:
         from runtime_env import prepare_hermes_project_context
 
         prepare_hermes_project_context(chdir=True)
-        if os.getenv("HERMES_ENABLE_PROJECT_PLUGINS") != "true":
-            pytest.skip("Hermes project plugins are not enabled in this test environment")
 
         hermes_root = Path(__file__).resolve().parents[3] / "hermes-agent"
         sys.path.insert(0, str(hermes_root))
@@ -353,16 +361,28 @@ class TestHermesSessionEvents:
         names = {
             t["function"]["name"]
             for t in get_tool_definitions(
-                enabled_toolsets=["development", "research", "vibe_trading_finance"],
+                enabled_toolsets=["development", "research", "vibe_trading"],
                 quiet_mode=True,
             )
         }
 
-        assert "load_skill" in names
-        assert "read_url" in names
-        assert "bash" in names
-        assert "edit_file" in names
-        assert "subagent" in names
+        # Built-in equivalents provided by hermes toolsets
+        assert "write_file" in names
+        assert "terminal" in names
+        assert "read_document" in names
+        assert "delegate_task" in names
+        assert "todo" in names
+        assert "skill_view" in names
+        assert "skills_list" in names
+
+        # Vibe-Trading finance tools are provided by the installed Hermes plugin entry point
+        assert "setup_backtest_run" in names
+        assert "backtest" in names
+        assert "factor_analysis" in names
+        assert "options_pricing" in names
+        assert "pattern" in names
+        assert "list_swarm_presets" in names
+        assert "run_swarm" in names
 
     def test_run_with_agent_persists_req_json_before_agent_execution(self, tmp_path):
         """Hermes session runtime restores original AgentLoop request persistence."""

@@ -56,6 +56,9 @@ Issues = "https://github.com/HKUDS/Vibe-Trading/issues"
 vibe-trading = "cli:main"
 vibe-trading-mcp = "mcp_server:main"
 
+[project.entry-points."hermes_agent.plugins"]
+vibe-trading = "src.plugins.vibe_trading"
+
 [tool.setuptools]
 py-modules = ["cli", "api_server", "mcp_server", "runtime_env"]
 
