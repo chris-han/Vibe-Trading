@@ -52,7 +52,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
   if (msg.type === "user") {
     return (
       <div className="flex justify-end gap-3 group">
-        <div className="max-w-[72%] rounded-card rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+        <div className="min-w-0 max-w-[72%] rounded-card rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words break-all overflow-hidden">
           {msg.content}
           {ts && <span className="block text-[9px] opacity-70 text-right mt-1">{ts}</span>}
         </div>
@@ -69,7 +69,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
         <AgentAvatar />
         <div className="flex-1 min-w-0 relative">
           <CopyButton text={msg.content} />
-          <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-table:border prose-table:border-border prose-th:bg-muted/50 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:text-xs">
+          <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed prose-table:border prose-table:border-border prose-th:bg-muted/50 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:text-xs break-words break-all whitespace-pre-wrap overflow-hidden">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>{msg.content}</ReactMarkdown>
           </div>
           {ts && <span className="text-[9px] text-muted-foreground/50 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">{ts}</span>}
@@ -90,7 +90,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
         <div className="space-y-2">
           <div className="flex items-start gap-2 rounded-card border border-destructive/30 bg-destructive/10 px-4 py-3">
             <XCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-            <p className="text-sm text-destructive leading-relaxed">{msg.content}</p>
+            <p className="min-w-0 text-sm text-destructive leading-relaxed break-words break-all whitespace-pre-wrap">{msg.content}</p>
           </div>
           {onRetry && (
             <button
@@ -112,7 +112,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
     return (
       <div className="flex gap-3">
         <AgentAvatar />
-        <p className="text-sm text-muted-foreground leading-relaxed">{msg.content}</p>
+        <p className="min-w-0 text-sm text-muted-foreground leading-relaxed break-words break-all whitespace-pre-wrap">{msg.content}</p>
       </div>
     );
   }
