@@ -71,9 +71,31 @@ def _candidate_runs_dirs() -> List[Path]:
     return roots
 
 
+def _session_run_roots() -> List[Path]:
+    """Yield runs/ subdirectories for all existing sessions (nested hierarchy)."""
+    if not SESSIONS_DIR.exists():
+        return []
+    roots: List[Path] = []
+    for session_dir in SESSIONS_DIR.iterdir():
+        if not session_dir.is_dir():
+            continue
+        runs_subdir = session_dir / "runs"
+        if runs_subdir.is_dir():
+            roots.append(runs_subdir)
+    return roots
+
+
 def _resolve_run_dir(run_id: str) -> Optional[Path]:
-    """Resolve a run directory across all known run roots."""
+    """Resolve a run directory across all known run roots.
+
+    Checks the global runs roots first (backward compat), then falls back to
+    scanning nested session run directories.
+    """
     for root in _candidate_runs_dirs():
+        run_dir = root / run_id
+        if run_dir.exists():
+            return run_dir
+    for root in _session_run_roots():
         run_dir = root / run_id
         if run_dir.exists():
             return run_dir
@@ -83,7 +105,8 @@ def _resolve_run_dir(run_id: str) -> Optional[Path]:
 def _collect_run_dirs() -> List[Path]:
     """Collect unique run directories from all run roots."""
     by_id: Dict[str, Path] = {}
-    for root in _candidate_runs_dirs():
+    all_roots = list(_candidate_runs_dirs()) + _session_run_roots()
+    for root in all_roots:
         if not root.exists():
             continue
         for d in root.iterdir():

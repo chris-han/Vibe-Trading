@@ -146,6 +146,12 @@ class SignalEngine:
 
 ## Individual Asset Returns
 
+**Reference: 2024 Full-Year Performance**
+| Asset | Return | Sharpe | Max DD |
+|-------|--------|--------|--------|
+| BTC-USDT | +108.8% | 1.76 | -26.1% |
+| MSFT+AAPL (50/50) | +25.95% | 1.37 | -12.7% |
+
 To get individual asset performance for comparison:
 
 ```python
@@ -232,12 +238,23 @@ for f in sorted(files):
 
 ### Real Example: MSFT/BTC/AAPL 2024 (Risk-Parity vs Equal-Weight)
 
-Both optimizers produced **byte-identical results**:
+Both optimizers produced **byte-identical results** (verified via `diff`):
 - Final value: $1,211,711 (21.17% return)
 - Max drawdown: -23.27%, Sharpe: 0.57
 - Trade count: 57 (ALL in BTC-USDT, zero in AAPL/MSFT)
 - Positions pattern: alternated `0.0,1.0,0.0` (100% BTC) ↔ `0.5,0.0,0.5` (50% AAPL + 50% MSFT)
 - Benchmark: 53.24% (portfolio underperformed by 32%)
+
+**Verification commands**:
+```bash
+# Confirm identical outputs
+diff run_riskparity/artifacts/equity.csv run_equalweight/artifacts/equity.csv  # empty = identical
+diff run_riskparity/artifacts/metrics.csv run_equalweight/artifacts/metrics.csv
+
+# Check trade distribution (should show all assets, not just one)
+cut -d, -f2 artifacts/trades.csv | sort | uniq -c
+# Output: 57 BTC-USDT (problem: no AAPL/MSFT trades)
+```
 
 **Verification commands used**:
 ```bash

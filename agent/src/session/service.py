@@ -120,26 +120,47 @@ class SessionService:
         return self.store.list_sessions(limit)
 
     def _collect_run_dirs(self, session_id: str) -> list[Path]:
-        """Collect all run_dir paths recorded in attempts for a session."""
+        """Collect legacy run_dir paths stored outside the session directory.
+
+        New runs are created under the session folder and are cleaned up
+        automatically when the session tree is removed.  This method is kept
+        for backward compatibility with older flat-structure runs whose paths
+        are stored as absolute paths pointing outside the session directory.
+        """
+        session_dir = self.store.base_dir / session_id
         run_dirs: list[Path] = []
         try:
             attempts = self.store.list_attempts(session_id)
             for attempt in attempts:
                 if attempt.run_dir:
                     p = Path(attempt.run_dir)
-                    if p.exists() and p.is_dir():
-                        run_dirs.append(p)
+                    if not p.exists() or not p.is_dir():
+                        continue
+                    # Skip dirs already inside the session tree (handled by rmtree)
+                    try:
+                        p.resolve().relative_to(session_dir.resolve())
+                        continue
+                    except ValueError:
+                        pass
+                    run_dirs.append(p)
         except Exception:
             pass
         return run_dirs
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session and its associated run artifact directories."""
+        """Delete a session and its associated run artifact directories.
+
+        For sessions created with the nested layout the run directories live
+        inside the session folder and are removed automatically when the session
+        tree is deleted.  The explicit ``_collect_run_dirs`` pass below handles
+        backward-compat cleanup for older flat-structure runs that were stored
+        outside the session directory.
+        """
         import shutil
-        run_dirs = self._collect_run_dirs(session_id)
+        legacy_run_dirs = self._collect_run_dirs(session_id)
         self.event_bus.clear(session_id)
         ok = self.store.delete_session(session_id)
-        for rd in run_dirs:
+        for rd in legacy_run_dirs:
             shutil.rmtree(rd, ignore_errors=True)
         return ok
 
@@ -149,11 +170,11 @@ class SessionService:
         deleted: list[str] = []
         missing: list[str] = []
         for session_id in session_ids:
-            run_dirs = self._collect_run_dirs(session_id)
+            legacy_run_dirs = self._collect_run_dirs(session_id)
             self.event_bus.clear(session_id)
             if self.store.delete_session(session_id):
                 deleted.append(session_id)
-                for rd in run_dirs:
+                for rd in legacy_run_dirs:
                     shutil.rmtree(rd, ignore_errors=True)
             else:
                 missing.append(session_id)
@@ -604,8 +625,9 @@ class SessionService:
         latest_useful_tool_output: str | None = None
 
         state_store = RunStateStore()
-        self.runs_dir.mkdir(parents=True, exist_ok=True)
-        run_dir = state_store.create_run_dir(self.runs_dir)
+        session_runs_dir = self.store.base_dir / sid / "runs"
+        session_runs_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = state_store.create_run_dir(session_runs_dir)
         state_store.save_request(run_dir, attempt.prompt, {"session_id": sid})
 
         if is_backtest_prompt(attempt.prompt):
@@ -834,7 +856,9 @@ class SessionService:
         history = self._convert_messages_to_history(messages) if messages else []
 
         from src.hermes_tool_adapter.vibe_trading_compat import reset_artifact_dir, set_artifact_dir
+        from src.hermes_tool_adapter.vibe_trading_finance import reset_session_runs_dir, set_session_runs_dir
         _ctx_token = set_artifact_dir(run_dir / "artifacts")
+        _runs_token = set_session_runs_dir(session_runs_dir)
         try:
             loop = asyncio.get_event_loop()
             raw = await loop.run_in_executor(
@@ -875,6 +899,7 @@ class SessionService:
             }
         finally:
             reset_artifact_dir(_ctx_token)
+            reset_session_runs_dir(_runs_token)
             self._active_loops.pop(sid, None)
 
         # Load metrics from the run output when available.

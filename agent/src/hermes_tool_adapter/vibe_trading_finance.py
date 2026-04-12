@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -9,6 +10,26 @@ import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-session runs base directory context variable
+# ---------------------------------------------------------------------------
+# Set this before launching an agent so that setup_backtest_run creates its
+# run directory under the session folder instead of the global runs/ root.
+# ---------------------------------------------------------------------------
+_session_runs_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "session_runs_dir", default=None
+)
+
+
+def set_session_runs_dir(path: Path) -> contextvars.Token:
+    """Set the session-scoped runs directory for the current context."""
+    return _session_runs_dir_var.set(path)
+
+
+def reset_session_runs_dir(token: contextvars.Token) -> None:
+    """Reset the session runs directory context variable."""
+    _session_runs_dir_var.reset(token)
 
 _AGENT_ROOT = Path(__file__).resolve().parents[2]
 _HERMES_ROOT = _AGENT_ROOT.parent / "hermes-agent"
@@ -25,9 +46,8 @@ def _setup_backtest_run(args: dict, **_) -> str:
         import uuid
         from datetime import datetime
 
-        base_dir = Path(args.get("base_dir", "")).expanduser()
-        if not base_dir.is_absolute():
-            base_dir = _AGENT_ROOT / "runs"
+        ctx_runs_dir = _session_runs_dir_var.get()
+        base_dir = ctx_runs_dir if ctx_runs_dir is not None else _AGENT_ROOT / "runs"
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
         suffix = uuid.uuid4().hex[:6]
@@ -234,7 +254,7 @@ def _run_swarm(args: dict, **_) -> str:
 _SETUP_BACKTEST_RUN_SCHEMA = {
     "name": "setup_backtest_run",
     "description": (
-        "Create a new backtest run directory (timestamped, under agent/runs/) and optionally "
+        "Create a new backtest run directory (timestamped) and optionally "
         "write config.json and code/signal_engine.py in one step. "
         "Returns the run_dir path to pass to backtest(). "
         "ALWAYS call this before backtest() to get a valid run_dir. "
@@ -266,10 +286,6 @@ _SETUP_BACKTEST_RUN_SCHEMA = {
                     "If optimizer is set in config, return raw directional weights (1.0 = long); "
                     "the optimizer handles sizing."
                 ),
-            },
-            "base_dir": {
-                "type": "string",
-                "description": "Optional override for the parent runs/ directory. Defaults to agent/runs/.",
             },
         },
         "required": [],
