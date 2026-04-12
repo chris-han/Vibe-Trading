@@ -132,6 +132,26 @@ Clear action recommendation, including direction, position size, and time horizo
 | Date | `YYYY-MM-DD` | `2026-03-28` |
 | Time range | `YYYY.MM-YYYY.MM` | `2024.01-2025.03` |
 
+### Plain Code Blocks — Prohibited for Data Display
+
+**Never** use plain fenced code blocks (` ``` ` with no language tag) to display metrics, indicators, or key data points.
+Code blocks are reserved for actual code (Python, SQL, bash, etc.) only.
+
+| Wrong ❌ | Right ✅ |
+|----------|----------|
+| ` ``` `<br>Fed policy: 4.25-4.50% (pause)<br>10Y Treasury: ~4.2%<br>` ``` ` | A Markdown table (see below) |
+
+Whenever you have named key–value pairs (indicator → value → signal), always use a Markdown table:
+
+```markdown
+| Indicator | Current Value | Signal |
+|-----------|--------------|--------|
+| Fed policy | 4.25-4.50% (pause) | Neutral |
+| 10Y Treasury | ~4.2% | Stable |
+| 2s10s spread | -0.13% | Neutral |
+| Core PCE | 3.0% | Above 2% target |
+```
+
 ### Chart Substitute (Text Description + Data Table)
 
 Since Markdown output cannot embed images, use the following substitute:
