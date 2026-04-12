@@ -30,7 +30,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-from runtime_env import ensure_runtime_env
+from runtime_env import ensure_runtime_env, get_data_root
 from src.ui_services import build_run_analysis, load_run_context, load_run_report
 
 # UTF-8 on Windows
@@ -49,14 +49,7 @@ ensure_runtime_env()
 # agent/chris/).  Defaults to agent/ when unset.
 # ---------------------------------------------------------------------------
 _AGENT_DIR = Path(__file__).resolve().parent
-_raw_cwd = os.getenv("TERMINAL_CWD", "")
-if _raw_cwd and not os.path.isabs(_raw_cwd):
-    DATA_ROOT = (_AGENT_DIR / _raw_cwd).resolve()
-elif _raw_cwd:
-    DATA_ROOT = Path(_raw_cwd).resolve()
-else:
-    DATA_ROOT = _AGENT_DIR
-DATA_ROOT.mkdir(parents=True, exist_ok=True)
+DATA_ROOT = get_data_root()
 
 RUNS_DIR = DATA_ROOT / "runs"
 SESSIONS_DIR = DATA_ROOT / "sessions"

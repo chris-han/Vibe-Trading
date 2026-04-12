@@ -21,6 +21,24 @@ AGENT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = AGENT_DIR.parent
 _DEFAULT_HERMES_HOME = AGENT_DIR / ".hermes"
 _ENV_BOOTSTRAPPED = False
+
+
+def get_data_root() -> Path:
+    """Return the user-scoped data root derived from TERMINAL_CWD.
+
+    A relative TERMINAL_CWD is resolved against AGENT_DIR (e.g. 'chris' →
+    agent/chris/).  Falls back to AGENT_DIR when the variable is unset.
+    The directory is created on first call.
+    """
+    _raw = os.getenv("TERMINAL_CWD", "").strip()
+    if _raw and not os.path.isabs(_raw):
+        root = (AGENT_DIR / _raw).resolve()
+    elif _raw:
+        root = Path(_raw).resolve()
+    else:
+        root = AGENT_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 _FALSEY_STRINGS = {"", "0", "false", "off", "no", "none", "disabled"}
 _VALID_REASONING_EFFORTS = {"xhigh", "high", "medium", "low", "minimal"}
 

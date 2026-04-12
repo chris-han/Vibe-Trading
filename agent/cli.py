@@ -39,16 +39,17 @@ from rich.prompt import Prompt
 from rich.syntax import Syntax
 from rich.table import Table
 
-from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
+from runtime_env import ensure_runtime_env, get_data_root, get_hermes_agent_kwargs, prepare_hermes_project_context
 
 ensure_runtime_env()
 
 console = Console()
 AGENT_DIR = Path(__file__).resolve().parent
-RUNS_DIR = AGENT_DIR / "runs"
+DATA_ROOT = get_data_root()
+RUNS_DIR = DATA_ROOT / "runs"
 SWARM_DIR = AGENT_DIR / ".swarm" / "runs"
-SESSIONS_DIR = AGENT_DIR / "sessions"
-UPLOADS_DIR = AGENT_DIR / "uploads"
+SESSIONS_DIR = DATA_ROOT / "sessions"
+UPLOADS_DIR = DATA_ROOT / "uploads"
 
 EXIT_SUCCESS = 0
 EXIT_RUN_FAILED = 1

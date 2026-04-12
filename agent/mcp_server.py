@@ -38,9 +38,11 @@ AGENT_DIR = Path(__file__).resolve().parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
-from runtime_env import ensure_runtime_env
+from runtime_env import ensure_runtime_env, get_data_root
 
 ensure_runtime_env()
+
+DATA_ROOT = get_data_root()
 
 from fastmcp import FastMCP
 
@@ -188,7 +190,7 @@ def setup_backtest_run(
 
     run_base = Path(args.get("base_dir") or "").expanduser()
     if not run_base or not run_base.is_absolute():
-        run_base = AGENT_DIR / "runs"
+        run_base = DATA_ROOT / "runs"
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
     suffix = uuid.uuid4().hex[:6]
