@@ -24,12 +24,19 @@ export interface UploadResult {
 }
 
 async function uploadFile(file: File, sessionId?: string): Promise<UploadResult> {
-  const form = new FormData();
-  form.append("file", file);
-  if (sessionId) {
-    form.append("session_id", sessionId);
+  if (!sessionId) {
+    throw new Error("No active session — please start a conversation before uploading.");
   }
-  const res = await fetch(`${BASE}/upload`, { method: "POST", body: form });
+  const form = new FormData();
+  // session_id must come before the file so multipart parsers read it first
+  form.append("session_id", sessionId);
+  form.append("file", file);
+  const uploadUrl = `${BASE}/upload?session_id=${encodeURIComponent(sessionId)}`;
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "x-session-id": sessionId },
+    body: form,
+  });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {

@@ -47,6 +47,7 @@ export function Agent() {
   const sseSessionRef = useRef<string | null>(null);
   const prevSseStatusRef = useRef<string>("disconnected");
   const genRef = useRef(0);
+  const sessionCreateRef = useRef<Promise<string> | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const lastEventRef = useRef(0);
 
@@ -552,6 +553,31 @@ export function Agent() {
     }
   };
 
+  const ensureSession = useCallback(async (title?: string) => {
+    const currentSessionId = act().sessionId;
+    if (currentSessionId) return currentSessionId;
+
+    if (sessionCreateRef.current) {
+      return sessionCreateRef.current;
+    }
+
+    sessionCreateRef.current = (async () => {
+      const session = await api.createSession((title || input || "New chat").slice(0, 50));
+      const sid = session.session_id;
+      if (!sid) throw new Error("Session creation did not return a valid session ID");
+      upsertSession(session);
+      act().setSessionId(sid);
+      setSearchParams({ session: sid }, { replace: true });
+      return sid;
+    })();
+
+    try {
+      return await sessionCreateRef.current;
+    } finally {
+      sessionCreateRef.current = null;
+    }
+  }, [input, setSearchParams, upsertSession]);
+
   const runPrompt = async (prompt: string) => {
     if (!prompt.trim() || status === "streaming") return;
 
@@ -579,14 +605,7 @@ export function Agent() {
     inputRef.current?.focus();
 
     try {
-      let sid = act().sessionId;
-      if (!sid) {
-        const session = await api.createSession(prompt.slice(0, 50));
-        sid = session.session_id;
-        upsertSession(session);
-        act().setSessionId(sid);
-        setSearchParams({ session: sid }, { replace: true });
-      }
+      const sid = await ensureSession(prompt);
       setupSSE(sid);
       const result = await api.sendMessage(sid, finalPrompt);
       patchSession(sid, {
@@ -684,15 +703,7 @@ export function Agent() {
     setUploading(true);
     setShowUploadMenu(false);
     try {
-      let sid = act().sessionId;
-      if (!sid) {
-        const session = await api.createSession(file.name.slice(0, 50));
-        sid = session.session_id;
-        upsertSession(session);
-        act().setSessionId(sid);
-        setSearchParams({ session: sid }, { replace: true });
-      }
-
+      const sid = await ensureSession(file.name);
       const result = await api.uploadFile(file, sid);
       setAttachment({ filename: result.filename, filePath: result.file_path });
       toast.success(`Uploaded: ${result.filename}`);
@@ -701,7 +712,12 @@ export function Agent() {
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [ensureSession]);
+
+  useEffect(() => {
+    if (sessionId || !input.trim() || sessionCreateRef.current) return;
+    void ensureSession(input);
+  }, [ensureSession, input, sessionId]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {

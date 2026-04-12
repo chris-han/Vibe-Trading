@@ -107,8 +107,8 @@ def _resolve_upload_dir(session_id: Optional[str] = None, run_id: Optional[str] 
 
     if session_id:
         session_dir = SESSIONS_DIR / session_id
-        if not session_dir.exists():
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        # Allow uploads even if the session directory hasn't been written yet
+        # (e.g. rapid upload immediately after session creation)
         return session_dir / "uploads"
 
     raise HTTPException(status_code=400, detail="session_id or run_id is required for uploads")
@@ -949,6 +949,7 @@ async def session_events(
 
 @app.post("/upload", dependencies=[Depends(require_auth)])
 async def upload_file(
+    request: Request,
     file: UploadFile,
     session_id: Optional[str] = Form(None),
     run_id: Optional[str] = Form(None),
@@ -964,7 +965,36 @@ async def upload_file(
             detail=f"File too large (limit {MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
         )
 
-    target_dir = _resolve_upload_dir(session_id=session_id, run_id=run_id)
+    # Backward compatibility: accept scope via query params or headers when
+    # multipart form fields are not provided by the client.
+    effective_session_id = (
+        session_id
+        or request.query_params.get("session_id")
+        or request.headers.get("x-session-id")
+    )
+    effective_run_id = (
+        run_id
+        or request.query_params.get("run_id")
+        or request.headers.get("x-run-id")
+    )
+
+    try:
+        target_dir = _resolve_upload_dir(
+            session_id=effective_session_id,
+            run_id=effective_run_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 400 and "session_id or run_id" in str(exc.detail):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "session_id or run_id is required for uploads. "
+                    "Provide one via multipart form field, query param, or "
+                    "x-session-id/x-run-id header."
+                ),
+            )
+        raise
+
     target_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = f"{uuid.uuid4().hex}.pdf"

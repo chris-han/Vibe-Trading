@@ -382,7 +382,7 @@ vibe-trading serve --port 8899
 | `POST` | `/sessions` | Create session |
 | `POST` | `/sessions/{id}/messages` | Send message |
 | `GET` | `/sessions/{id}/events` | SSE event stream |
-| `POST` | `/upload` | Upload PDF/file |
+| `POST` | `/upload` | Upload PDF/file (requires `session_id` or `run_id`) |
 | `GET` | `/swarm/presets` | List swarm presets |
 | `POST` | `/swarm/runs` | Start swarm run |
 | `GET` | `/swarm/runs/{id}/events` | Swarm SSE stream |
