@@ -161,7 +161,7 @@ export function MermaidBlock({ chart }: { chart: string }) {
   }
 
   return (
-    <div className="my-4 overflow-x-auto rounded-card border border-border bg-card p-4 text-foreground">
+    <div className="mermaid-block my-4 overflow-x-auto rounded-card border border-border bg-card p-4 text-foreground">
       <div
         ref={containerRef}
         className="min-w-max [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:bg-transparent"

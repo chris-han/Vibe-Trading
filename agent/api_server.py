@@ -1093,6 +1093,33 @@ except Exception:
         )
 
 
+_MERMAID_FENCE_RE = _re.compile(r'```mermaid\s*\n(.*?)\n\s*```', _re.DOTALL)
+
+
+def _feishu_preprocess_markdown(text: str) -> str:
+    """Replace ```mermaid ... ``` blocks with inline SVG.
+
+    Feishu Card 2.0 markdown elements do not render Mermaid code blocks, so we
+    convert each diagram to an SVG using the local mmdc renderer.
+    Falls back to a plain code block if rendering fails.
+    """
+    try:
+        from mmdc import MermaidConverter  # type: ignore[import]
+        converter = MermaidConverter()
+    except Exception:
+        return text  # mmdc unavailable — leave as-is
+
+    def _to_svg(m: _re.Match) -> str:  # type: ignore[type-arg]
+        diagram = m.group(1).strip()
+        try:
+            svg = converter.to_svg(diagram)
+            return svg
+        except Exception:
+            return m.group(0)  # fall back to original block
+
+    return _MERMAID_FENCE_RE.sub(_to_svg, text)
+
+
 def _feishu_build_card_v2(
     title: str,
     markdown_body: str,
@@ -1431,6 +1458,9 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
             return streamed_text, ""
 
         final_text, final_error = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
+
+        # Convert mermaid blocks to images — Feishu Card 2.0 markdown cannot render them.
+        final_text = _feishu_preprocess_markdown(final_text)
 
         if card_ctx:
             try:

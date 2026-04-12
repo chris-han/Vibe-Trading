@@ -153,7 +153,7 @@ export function EChartsBlock({ config }: { config: string }) {
   }
 
   return (
-    <div className="my-4 rounded-card border border-border bg-card p-4">
+    <div className="echarts-block my-4 rounded-card border border-border bg-card p-4">
       <div ref={containerRef} style={{ height: 320, width: "100%" }} />
     </div>
   );
