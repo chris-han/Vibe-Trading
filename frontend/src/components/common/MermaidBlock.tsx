@@ -39,12 +39,16 @@ function trimToDiagramBody(source: string): string {
   return body.join("\n").trim();
 }
 
+function stripHtmlFromLabel(text: string): string {
+  return text.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "");
+}
+
 function sanitizeQuotedLabels(source: string): string {
-  // Mermaid node labels can break on nested quotes in model-generated text.
+  // Mermaid node labels can break on nested quotes or HTML tags in model-generated text.
   return source
-    .replace(/\[([^\]\n]*)\]/g, (_match, inner: string) => `[${inner.replace(/"/g, "'")}]`)
-    .replace(/\(([^\)\n]*)\)/g, (_match, inner: string) => `(${inner.replace(/"/g, "'")})`)
-    .replace(/\{([^\}\n]*)\}/g, (_match, inner: string) => `{${inner.replace(/"/g, "'")}}`);
+    .replace(/\[([^\]\n]*)\]/g, (_match, inner: string) => `[${stripHtmlFromLabel(inner).replace(/"/g, "'")}]`)
+    .replace(/\(([^\)\n]*)\)/g, (_match, inner: string) => `(${stripHtmlFromLabel(inner).replace(/"/g, "'")})`)
+    .replace(/\{([^\}\n]*)\}/g, (_match, inner: string) => `{${stripHtmlFromLabel(inner).replace(/"/g, "'")}}`);
 }
 
 /** Merge standalone `: event` continuation lines onto the preceding period line for timeline diagrams */
