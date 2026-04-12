@@ -1055,6 +1055,69 @@ _FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
 _feishu_logger = logging.getLogger("feishu.webhook")
 
 # ---------------------------------------------------------------------------
+# Markdown helpers — reuse hermes-agent's battle-tested implementation.
+# Falls back to an inline copy when hermes-agent is not on sys.path.
+# ---------------------------------------------------------------------------
+import re as _re
+import sys as _sys
+
+_hermes_agent_dir = str(Path(__file__).resolve().parent.parent / "hermes-agent")
+if _hermes_agent_dir not in _sys.path:
+    _sys.path.insert(0, _hermes_agent_dir)
+
+try:
+    from gateway.platforms.feishu import (  # type: ignore[import]
+        _build_markdown_post_payload as _feishu_build_markdown_post,
+        _MARKDOWN_HINT_RE as _FEISHU_MARKDOWN_HINT_RE,
+    )
+    _feishu_logger.debug("[Feishu] Loaded markdown helpers from hermes-agent")
+except Exception:
+    _feishu_logger.debug("[Feishu] hermes-agent unavailable; using inline markdown helpers")
+    _FEISHU_MARKDOWN_HINT_RE = _re.compile(
+        r"(^#{1,6}\s)|(^\s*[-*]\s)|(^\s*\d+\.\s)|(^\s*---+\s*$)|(```)|(`[^`\n]+`)"
+        r"|(\*\*[^*\n].+?\*\*)|(~~[^~\n].+?~~)|(<u>.+?</u>)|(\*[^*\n]+\*)"
+        r"|(\[[^\]]+\]\([^)]+\))|(^>\s)",
+        _re.MULTILINE,
+    )
+
+    def _feishu_build_markdown_post(content: str) -> str:  # type: ignore[misc]
+        return json.dumps(
+            {"zh_cn": {"content": [[{"tag": "md", "text": content}]]}},
+            ensure_ascii=False,
+        )
+
+
+def _feishu_build_card_v2(
+    title: str,
+    markdown_body: str,
+    *,
+    template: str = "blue",
+    actions: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Build a Card JSON 2.0 payload string.
+
+    Uses ``schema: 2.0`` with ``body.elements`` layout as required by the
+    Feishu Card JSON v2 spec (https://open.feishu.cn/document/feishu-cards/card-json-v2-structure).
+    Supported by Feishu clients >= 7.20.
+    """
+    elements: List[Dict[str, Any]] = [
+        {"tag": "markdown", "content": markdown_body},
+    ]
+    if actions:
+        elements.append({"tag": "action", "actions": actions})
+    card: Dict[str, Any] = {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "template": template,
+        },
+        "body": {"elements": elements},
+    }
+    return json.dumps(card, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # Feishu WebSocket startup (runs in a dedicated daemon thread)
 # ---------------------------------------------------------------------------
 
@@ -1299,11 +1362,28 @@ def _extract_feishu_text(message: Dict[str, Any]) -> str:
 
 
 async def _feishu_send_reply(chat_id: str, text: str) -> None:
-    """Send a plain-text reply to a Feishu chat using the tenant access token."""
+    """Send a reply to a Feishu chat using the tenant access token.
+
+    Automatically selects the outbound message format:
+    - ``post``  when markdown formatting is detected (rendered via the ``md`` tag).
+      Uses hermes-agent's ``_build_markdown_post_payload`` / ``_MARKDOWN_HINT_RE``.
+    - ``text``  for plain text content.
+
+    Falls back to plain-text if Feishu rejects the post payload (two-stage
+    delivery, same as hermes-agent's behaviour described in the Feishu docs).
+    """
     if not _FEISHU_APP_ID or not _FEISHU_APP_SECRET:
         return
     import urllib.request
     import urllib.error
+
+    # Choose format based on markdown detection (reuses hermes-agent regex)
+    if _FEISHU_MARKDOWN_HINT_RE.search(text):
+        msg_type = "post"
+        content = _feishu_build_markdown_post(text)
+    else:
+        msg_type = "text"
+        content = json.dumps({"text": text})
 
     def _get_token() -> str:
         url = f"{_FEISHU_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal"
@@ -1312,12 +1392,12 @@ async def _feishu_send_reply(chat_id: str, text: str) -> None:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read()).get("tenant_access_token", "")
 
-    def _send(token: str) -> None:
+    def _send(token: str, mt: str, ct: str) -> Dict[str, Any]:
         url = f"{_FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id"
         body = json.dumps({
             "receive_id": chat_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": text}),
+            "msg_type": mt,
+            "content": ct,
         }).encode()
         req = urllib.request.Request(
             url, data=body,
@@ -1325,13 +1405,22 @@ async def _feishu_send_reply(chat_id: str, text: str) -> None:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            resp.read()
+            return json.loads(resp.read())
 
     try:
         loop = asyncio.get_event_loop()
         token = await loop.run_in_executor(None, _get_token)
-        if token:
-            await loop.run_in_executor(None, _send, token)
+        if not token:
+            return
+        result = await loop.run_in_executor(None, _send, token, msg_type, content)
+        # Two-stage fallback: if Feishu rejects the post payload, retry as plain text
+        if msg_type == "post" and isinstance(result, dict) and result.get("code") != 0:
+            _feishu_logger.debug(
+                "[Feishu] post payload rejected (code=%s), falling back to plain text",
+                result.get("code"),
+            )
+            plain_content = json.dumps({"text": text})
+            await loop.run_in_executor(None, _send, token, "text", plain_content)
     except Exception:
         _feishu_logger.warning("Failed to send Feishu reply to %s", chat_id, exc_info=True)
 

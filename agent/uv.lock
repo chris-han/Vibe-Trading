@@ -1467,6 +1467,21 @@ wheels = [
 ]
 
 [[package]]
+name = "lark-oapi"
+version = "1.5.3"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pycryptodome" },
+    { name = "requests" },
+    { name = "requests-toolbelt" },
+    { name = "websockets" },
+]
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/bf/ff/2ece5d735ebfa2af600a53176f2636ae47af2bf934e08effab64f0d1e047/lark_oapi-1.5.3-py3-none-any.whl", hash = "sha256:fda6b32bb38d21b6bdaae94979c600b94c7c521e985adade63a54e4b3e20cc36", size = 6993016, upload-time = "2026-01-27T08:21:49.307Z" },
+]
+
+[[package]]
 name = "llvmlite"
 version = "0.47.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -3756,6 +3771,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint" },
+    { name = "lark-oapi" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
@@ -3802,6 +3818,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=0.0.5" },
     { name = "langgraph", specifier = ">=0.2.50,<0.3" },
     { name = "langgraph-checkpoint", specifier = ">=2.0.0" },
+    { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "openai", specifier = ">=2.21.0,<3" },
     { name = "pandas", specifier = ">=2.0.0" },
