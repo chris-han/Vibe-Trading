@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -11,9 +13,6 @@
   font-style: normal;
   font-display: swap;
 }
-
-/* Load Noto Sans SC and Noto Serif SC for UI and reports (CJK-aware) */
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600&display=swap');
 
 :root {
   /* Default prefers Autaut Grotesk for English; can be overridden by JS when lang=zh */

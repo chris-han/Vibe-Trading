@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vibe-Trading API Server - RESTful API for finance research and backtesting.
+"""semantier API Server - RESTful API for finance research and backtesting.
 
 V5: ReAct Agent + async /run + CORS env + SSE tool events.
 """
@@ -304,8 +304,8 @@ class BatchDeleteSessionsRequest(BaseModel):
 # ============================================================================
 
 app = FastAPI(
-    title="Vibe-Trading API",
-    description="Vibe-Trading API: natural-language finance research, backtesting, and agents workflows",
+    title="semantier API",
+    description="semantier API: natural-language finance research, backtesting, and agents workflows",
     version="5.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -652,7 +652,7 @@ async def health_check():
     """Liveness probe."""
     return HealthResponse(
         status="healthy",
-        service="Vibe-Trading API",
+        service="semantier API",
         timestamp=datetime.now().isoformat()
     )
 
@@ -673,7 +673,7 @@ async def shutdown_local_api(background_tasks: BackgroundTasks, request: Request
     background_tasks.add_task(_terminate_current_process)
     return {
         "status": "shutting-down",
-        "service": "Vibe-Trading API",
+        "service": "semantier API",
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -702,7 +702,7 @@ async def list_skills():
 async def api_info():
     """Service metadata."""
     return {
-        "service": "Vibe-Trading API",
+        "service": "semantier API",
         "version": "5.0.0",
         "docs": "/docs",
         "health": "/health",
@@ -1052,6 +1052,12 @@ _FEISHU_BASE_URL = (
     else "https://open.feishu.cn"
 )
 _FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
+_FEISHU_STREAM_ELEMENT_ID = "vt_stream_body"
+_FEISHU_STREAM_UPDATE_INTERVAL_SECONDS = max(
+    0.2,
+    float(os.getenv("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", "0.35")),
+)
+_FEISHU_TOKEN_CACHE: Dict[str, Any] = {"token": "", "expires_at": 0.0}
 _feishu_logger = logging.getLogger("feishu.webhook")
 
 # ---------------------------------------------------------------------------
@@ -1117,6 +1123,231 @@ def _feishu_build_card_v2(
     return json.dumps(card, ensure_ascii=False)
 
 
+def _feishu_build_streaming_card_v2(title: str, markdown_body: str) -> str:
+    """Build a Card JSON 2.0 payload with streaming mode enabled."""
+    card: Dict[str, Any] = {
+        "schema": "2.0",
+        "config": {
+            "width_mode": "fill",
+            "update_multi": True,
+            "streaming_mode": True,
+            "summary": {"content": "[Generating...]"},
+            "streaming_config": {
+                "print_frequency_ms": {"default": 70, "android": 70, "ios": 70, "pc": 70},
+                "print_step": {"default": 1, "android": 1, "ios": 1, "pc": 1},
+                "print_strategy": "fast",
+            },
+        },
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": markdown_body,
+                    "element_id": _FEISHU_STREAM_ELEMENT_ID,
+                }
+            ]
+        },
+    }
+    return json.dumps(card, ensure_ascii=False)
+
+
+def _feishu_render_stream_body(text: str, *, status: Optional[str] = None, error: Optional[str] = None) -> str:
+    """Render the current Feishu markdown body for a streaming card."""
+    rendered_text = str(text or "").strip()
+    rendered_status = str(status or "").strip()
+    rendered_error = str(error or "").strip()
+
+    parts: List[str] = []
+    if rendered_text:
+        parts.append(rendered_text)
+    elif rendered_status:
+        parts.append(f"_{rendered_status}_")
+    else:
+        parts.append("_Thinking..._")
+
+    if rendered_error:
+        parts.extend(["", "---", "", f"**Error:** {rendered_error}"])
+
+    return "\n".join(parts)
+
+
+def _feishu_lookup_attempt_reply(svc: Any, session_id: str, attempt_id: str) -> str:
+    """Return the stored assistant message for an attempt when available."""
+    messages = svc.get_messages(session_id, limit=20)
+    for msg in reversed(messages):
+        if msg.role == "assistant" and msg.linked_attempt_id == attempt_id:
+            return msg.content or ""
+    return ""
+
+
+def _feishu_snapshot_attempt_state(svc: Any, session_id: str, attempt_id: str) -> tuple[str, str]:
+    """Best-effort reconstruction of current text and status from persisted events."""
+    text_parts: List[str] = []
+    status_text = ""
+    try:
+        events = svc.get_events(session_id, limit=2000)
+    except Exception:
+        return "", ""
+
+    for event in events:
+        if getattr(event, "attempt_id", None) != attempt_id:
+            continue
+        if event.event_type == "assistant.delta" and event.content:
+            text_parts.append(event.content)
+        elif event.event_type == "tool.progress" and event.content:
+            status_text = event.content
+        elif event.event_type == "tool.call" and event.tool:
+            status_text = f"Running `{event.tool}`..."
+
+    return "".join(text_parts).strip(), status_text.strip()
+
+
+def _feishu_http_json(method: str, url: str, headers: Dict[str, str], body: Dict[str, Any]) -> Dict[str, Any]:
+    """Send a JSON request to the Feishu OpenAPI and parse the JSON response."""
+    import urllib.error
+    import urllib.request
+
+    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        response_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Feishu HTTP {exc.code}: {response_body}") from exc
+
+
+async def _feishu_get_tenant_access_token() -> str:
+    """Fetch or reuse a tenant access token for Feishu OpenAPI calls."""
+    if not _FEISHU_APP_ID or not _FEISHU_APP_SECRET:
+        raise RuntimeError("FEISHU_APP_ID / FEISHU_APP_SECRET not configured")
+
+    now = time.time()
+    cached_token = str(_FEISHU_TOKEN_CACHE.get("token") or "")
+    cached_expiry = float(_FEISHU_TOKEN_CACHE.get("expires_at") or 0.0)
+    if cached_token and cached_expiry - now > 60:
+        return cached_token
+
+    def _fetch_token() -> str:
+        response = _feishu_http_json(
+            "POST",
+            f"{_FEISHU_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal",
+            {"Content-Type": "application/json; charset=utf-8"},
+            {"app_id": _FEISHU_APP_ID, "app_secret": _FEISHU_APP_SECRET},
+        )
+        token = str(response.get("tenant_access_token") or "")
+        if not token:
+            raise RuntimeError(f"Failed to obtain tenant access token: {response}")
+        expires_in = int(response.get("expire") or response.get("expires_in") or 7200)
+        _FEISHU_TOKEN_CACHE["token"] = token
+        _FEISHU_TOKEN_CACHE["expires_at"] = time.time() + max(expires_in - 120, 60)
+        return token
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch_token)
+
+
+async def _feishu_openapi_request(method: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Call a Feishu OpenAPI endpoint and return the `data` field on success."""
+    headers = {
+        "Authorization": f"Bearer {await _feishu_get_tenant_access_token()}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    url = f"{_FEISHU_BASE_URL}{path}"
+    loop = asyncio.get_running_loop()
+    response = await loop.run_in_executor(None, _feishu_http_json, method, url, headers, body)
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Feishu API error {response.get('code')}: {response.get('msg')}")
+    return response.get("data") or {}
+
+
+async def _feishu_create_streaming_card_message(chat_id: str, title: str, initial_body: str) -> Dict[str, Any]:
+    """Create a CardKit streaming card entity and send it to a chat."""
+    create_data = await _feishu_openapi_request(
+        "POST",
+        "/open-apis/cardkit/v1/cards",
+        {
+            "type": "card_json",
+            "data": _feishu_build_streaming_card_v2(title, initial_body),
+        },
+    )
+    card_id = str(create_data.get("card_id") or "")
+    if not card_id:
+        raise RuntimeError(f"Missing card_id from create-card response: {create_data}")
+
+    message_data = await _feishu_openapi_request(
+        "POST",
+        "/open-apis/im/v1/messages?receive_id_type=chat_id",
+        {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": json.dumps({"type": "card", "data": {"card_id": card_id}}, ensure_ascii=False),
+        },
+    )
+    return {
+        "card_id": card_id,
+        "message_id": str(message_data.get("message_id") or ""),
+        "element_id": _FEISHU_STREAM_ELEMENT_ID,
+        "sequence": 1,
+    }
+
+
+def _feishu_take_card_sequence(card_ctx: Dict[str, Any]) -> int:
+    """Return the next strictly increasing sequence number for card operations."""
+    sequence = int(card_ctx.get("sequence") or 1)
+    card_ctx["sequence"] = sequence + 1
+    return sequence
+
+
+async def _feishu_stream_card_text(card_ctx: Dict[str, Any], content: str) -> None:
+    """Push the full markdown content into the streaming card text element."""
+    from urllib.parse import quote
+
+    await _feishu_openapi_request(
+        "PUT",
+        (
+            f"/open-apis/cardkit/v1/cards/{quote(str(card_ctx['card_id']), safe='')}"
+            f"/elements/{quote(str(card_ctx['element_id']), safe='')}/content"
+        ),
+        {
+            "uuid": uuid.uuid4().hex,
+            "sequence": _feishu_take_card_sequence(card_ctx),
+            "content": content or " ",
+        },
+    )
+
+
+async def _feishu_set_card_streaming_mode(
+    card_ctx: Dict[str, Any], *, enabled: bool, summary: Optional[str] = None
+) -> None:
+    """Update streaming mode for a card entity."""
+    from urllib.parse import quote
+
+    settings: Dict[str, Any] = {
+        "config": {
+            "width_mode": "fill",
+            "update_multi": True,
+            "streaming_mode": enabled,
+        }
+    }
+    if summary is not None:
+        settings["config"]["summary"] = {"content": summary[:100]}
+
+    await _feishu_openapi_request(
+        "PATCH",
+        f"/open-apis/cardkit/v1/cards/{quote(str(card_ctx['card_id']), safe='')}/settings",
+        {
+            "uuid": uuid.uuid4().hex,
+            "sequence": _feishu_take_card_sequence(card_ctx),
+            "settings": json.dumps(settings, ensure_ascii=False),
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Feishu WebSocket startup (runs in a dedicated daemon thread)
 # ---------------------------------------------------------------------------
@@ -1125,25 +1356,105 @@ _feishu_ws_thread: Optional[Any] = None  # threading.Thread, set at startup
 
 
 async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attempt_id: str) -> None:
-    """Subscribe to the event bus and send the agent reply back to Feishu when done."""
-    try:
-        async def _wait_for_completion() -> Optional[str]:
-            async for sse_event in svc.event_bus.subscribe(session_id):
-                if sse_event.event_type in ("attempt.completed", "attempt.failed"):
-                    if sse_event.data.get("attempt_id") == attempt_id:
-                        # Retrieve the stored assistant reply
-                        messages = svc.get_messages(session_id, limit=10)
-                        for msg in reversed(messages):
-                            if msg.role == "assistant" and msg.linked_attempt_id == attempt_id:
-                                return msg.content
-                        # Fallback to summary from event data
-                        return sse_event.data.get("summary") or sse_event.data.get("error") or ""
-            return None
+    """Stream session output into a Feishu Card v2, then close streaming mode."""
+    card_ctx: Optional[Dict[str, Any]] = None
+    streamed_text, latest_status = _feishu_snapshot_attempt_state(svc, session_id, attempt_id)
+    last_pushed_body = ""
+    last_push_at = 0.0
 
-        content = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
-        if content:
-            await _feishu_send_reply(chat_id, content)
-            _feishu_logger.info("[Feishu WS] Sent reply to chat=%s (attempt=%s)", chat_id, attempt_id)
+    try:
+        initial_body = _feishu_render_stream_body(streamed_text, status=latest_status or "Thinking...")
+        card_ctx = await _feishu_create_streaming_card_message(chat_id, "semantier", initial_body)
+        last_pushed_body = initial_body
+        last_push_at = time.monotonic()
+    except Exception:
+        card_ctx = None
+        _feishu_logger.warning(
+            "[Feishu WS] Failed to create streaming card for chat=%s; falling back to final reply",
+            chat_id,
+            exc_info=True,
+        )
+
+    try:
+        final_text = streamed_text
+        final_error = ""
+
+        async def _maybe_push_update() -> None:
+            nonlocal last_pushed_body, last_push_at
+            if not card_ctx:
+                return
+            candidate = _feishu_render_stream_body(streamed_text, status=latest_status)
+            now = time.monotonic()
+            if candidate == last_pushed_body or (now - last_push_at) < _FEISHU_STREAM_UPDATE_INTERVAL_SECONDS:
+                return
+            await _feishu_stream_card_text(card_ctx, candidate)
+            last_pushed_body = candidate
+            last_push_at = now
+
+        async def _wait_for_completion() -> tuple[str, str]:
+            nonlocal streamed_text, latest_status
+            async for sse_event in svc.event_bus.subscribe(session_id):
+                event_attempt_id = str((sse_event.data or {}).get("attempt_id") or "")
+                if event_attempt_id and event_attempt_id != attempt_id:
+                    continue
+
+                if sse_event.event_type == "text_delta":
+                    streamed_text += str((sse_event.data or {}).get("content") or "")
+                    latest_status = "Generating response..."
+                    await _maybe_push_update()
+                    continue
+
+                if sse_event.event_type == "tool_call":
+                    tool_name = str((sse_event.data or {}).get("tool") or "tool")
+                    latest_status = f"Running `{tool_name}`..."
+                    await _maybe_push_update()
+                    continue
+
+                if sse_event.event_type == "tool_progress":
+                    preview = str((sse_event.data or {}).get("preview") or "").strip()
+                    if preview:
+                        latest_status = preview
+                        await _maybe_push_update()
+                    continue
+
+                if sse_event.event_type == "attempt.completed":
+                    reply = _feishu_lookup_attempt_reply(svc, session_id, attempt_id)
+                    final_reply = reply or str((sse_event.data or {}).get("summary") or streamed_text or "")
+                    return final_reply, ""
+
+                if sse_event.event_type == "attempt.failed":
+                    error_text = str((sse_event.data or {}).get("error") or "Execution failed")
+                    reply = _feishu_lookup_attempt_reply(svc, session_id, attempt_id)
+                    final_reply = reply or streamed_text or error_text
+                    return final_reply, error_text
+
+            return streamed_text, ""
+
+        final_text, final_error = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
+
+        if card_ctx:
+            try:
+                final_body = _feishu_render_stream_body(final_text, error=final_error)
+                if final_body != last_pushed_body:
+                    await _feishu_stream_card_text(card_ctx, final_body)
+                await _feishu_set_card_streaming_mode(
+                    card_ctx,
+                    enabled=False,
+                    summary="Failed" if final_error else "Complete",
+                )
+                _feishu_logger.info("[Feishu WS] Streamed card reply to chat=%s (attempt=%s)", chat_id, attempt_id)
+                return
+            except Exception:
+                _feishu_logger.warning(
+                    "[Feishu WS] Streaming card finalization failed for chat=%s attempt=%s",
+                    chat_id,
+                    attempt_id,
+                    exc_info=True,
+                )
+
+        if final_text:
+            await _feishu_send_reply(chat_id, final_text if not final_error else f"{final_text}\n\nError: {final_error}")
+            _feishu_logger.info("[Feishu WS] Sent fallback reply to chat=%s (attempt=%s)", chat_id, attempt_id)
     except asyncio.TimeoutError:
         _feishu_logger.warning("[Feishu WS] Timed out waiting for reply to chat=%s attempt=%s", chat_id, attempt_id)
     except Exception:
@@ -1738,7 +2049,7 @@ def serve_main(argv: list[str] | None = None) -> int:
     import uvicorn
     from fastapi.staticfiles import StaticFiles
 
-    parser = argparse.ArgumentParser(description="Vibe-Trading Server")
+    parser = argparse.ArgumentParser(description="semantier Server")
     parser.add_argument("--port", type=int, default=8899, help="Listen port (default 8899)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     parser.add_argument("--dev", action="store_true", help="Dev mode: spawn Vite on :5173")
@@ -1773,7 +2084,7 @@ def serve_main(argv: list[str] | None = None) -> int:
     _kill_process_on_port(args.port)
 
     print("=" * 50)
-    print("  Vibe-Trading Server")
+    print("  semantier Server")
     print(f"  http://127.0.0.1:{args.port}")
     print("=" * 50)
 

@@ -90,6 +90,8 @@ const messagesEn = {
   exportChat: "Export chat",
   stopGeneration: "Stop generation",
   newMessages: "New messages",
+  loadMoreHistory: "Load more history",
+  loadingMoreHistory: "Loading more history...",
   stepN: "Step {n}",
   exportTitle: "# Chat Export",
   exportTime: "Export time",
@@ -118,6 +120,8 @@ const messagesZh: Partial<Record<keyof typeof messagesEn, string>> = {
   noSessions: "暂无会话",
   viewDetails: "查看详情",
   confirmDelete: "确认", cancelDelete: "取消",
+  loadMoreHistory: "加载更多历史消息",
+  loadingMoreHistory: "正在加载更多历史消息...",
 };
 
 type Messages = typeof messagesEn;

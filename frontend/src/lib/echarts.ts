@@ -1,5 +1,5 @@
 import * as echarts from "echarts/core";
-import { CandlestickChart, LineChart, BarChart } from "echarts/charts";
+import { CandlestickChart, LineChart, BarChart, PieChart, ScatterChart, RadarChart } from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
@@ -13,7 +13,7 @@ import {
 import { CanvasRenderer } from "echarts/renderers";
 
 echarts.use([
-  CandlestickChart, LineChart, BarChart,
+  CandlestickChart, LineChart, BarChart, PieChart, ScatterChart, RadarChart,
   GridComponent, TooltipComponent, LegendComponent,
   DataZoomComponent, MarkPointComponent,
   ToolboxComponent, MarkLineComponent, MarkAreaComponent,

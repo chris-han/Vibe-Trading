@@ -15,6 +15,8 @@ import { ThinkingTimeline } from "@/components/chat/ThinkingTimeline";
 import { ConversationTimeline } from "@/components/chat/ConversationTimeline";
 import { SwarmDashboard, type SwarmAgent, type SwarmDashboardProps } from "@/components/chat/SwarmDashboard";
 
+const SESSION_MESSAGES_PAGE_SIZE = 100;
+
 /* ---------- Message grouping ---------- */
 type MsgGroup =
   | { kind: "single"; msg: AgentMessage }
@@ -50,6 +52,9 @@ export function Agent() {
   const sessionCreateRef = useRef<Promise<string> | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const lastEventRef = useRef(0);
+  const [historyLimit, setHistoryLimit] = useState(SESSION_MESSAGES_PAGE_SIZE);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
 
   const [attachment, setAttachment] = useState<{ filename: string; filePath: string } | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -127,9 +132,16 @@ export function Agent() {
     sseSessionRef.current = null;
   }, [disconnect]);
 
-  const loadSessionMessages = useCallback(async (sid: string, gen: number) => {
+  const loadSessionMessages = useCallback(async (
+    sid: string,
+    gen: number,
+    limit = historyLimit,
+    options?: { preserveScroll?: boolean }
+  ) => {
+    const listEl = listRef.current;
+    const previousHeight = options?.preserveScroll && listEl ? listEl.scrollHeight : 0;
     try {
-      const msgs = await api.getSessionMessages(sid);
+      const msgs = await api.getSessionMessages(sid, limit);
       if (genRef.current !== gen) return;
       const agentMsgs: AgentMessage[] = [];
       for (const m of msgs) {
@@ -154,11 +166,21 @@ export function Agent() {
       act().loadHistory(agentMsgs);
       act().setSessionLoading(false);
       act().cacheSession(sid, agentMsgs);
-      setTimeout(() => forceScrollToBottom(), 50);
+      setHasMoreHistory(msgs.length >= limit);
+      setHistoryLimit(limit);
+      if (options?.preserveScroll) {
+        requestAnimationFrame(() => {
+          if (!listRef.current) return;
+          const nextHeight = listRef.current.scrollHeight;
+          listRef.current.scrollTop += nextHeight - previousHeight;
+        });
+      } else {
+        setTimeout(() => forceScrollToBottom(), 50);
+      }
     } catch {
       act().setSessionLoading(false);
     }
-  }, [forceScrollToBottom]);
+  }, [forceScrollToBottom, historyLimit]);
 
   const setupSSE = useCallback((sid: string) => {
     if (sseSessionRef.current === sid) return;
@@ -296,19 +318,26 @@ export function Agent() {
     if (urlSessionId && urlSessionId !== curSid) {
       doDisconnect();
       if (curSid && curMsgs.length > 0) cacheSession(curSid, curMsgs);
+      setHistoryLimit(SESSION_MESSAGES_PAGE_SIZE);
+      setHasMoreHistory(false);
+      setLoadingMoreHistory(false);
 
       // Atomic switch: cache hit = instant, cache miss = show loading skeleton
       const cached = getCachedSession(urlSessionId);
       switchSession(urlSessionId, cached);
       if (cached) {
+        setHasMoreHistory(cached.length >= SESSION_MESSAGES_PAGE_SIZE);
         setTimeout(() => forceScrollToBottom(), 50);
       } else {
-        loadSessionMessages(urlSessionId, gen);
+        loadSessionMessages(urlSessionId, gen, SESSION_MESSAGES_PAGE_SIZE);
       }
       setupSSE(urlSessionId);
     } else if (!urlSessionId && curSid) {
       doDisconnect();
       if (curMsgs.length > 0) cacheSession(curSid, curMsgs);
+      setHistoryLimit(SESSION_MESSAGES_PAGE_SIZE);
+      setHasMoreHistory(false);
+      setLoadingMoreHistory(false);
       reset();
     }
   }, [urlSessionId, doDisconnect, loadSessionMessages, setupSSE, forceScrollToBottom]);
@@ -714,6 +743,17 @@ export function Agent() {
     }
   }, [ensureSession]);
 
+  const handleLoadMoreHistory = useCallback(async () => {
+    if (!urlSessionId || sessionLoading || loadingMoreHistory) return;
+    const nextLimit = historyLimit + SESSION_MESSAGES_PAGE_SIZE;
+    setLoadingMoreHistory(true);
+    try {
+      await loadSessionMessages(urlSessionId, genRef.current, nextLimit, { preserveScroll: true });
+    } finally {
+      setLoadingMoreHistory(false);
+    }
+  }, [historyLimit, loadSessionMessages, loadingMoreHistory, sessionLoading, urlSessionId]);
+
   useEffect(() => {
     if (sessionId || !input.trim() || sessionCreateRef.current) return;
     void ensureSession(input);
@@ -737,6 +777,19 @@ export function Agent() {
     <div className="flex flex-col flex-1 min-w-0 overflow-hidden h-full">
       <div ref={listRef} className="flex-1 overflow-auto p-6 scroll-smooth relative">
         <div className="max-w-3xl mx-auto space-y-4">
+          {!sessionLoading && messages.length > 0 && hasMoreHistory && (
+            <div className="flex justify-center py-1">
+              <button
+                type="button"
+                onClick={handleLoadMoreHistory}
+                disabled={loadingMoreHistory}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingMoreHistory && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {loadingMoreHistory ? t.loadingMoreHistory : t.loadMoreHistory}
+              </button>
+            </div>
+          )}
           {sessionLoading && (
             <div className="space-y-4 py-4">
               {[1, 2, 3].map(i => (

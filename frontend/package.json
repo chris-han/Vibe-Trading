@@ -12,6 +12,7 @@
     "clsx": "^2.1.0",
     "echarts": "^6.0.0",
     "lucide-react": "^0.460.0",
+    "mermaid": "^11.14.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.0",

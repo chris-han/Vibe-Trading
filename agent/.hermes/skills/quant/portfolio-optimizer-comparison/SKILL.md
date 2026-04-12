@@ -146,6 +146,28 @@ After running backtests, verify:
 | Only crypto trades in mixed portfolio | Timestamp misalignment | Use single asset class (Option B) |
 | First 60 days show equal weights | Optimizer lookback period | Expected behavior; extend backtest period |
 | Zero trades | Signal always flat or conditions too strict | Check signal values are non-zero |
+| Alternating positions (e.g., 100% BTC one day, 50/50 stocks next) | Mixed-asset timestamp alignment causes engine to pick one asset class per bar | Use single asset class; verify with `positions.csv` |
+
+## Mixed-Asset Backtest Findings (Empirical)
+
+When testing mixed portfolios like `[\"MSFT.US\", \"BTC-USDT\", \"AAPL.US\"]` for 2024:
+
+**Observed behavior:**
+- Positions alternate between asset classes rather than holding all simultaneously
+- Example pattern: `BTC-USDT: 100%` on crypto timestamps, then `AAPL.US: 50%, MSFT.US: 50%` on stock timestamps
+- Risk-parity and equal-weight produce **identical metrics** because the optimizer can't properly allocate across misaligned timestamps
+
+**Root cause:**
+- Crypto (OKX) data has timestamps like `2024-01-02 00:00:00` and `2024-01-02 16:00:00`
+- US stocks (yfinance) have timestamps like `2024-01-02` (date only)
+- The engine aligns on exact timestamp matches, causing assets to trade on different bars
+
+**Verification command:**
+```bash
+# Check if all assets are held simultaneously
+head -50 artifacts/positions.csv | grep -E \"^[0-9]\" | awk -F, '{print $2, $3, $4}'
+# If you see patterns like \"0.0,1.0,0.0\" alternating with \"0.5,0.0,0.5\", alignment is broken
+```
 
 ## Example Comparison Output
 

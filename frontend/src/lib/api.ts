@@ -62,7 +62,7 @@ export const api = {
   renameSession: (sid: string, title: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   sendMessage: (sid: string, content: string) => request<{ message_id: string; attempt_id: string }>(`/sessions/${sid}/messages`, { method: "POST", body: JSON.stringify({ content }) }),
   cancelSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}/cancel`, { method: "POST" }),
-  getSessionMessages: (sid: string) => request<MessageItem[]>(`/sessions/${sid}/messages`),
+  getSessionMessages: (sid: string, limit = 100) => request<MessageItem[]>(`/sessions/${sid}/messages?limit=${limit}`),
   getSessionEvents: (sid: string, limit = 5000) => request<SessionEventItem[]>(`/sessions/${sid}/event-log?limit=${limit}`),
   getSessionTrajectory: (sid: string) => request<SessionTrajectoryExport>(`/sessions/${sid}/trajectory`),
   sseUrl: (sid: string) => `${BASE}/sessions/${sid}/events`,

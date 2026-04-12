@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 305 305" aria-hidden="true">
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- theme-aware rounded background -->
+  <rect x="0" y="0" width="305" height="305" rx="80" ry="80" fill="#9fe870" />
+
+  <!-- keep original dot sizes and relative layout (coordinates adjusted to 305 viewBox) -->
+    <dot x="152.5" y="58.5" width="26" height="26" class="dot" />
+    <dot x="107.5" y="76.5" width="26" height="26" class="dot" />
+    <dot x="188.5" y="77.5" width="26" height="26" class="dot" />
+    <dot x="98.5" y="121.5" width="26" height="26" class="dot" />
+    <dot x="144.5" y="139.5" width="26" height="26" class="dot" />
+    <dot x="188.5" y="157.5" width="26" height="26" class="dot" />
+    <dot x="90.5" y="202.5" width="26" height="26" class="dot" />
+    <dot x="180.5" y="202.5" width="26" height="26" class="dot" />
+    <dot x="135.5" y="220.5" width="26" height="26" class="dot" />
+
+    <!-- spark circles centered on each dot (staggered animations) -->
+    <g filter="url(#glow)">
+    <circle class="spark" cx="165.5" cy="71.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.2s" begin="0s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.2s" begin="0s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="120.5" cy="89.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.1s" begin="0.22s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.1s" begin="0.22s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="201.5" cy="90.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.4s" begin="0.55s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.4s" begin="0.55s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="111.5" cy="134.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="0.95s" begin="0.9s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="0.95s" begin="0.9s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="157.5" cy="152.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.6s" begin="0.4s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;12;0.8" dur="1.6s" begin="0.4s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="201.5" cy="170.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.05s" begin="1.05s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.05s" begin="1.05s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="103.5" cy="215.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.3s" begin="0.15s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.3s" begin="0.15s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="193.5" cy="215.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.05s" begin="0.5s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.05s" begin="0.5s" repeatCount="indefinite" />
+    </circle>
+
+    <circle class="spark" cx="148.5" cy="233.5" r="0.8" opacity="0">
+      <animate attributeName="opacity" values="0;1;0" dur="1.25s" begin="0.8s" repeatCount="indefinite" />
+      <animate attributeName="r" values="0.8;10;0.8" dur="1.25s" begin="0.8s" repeatCount="indefinite" />
+    </circle>
+    </g>
+
+</svg>

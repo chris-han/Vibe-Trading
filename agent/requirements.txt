@@ -37,3 +37,6 @@ sse-starlette>=1.6.0
 
 # MCP Server
 fastmcp>=2.0.0
+
+# Feishu / Lark
+lark-oapi>=1.5.3

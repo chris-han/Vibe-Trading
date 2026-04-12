@@ -28,9 +28,31 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom", "react-router-dom"],
-          "vendor-charts": ["echarts"],
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return;
+          }
+
+          if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/react-router")) {
+            return "vendor-react";
+          }
+
+          if (id.includes("/echarts/")) {
+            return "vendor-charts";
+          }
+
+          if (
+            id.includes("/react-markdown/")
+            || id.includes("/remark-gfm/")
+            || id.includes("/rehype-highlight/")
+            || id.includes("/highlight.js/")
+          ) {
+            return "vendor-markdown";
+          }
+
+          if (id.includes("/lucide-react/") || id.includes("/zustand/")) {
+            return "vendor-ui";
+          }
         },
       },
     },

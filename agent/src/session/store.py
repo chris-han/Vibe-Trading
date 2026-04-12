@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -187,30 +188,34 @@ class SessionStore:
         Returns:
             List of Message objects in chronological order.
         """
-        events = self.get_events(session_id, limit=max(limit * 10, 1000))
-        if events:
-            messages: List[Message] = []
-            for event in events:
-                if event.event_type != SessionEventType.MESSAGE_CREATED.value:
-                    continue
-                meta = dict(event.metadata.get("metadata") or {}) if isinstance(event.metadata, dict) else {}
-                linked_attempt_id = None
-                if isinstance(event.metadata, dict):
-                    linked_attempt_id = event.metadata.get("linked_attempt_id") or event.attempt_id
-                messages.append(
-                    Message(
-                        message_id=str((event.metadata or {}).get("message_id") or event.event_id),
-                        session_id=event.session_id,
-                        role=event.role or "user",
-                        content=event.content or "",
-                        created_at=event.timestamp,
-                        linked_attempt_id=linked_attempt_id,
-                        metadata=meta,
-                    )
-                )
-            return messages[-limit:]
+        path = self._events_file(session_id)
+        if not path.exists():
+            return []
 
-        return []
+        messages: deque[Message] = deque(maxlen=limit)
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            event = SessionEvent.from_dict(json.loads(line))
+            if event.event_type != SessionEventType.MESSAGE_CREATED.value:
+                continue
+            meta = dict(event.metadata.get("metadata") or {}) if isinstance(event.metadata, dict) else {}
+            linked_attempt_id = None
+            if isinstance(event.metadata, dict):
+                linked_attempt_id = event.metadata.get("linked_attempt_id") or event.attempt_id
+            messages.append(
+                Message(
+                    message_id=str((event.metadata or {}).get("message_id") or event.event_id),
+                    session_id=event.session_id,
+                    role=event.role or "user",
+                    content=event.content or "",
+                    created_at=event.timestamp,
+                    linked_attempt_id=linked_attempt_id,
+                    metadata=meta,
+                )
+            )
+
+        return list(messages)
 
     # ---- Attempt CRUD ----
 

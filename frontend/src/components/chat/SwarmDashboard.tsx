@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { CheckCircle2, XCircle, Loader2, Clock, Timer, ChevronDown, ChevronRight, Wrench } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownRenderer } from "@/components/common/MarkdownRenderer";
 
 export interface SwarmAgent {
   id: string;
@@ -289,7 +288,7 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
         <div className="rounded-card border border-success/30 bg-success/5 px-5 py-4">
           <div className="text-xs font-semibold text-success mb-3">Final Report</div>
           <div className="prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalReport}</ReactMarkdown>
+            <MarkdownRenderer>{finalReport}</MarkdownRenderer>
           </div>
         </div>
       )}

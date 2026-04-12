@@ -115,7 +115,7 @@ export function WelcomeScreen({ onExample }: Props) {
       {/* Header */}
       <div className="space-y-3">
         <div className="h-16 w-16 mx-auto rounded-button flex items-center justify-center shadow-sm">
-          <img src="/favicon.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
+          <img src="/avatar.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
         </div>
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-foreground">semantier</h2>

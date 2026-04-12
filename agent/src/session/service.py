@@ -53,6 +53,18 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
     "- If an external endpoint or symbol looks suspicious, validate it against the loaded skill before using it.\n"
 )
 
+_OUTPUT_FORMAT_PROMPT = (
+    "Output format rules (web UI rendering):\n"
+    "- Render all tables using Markdown pipe-table syntax, never ANSI or terminal box-drawing characters.\n"
+    "- Render flowcharts and relationship diagrams as Mermaid code blocks (```mermaid ... ```).\n"
+    "- Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes),\n"
+    "  keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.\n"
+    "- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks\n"
+    "  (```echarts ... ``` with a valid option object); do NOT produce ASCII/ANSI chart art.\n"
+    "- If you cannot provide valid ECharts JSON, fall back to a Markdown numeric table.\n"
+    "- Never use ANSI escape codes or terminal color sequences in responses.\n"
+)
+
 
 from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
 from src.backtest.bootstrap import bootstrap_run_from_prompt, is_backtest_prompt
@@ -847,6 +859,7 @@ class SessionService:
                 f"{_BACKTEST_WORKFLOW_PROMPT}"
                 f"{_DOCUMENT_WORKFLOW_PROMPT}"
                 f"{_MARKET_DATA_WORKFLOW_PROMPT}"
+                f"{_OUTPUT_FORMAT_PROMPT}"
             ),
             skip_context_files=True,
             **agent_kwargs,
