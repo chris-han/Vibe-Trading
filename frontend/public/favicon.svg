@@ -7,23 +7,10 @@
         <feMergeNode in="SourceGraphic" />
       </feMerge>
     </filter>
-    <style>
-      /* Light theme (default) */
-      .bg-fill { fill: #163300; }
-        .dot { fill: #9fe870; }
-        .spark { fill: #bff79a; }      
-
-      /* Dark theme overrides */
-      @media (prefers-color-scheme: dark) {
-        .bg-fill { fill: #9fe870; }
-      .dot { fill: #337600; }
-      .spark { fill: #163300; }
-      }
-    </style>
   </defs>
 
   <!-- theme-aware rounded background -->
-  <rect x="0" y="0" width="305" height="305" rx="80" ry="80" fill="none" />
+  <rect x="0" y="0" width="305" height="305" rx="80" ry="80" fill="#9fe870" />
 
   <!-- keep original dot sizes and relative layout (coordinates adjusted to 305 viewBox) -->
     <dot x="152.5" y="58.5" width="26" height="26" class="dot" />
