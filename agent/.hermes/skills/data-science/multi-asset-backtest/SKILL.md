@@ -195,9 +195,18 @@ for f in sorted(files):
   ```bash
   diff run1/artifacts/positions.csv run2/artifacts/positions.csv
   diff run1/artifacts/metrics.csv run2/artifacts/metrics.csv
+  diff run1/artifacts/equity.csv run2/artifacts/equity.csv
   ```
-  If identical → optimizer not functioning (timestamp misalignment)
+  If all identical → optimizer not functioning (timestamp misalignment)
 - [ ] **Check trade distribution**: `cut -d, -f2 artifacts/trades.csv | sort | uniq -c` should show trades across all assets, not concentrated in one
+- [ ] **Verify individual asset performance** (for comparison):
+  ```python
+  import pandas as pd, glob
+  for f in sorted(glob.glob('artifacts/ohlcv_*.csv')):
+      df = pd.read_csv(f); asset = f.split('/')[-1].replace('ohlcv_', '').replace('.csv', '')
+      ret = (df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0]
+      print(f'{asset}: {ret*100:.1f}%')
+  ```
 
 ## Pitfalls
 
@@ -220,6 +229,29 @@ for f in sorted(files):
    2024-01-02 16:00:00, 0.333, 0.0, 0.333  <- AAPL + MSFT
    ```
    This confirms the timestamp alignment issue - weights alternate rather than being simultaneous.
+
+### Real Example: MSFT/BTC/AAPL 2024 (Risk-Parity vs Equal-Weight)
+
+Both optimizers produced **byte-identical results**:
+- Final value: $1,211,711 (21.17% return)
+- Max drawdown: -23.27%, Sharpe: 0.57
+- Trade count: 57 (ALL in BTC-USDT, zero in AAPL/MSFT)
+- Positions pattern: alternated `0.0,1.0,0.0` (100% BTC) ↔ `0.5,0.0,0.5` (50% AAPL + 50% MSFT)
+- Benchmark: 53.24% (portfolio underperformed by 32%)
+
+**Verification commands used**:
+```bash
+diff run1/artifacts/equity.csv run2/artifacts/equity.csv  # empty = identical
+diff run1/artifacts/metrics.csv run2/artifacts/metrics.csv  # empty = identical
+cut -d, -f2 artifacts/trades.csv | sort | uniq -c  # shows 57 BTC-USDT, 0 others
+```
+
+**Contrast: Stocks-only portfolio (MSFT + AAPL)**:
+- Risk parity **DOES work** for homogeneous portfolios
+- Weights varied 46-54% throughout 2024 based on relative volatility
+- Both optimizers still produced identical returns (25.95%) because AAPL/MSFT have similar volatilities
+- Risk parity weights: AAPL 45.8-50.1%, MSFT 49.9-54.2% (May 2024: AAPL 45.8%, MSFT 54.2%)
+- This confirms the optimizer works correctly when timestamps align
 
 ## Rebalancing Strategy Template
 

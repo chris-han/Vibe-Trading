@@ -61,8 +61,43 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_DIR = DATA_ROOT / "runs"
 SESSIONS_DIR = DATA_ROOT / "sessions"
 UPLOADS_DIR = DATA_ROOT / "uploads"
+LEGACY_RUNS_DIR = _AGENT_DIR / "runs"
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
+def _candidate_runs_dirs() -> List[Path]:
+    """Return run roots in lookup order.
+
+    Keep backward compatibility with runs written under agent/runs even when
+    DATA_ROOT points at a nested directory such as agent/chris.
+    """
+    roots = [RUNS_DIR]
+    if LEGACY_RUNS_DIR != RUNS_DIR:
+        roots.append(LEGACY_RUNS_DIR)
+    return roots
+
+
+def _resolve_run_dir(run_id: str) -> Optional[Path]:
+    """Resolve a run directory across all known run roots."""
+    for root in _candidate_runs_dirs():
+        run_dir = root / run_id
+        if run_dir.exists():
+            return run_dir
+    return None
+
+
+def _collect_run_dirs() -> List[Path]:
+    """Collect unique run directories from all run roots."""
+    by_id: Dict[str, Path] = {}
+    for root in _candidate_runs_dirs():
+        if not root.exists():
+            continue
+        for d in root.iterdir():
+            if not d.is_dir() or d.name in by_id:
+                continue
+            by_id[d.name] = d
+    return sorted(by_id.values(), key=lambda x: x.name, reverse=True)
 
 
 def _resolve_upload_dir(session_id: Optional[str] = None, run_id: Optional[str] = None) -> Path:
@@ -473,8 +508,9 @@ async def get_run_code(run_id: str):
     Returns:
         Map filename -> source text.
     """
-    run_dir = RUNS_DIR / run_id / "code"
-    if not run_dir.exists():
+    resolved_run_dir = _resolve_run_dir(run_id)
+    run_dir = resolved_run_dir / "code" if resolved_run_dir else None
+    if run_dir is None or not run_dir.exists():
         raise HTTPException(status_code=404, detail=f"Code directory for run {run_id} not found")
     result = {}
     for f in ["signal_engine.py"]:
@@ -487,9 +523,9 @@ async def get_run_code(run_id: str):
 @app.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run_result(run_id: str):
     """Fetch full details for a historical run by ``run_id``."""
-    run_dir = RUNS_DIR / run_id
+    run_dir = _resolve_run_dir(run_id)
 
-    if not run_dir.exists():
+    if run_dir is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run {run_id} not found"
@@ -504,16 +540,10 @@ async def get_run_result(run_id: str):
 async def list_runs(limit: int = 20):
     """List recent runs with summary fields."""
     limit = min(max(1, limit), 100)
-    runs_dir = RUNS_DIR
-    
-    if not runs_dir.exists():
+    run_dirs = _collect_run_dirs()
+
+    if not run_dirs:
         return []
-    
-    run_dirs = sorted(
-        [d for d in runs_dir.iterdir() if d.is_dir()],
-        key=lambda x: x.name,
-        reverse=True
-    )
     
     results = []
     for d in run_dirs[:limit]:

@@ -2,31 +2,31 @@
   "version": 1,
   "manifest": {
     "data-science/multi-asset-backtest/SKILL.md": [
-      1775914384304466208,
-      11183
+      1775953917867991217,
+      12755
     ],
     "data_inconsistency_resolution/SKILL.md": [
-      1775899000748290268,
+      1775951357631661797,
       2717
     ],
     "detailed-risk-analysis/SKILL.md": [
-      1775917166600497556,
+      1775951357631661797,
       7950
     ],
     "quant/multi-factor-alpha/SKILL.md": [
-      1775915385646180716,
+      1775951357631661797,
       9048
     ],
     "research/bear-side-research/SKILL.md": [
-      1775919428666597422,
+      1775951357631661797,
       9657
     ],
     "research/bull-side-research/SKILL.md": [
-      1775920062688024194,
+      1775951357631661797,
       13339
     ],
     "research/earnings-options-analysis/SKILL.md": [
-      1775915335015813765,
+      1775951357641404624,
       5579
     ]
   },
