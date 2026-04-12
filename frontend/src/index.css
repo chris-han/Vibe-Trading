@@ -2,14 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Autaut Grotesk - Local font face */
+/* Autaut Grotesk - Local font face (kept as English primary/fallback) */
 @font-face {
   font-family: "Autaut Grotesk";
   src: url("/font/AutautGrotesk-Regular.woff2") format("woff2"),
        url("/font/AutautGrotesk-Regular.woff") format("woff");
-  font-weight: 400;
+  font-weight: 400 700;
   font-style: normal;
   font-display: swap;
+}
+
+/* Load Noto Sans SC and Noto Serif SC for UI and reports (CJK-aware) */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600&display=swap');
+
+:root {
+  /* Default prefers Autaut Grotesk for English; can be overridden by JS when lang=zh */
+  --font-ui: 'Autaut Grotesk', 'Noto Sans SC', -apple-system, system-ui, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', 'Hiragino Kaku Gothic Pro', 'Meiryo', 'MS PGothic', Arial, sans-serif;
+  --font-report: 'Noto Serif SC', Georgia, 'Times New Roman', STSong, SimSun, 宋体, serif;
 }
 
 @layer base {
@@ -115,11 +124,14 @@
   * { @apply border-border; }
   body { @apply bg-background text-foreground; }
 
-  /* Autaut Grotesk with global fallbacks */
+  /* Default UI font (Noto Sans SC) and font-feature settings */
   body {
-    font-family: "Autaut Grotesk", -apple-system, system-ui, "Segoe UI", Roboto, Oxygen-Sans, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Helvetica, "Hiragino Kaku Gothic Pro W3", "Meiryo", "MS PGothic", Arial, sans-serif;
+    font-family: var(--font-ui);
     font-feature-settings: "calt" 1;
   }
+
+  /* Long-form report wrapper should use the serif for improved reading rhythm */
+  .report, .long-form { font-family: var(--font-report); line-height: 1.8; }
 
   /* Generous border-radius scale */
   .rounded-button { border-radius: 16px; }

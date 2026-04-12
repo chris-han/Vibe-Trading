@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { useAgentStore } from "@/stores/agent";
 import { useSessionsStore } from "@/stores/sessions";
 import { ConnectionBanner } from "@/components/layout/ConnectionBanner";
+import LanguageSwitcher from "@/components/common/LanguageSwitcher";
 
 const NAV = [
   { to: "/", icon: BarChart3, key: "home" as const },
@@ -70,10 +71,8 @@ export function Layout() {
         {/* Brand */}
         <div className={cn("border-b border-border", collapsed ? "p-2 flex justify-center" : "p-4")}>
           <Link to="/" className={cn("flex items-center font-bold text-base text-foreground", collapsed ? "justify-center" : "gap-2")}>
-            <div className="h-8 w-8 rounded-full bg-wise-green flex items-center justify-center shrink-0">
-              <BarChart3 className="h-4 w-4 text-dark-green" />
-            </div>
-            {!collapsed && "Vibe-Trading"}
+            <img src="/logo.svg" alt="semantier logo" className="h-8 w-8 rounded-button object-contain shrink-0 bg-transparent" />
+            {!collapsed && "semantier"}
           </Link>
         </div>
 
@@ -271,15 +270,16 @@ export function Layout() {
                   {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
                   {dark ? t.lightMode : t.darkMode}
                 </button>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setCollapsed(true)}
-                    className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
-                    title="Collapse"
-                  >
-                    <ChevronsLeft className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                <div className="flex items-center gap-2">
+                    <LanguageSwitcher />
+                    <button
+                      onClick={() => setCollapsed(true)}
+                      className="p-1 text-muted-foreground hover:text-foreground rounded transition-colors"
+                      title="Collapse"
+                    >
+                      <ChevronsLeft className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
               </div>
               <p className="text-xs text-muted-foreground">v0.1.0</p>
             </>

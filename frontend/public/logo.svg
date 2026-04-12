@@ -1,26 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="405" height="405" viewBox="0 0 405 405" fill="none">
-  <rect width="405" height="405" fill="#00A886"/>
-  <circle cx="202.5" cy="202.5" r="202.5" fill="#00A886"/>
+  <rect width="405" height="405" fill="#9fe870"/>
+  <circle cx="202.5" cy="202.5" r="202.5" fill="#9fe870"/>
 
   <path
     d="M1047 -229V-334H985Q736 -334 651.5 -260.0Q567 -186 567 35V293Q567 443 513.0 501.0Q459 559 317 559H256V664H317Q459 664 513.0 722.0Q567 780 567 930V1188Q567 1409 651.5 1482.5Q736 1556 985 1556H1047V1452H979Q838 1452 795.0 1408.0Q752 1364 752 1223V936Q752 778 702.0 710.0Q652 642 522 612Q654 578 703.0 511.0Q752 444 752 287V0Q752 -141 795.0 -185.0Q838 -229 979 -229Z"
-    fill="#FFFFFF"
+    fill="#163300"
     transform="matrix(0.0745891277 0 0 0.1211640212 46.9051833 130.4687831)"
   />
 
   <path
     d="M256 -229H326Q466 -229 508.5 -185.5Q551 -142 551 0V287Q551 444 600.0 511.0Q649 578 780 612Q650 642 600.5 710.0Q551 778 551 936V1223Q551 1365 508.5 1408.5Q466 1452 326 1452H256V1556H319Q568 1556 651.5 1482.5Q735 1409 735 1188V930Q735 780 789.0 722.0Q843 664 985 664H1047V559H985Q843 559 789.0 501.0Q735 443 735 293V35Q735 -186 651.5 -260.0Q568 -334 319 -334H256Z"
-    fill="#FFFFFF"
+    fill="#163300"
     transform="matrix(0.0733249052 0 0 0.1211640212 265.2288243 130.4687831)"
   />
 
-  <rect x="198" y="107" width="26" height="26" fill="#FFFFFF" />
-  <rect x="153" y="125" width="26" height="26" fill="#FFFFFF" />
-  <rect x="234" y="126" width="26" height="26" fill="#FFFFFF" />
-  <rect x="144" y="170" width="26" height="26" fill="#FFFFFF" />
-  <rect x="190" y="188" width="26" height="26" fill="#FFFFFF" />
-  <rect x="234" y="206" width="26" height="26" fill="#FFFFFF" />
-  <rect x="136" y="251" width="26" height="26" fill="#FFFFFF" />
-  <rect x="226" y="251" width="26" height="26" fill="#FFFFFF" />
-  <rect x="181" y="269" width="26" height="26" fill="#FFFFFF" />
+  <rect x="198" y="107" width="26" height="26" fill="#163300" />
+  <rect x="153" y="125" width="26" height="26" fill="#163300" />
+  <rect x="234" y="126" width="26" height="26" fill="#163300" />
+  <rect x="144" y="170" width="26" height="26" fill="#163300" />
+  <rect x="190" y="188" width="26" height="26" fill="#163300" />
+  <rect x="234" y="206" width="26" height="26" fill="#163300" />
+  <rect x="136" y="251" width="26" height="26" fill="#163300" />
+  <rect x="226" y="251" width="26" height="26" fill="#163300" />
+  <rect x="181" y="269" width="26" height="26" fill="#163300" />
 </svg>

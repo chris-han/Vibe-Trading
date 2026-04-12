@@ -115,10 +115,10 @@ export function WelcomeScreen({ onExample }: Props) {
       {/* Header */}
       <div className="space-y-3">
         <div className="h-16 w-16 mx-auto rounded-button bg-primary flex items-center justify-center shadow-sm">
-          <Bot className="h-8 w-8 text-primary-foreground" />
+          <img src="/favicon.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
         </div>
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-foreground">Vibe-Trading</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">semantier</h2>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
             vibe trading with your professional financial agent team
           </p>
