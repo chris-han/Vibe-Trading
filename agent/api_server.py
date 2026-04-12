@@ -7,6 +7,8 @@ V5: ReAct Agent + async /run + CORS env + SSE tool events.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac as _hmac
 import json
 import os
 import signal
@@ -1022,6 +1024,417 @@ async def upload_file(
         "file_path": str(dest.resolve()),
         "filename": file.filename,
     }
+
+
+# ============================================================================
+# Feishu Integration (WebSocket long-connection + HTTP webhook fallback)
+# ============================================================================
+#
+# Set FEISHU_CONNECTION_MODE=websocket (default) to use the lark SDK's
+# outbound WebSocket connection — no public URL needed.
+# Set FEISHU_CONNECTION_MODE=webhook to receive HTTP POST events instead.
+# Both modes share the same _feishu_route_message / _feishu_send_reply helpers.
+# The WebSocket client starts automatically at server startup when the mode is
+# "websocket" and app credentials are configured.
+# ============================================================================
+
+_FEISHU_CONNECTION_MODE = os.getenv("FEISHU_CONNECTION_MODE", "websocket").strip().lower()
+
+# Credentials needed by both WS and webhook sections — define once here.
+_FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+_FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+_FEISHU_ENCRYPT_KEY = os.getenv("FEISHU_ENCRYPT_KEY", "")
+_FEISHU_VERIFICATION_TOKEN = os.getenv("FEISHU_VERIFICATION_TOKEN", "")
+_FEISHU_DOMAIN = os.getenv("FEISHU_DOMAIN", "feishu")
+_FEISHU_BASE_URL = (
+    "https://open.larksuite.com"
+    if _FEISHU_DOMAIN == "lark"
+    else "https://open.feishu.cn"
+)
+_FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
+_feishu_logger = logging.getLogger("feishu.webhook")
+
+# ---------------------------------------------------------------------------
+# Feishu WebSocket startup (runs in a dedicated daemon thread)
+# ---------------------------------------------------------------------------
+
+_feishu_ws_thread: Optional[Any] = None  # threading.Thread, set at startup
+
+
+async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attempt_id: str) -> None:
+    """Subscribe to the event bus and send the agent reply back to Feishu when done."""
+    try:
+        async def _wait_for_completion() -> Optional[str]:
+            async for sse_event in svc.event_bus.subscribe(session_id):
+                if sse_event.event_type in ("attempt.completed", "attempt.failed"):
+                    if sse_event.data.get("attempt_id") == attempt_id:
+                        # Retrieve the stored assistant reply
+                        messages = svc.get_messages(session_id, limit=10)
+                        for msg in reversed(messages):
+                            if msg.role == "assistant" and msg.linked_attempt_id == attempt_id:
+                                return msg.content
+                        # Fallback to summary from event data
+                        return sse_event.data.get("summary") or sse_event.data.get("error") or ""
+            return None
+
+        content = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
+        if content:
+            await _feishu_send_reply(chat_id, content)
+            _feishu_logger.info("[Feishu WS] Sent reply to chat=%s (attempt=%s)", chat_id, attempt_id)
+    except asyncio.TimeoutError:
+        _feishu_logger.warning("[Feishu WS] Timed out waiting for reply to chat=%s attempt=%s", chat_id, attempt_id)
+    except Exception:
+        _feishu_logger.warning("[Feishu WS] Error sending Feishu reply", exc_info=True)
+
+
+def _feishu_ws_event_handler_factory(main_loop: asyncio.AbstractEventLoop) -> Any:
+    """Build a lark EventDispatcherHandler routing im.message.receive_v1 and card.action.trigger."""
+    try:
+        import lark_oapi as lark  # noqa: F401 — side-effect: registers SDK
+        from lark_oapi import EventDispatcherHandler
+    except ImportError:
+        _feishu_logger.error("[Feishu WS] lark-oapi not installed. Run: uv add 'lark-oapi[websocket]'")
+        return None
+
+    def _on_message(data: Any) -> None:
+        try:
+            event = getattr(data, "event", None) or {}
+            message = getattr(event, "message", None) or {}
+            sender = getattr(event, "sender", None) or {}
+            if getattr(sender, "sender_type", "") == "bot":
+                return
+            chat_id = getattr(message, "chat_id", "") or ""
+            message_id = getattr(message, "message_id", "") or ""
+            msg_dict: Dict[str, Any] = {
+                "message_type": getattr(message, "message_type", "text") or "text",
+                "content": getattr(message, "content", "") or "",
+                "mentions": [
+                    {"name": getattr(m, "name", "") or ""}
+                    for m in (getattr(message, "mentions", None) or [])
+                ],
+            }
+            text = _extract_feishu_text(msg_dict)
+            if not chat_id or not text:
+                return
+            svc = _get_session_service()
+            if svc is None:
+                _feishu_logger.warning("[Feishu WS] Session service not available, dropping message %s", message_id)
+                return
+            future = asyncio.run_coroutine_threadsafe(
+                _feishu_route_message(svc, chat_id, text), main_loop
+            )
+            future.add_done_callback(
+                lambda f: _feishu_logger.warning("[Feishu WS] Route error: %s", f.exception())
+                if f.exception() else None
+            )
+            _feishu_logger.info("[Feishu WS] Queued message from chat=%s id=%s: %.80s", chat_id, message_id, text)
+        except Exception:
+            _feishu_logger.warning("[Feishu WS] Error in message handler", exc_info=True)
+
+    def _on_card_action(data: Any) -> None:
+        """Log card action triggers (button clicks). Extend here for interactive flows."""
+        try:
+            event = getattr(data, "event", None) or {}
+            action = getattr(event, "action", None) or {}
+            action_value = getattr(action, "value", {}) or {}
+            context = getattr(event, "context", None) or {}
+            chat_id = getattr(context, "open_chat_id", "") or ""
+            _feishu_logger.info("[Feishu WS] Card action from chat=%s value=%s", chat_id, action_value)
+        except Exception:
+            _feishu_logger.warning("[Feishu WS] Error in card action handler", exc_info=True)
+
+    try:
+        handler = (
+            EventDispatcherHandler
+            .builder(_FEISHU_ENCRYPT_KEY, _FEISHU_VERIFICATION_TOKEN)
+            .register_p2_im_message_receive_v1(_on_message)
+            .register_p2_card_action_trigger(_on_card_action)
+            .build()
+        )
+        return handler
+    except Exception:
+        _feishu_logger.error("[Feishu WS] Failed to build event handler", exc_info=True)
+        return None
+
+
+def _run_feishu_ws_client(ws_client: Any) -> None:
+    """Run the lark WS client in its own thread-local event loop (blocking)."""
+    import lark_oapi.ws.client as _ws_mod
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # Inject thread-local loop so the lark SDK's internal asyncio calls use it
+    _ws_mod.loop = loop  # type: ignore[attr-defined]
+    try:
+        ws_client.start()
+    except Exception:
+        _feishu_logger.error("[Feishu WS] WebSocket client crashed", exc_info=True)
+    finally:
+        try:
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+        try:
+            loop.stop()
+            loop.close()
+        except Exception:
+            pass
+        _feishu_logger.info("[Feishu WS] WebSocket client thread exited")
+
+
+def _start_feishu_websocket(main_loop: asyncio.AbstractEventLoop) -> None:
+    """Start the Feishu WebSocket long-connection client in a background daemon thread."""
+    global _feishu_ws_thread
+
+    if _FEISHU_CONNECTION_MODE != "websocket":
+        return
+    if not _FEISHU_APP_ID or not _FEISHU_APP_SECRET:
+        _feishu_logger.warning("[Feishu WS] FEISHU_APP_ID / FEISHU_APP_SECRET not set — skipping WS startup")
+        return
+
+    try:
+        import lark_oapi as lark
+        from lark_oapi.ws.client import Client as FeishuWSClient
+    except ImportError:
+        _feishu_logger.error("[Feishu WS] lark-oapi not installed. Run: uv add 'lark-oapi[websocket]'")
+        return
+
+    event_handler = _feishu_ws_event_handler_factory(main_loop)
+    if event_handler is None:
+        return
+
+    domain = lark.LARK_DOMAIN if _FEISHU_DOMAIN == "lark" else lark.FEISHU_DOMAIN
+    ws_client = FeishuWSClient(
+        app_id=_FEISHU_APP_ID,
+        app_secret=_FEISHU_APP_SECRET,
+        event_handler=event_handler,
+        log_level=lark.LogLevel.INFO,
+    )
+
+    import threading
+    _feishu_ws_thread = threading.Thread(
+        target=_run_feishu_ws_client,
+        args=(ws_client,),
+        daemon=True,
+        name="feishu-ws",
+    )
+    _feishu_ws_thread.start()
+    _feishu_logger.info("[Feishu WS] WebSocket client started (thread=%s)", _feishu_ws_thread.name)
+
+
+@app.on_event("startup")
+async def _feishu_ws_startup() -> None:
+    """Launch Feishu WebSocket long-connection client alongside the WebUI at startup."""
+    if _FEISHU_CONNECTION_MODE == "websocket" and _FEISHU_APP_ID:
+        loop = asyncio.get_running_loop()
+        _start_feishu_websocket(loop)
+
+
+# ============================================================================
+# Feishu Webhook Integration (HTTP mode, kept for compatibility)
+# ============================================================================
+# Note: credentials (_FEISHU_APP_ID etc.) are defined in the WS section above.
+
+
+def _load_feishu_session_map() -> Dict[str, str]:
+    """Load the Feishu chat_id → session_id mapping from disk."""
+    try:
+        if _FEISHU_SESSION_MAP_FILE.exists():
+            return json.loads(_FEISHU_SESSION_MAP_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_feishu_session_map(mapping: Dict[str, str]) -> None:
+    """Persist the Feishu chat_id → session_id mapping to disk."""
+    try:
+        _FEISHU_SESSION_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _FEISHU_SESSION_MAP_FILE.write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        _feishu_logger.warning("Failed to save Feishu session map", exc_info=True)
+
+
+def _feishu_verify_signature(headers: Any, body_bytes: bytes) -> bool:
+    """Verify Feishu webhook signature: SHA256(timestamp + nonce + encrypt_key + body)."""
+    timestamp = str(headers.get("x-lark-request-timestamp", "") or "")
+    nonce = str(headers.get("x-lark-request-nonce", "") or "")
+    signature = str(headers.get("x-lark-signature", "") or "")
+    if not timestamp or not nonce or not signature:
+        return False
+    body_str = body_bytes.decode("utf-8", errors="replace")
+    content = f"{timestamp}{nonce}{_FEISHU_ENCRYPT_KEY}{body_str}"
+    computed = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return _hmac.compare_digest(computed, signature)
+
+
+def _extract_feishu_text(message: Dict[str, Any]) -> str:
+    """Extract plain text content from a Feishu message object."""
+    msg_type = message.get("message_type", "")
+    raw_content = message.get("content", "")
+    try:
+        content_obj = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+    except Exception:
+        return raw_content or ""
+    if msg_type == "text":
+        return str(content_obj.get("text", "")).strip()
+    if msg_type in ("post", "rich_text"):
+        # Extract text nodes from the post format
+        parts: List[str] = []
+        post_body = content_obj.get("content") or []
+        for line in post_body:
+            if isinstance(line, list):
+                for block in line:
+                    if isinstance(block, dict) and block.get("tag") == "text":
+                        parts.append(str(block.get("text", "")))
+        return " ".join(parts).strip()
+    return ""
+
+
+async def _feishu_send_reply(chat_id: str, text: str) -> None:
+    """Send a plain-text reply to a Feishu chat using the tenant access token."""
+    if not _FEISHU_APP_ID or not _FEISHU_APP_SECRET:
+        return
+    import urllib.request
+    import urllib.error
+
+    def _get_token() -> str:
+        url = f"{_FEISHU_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal"
+        body = json.dumps({"app_id": _FEISHU_APP_ID, "app_secret": _FEISHU_APP_SECRET}).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read()).get("tenant_access_token", "")
+
+    def _send(token: str) -> None:
+        url = f"{_FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id"
+        body = json.dumps({
+            "receive_id": chat_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": text}),
+        }).encode()
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+
+    try:
+        loop = asyncio.get_event_loop()
+        token = await loop.run_in_executor(None, _get_token)
+        if token:
+            await loop.run_in_executor(None, _send, token)
+    except Exception:
+        _feishu_logger.warning("Failed to send Feishu reply to %s", chat_id, exc_info=True)
+
+
+async def _feishu_route_message(svc: Any, chat_id: str, text: str) -> None:
+    """Find or create a session for this Feishu chat and dispatch the message."""
+    mapping = _load_feishu_session_map()
+    session_id = mapping.get(chat_id)
+
+    # Validate the cached session still exists
+    if session_id and not svc.get_session(session_id):
+        session_id = None
+
+    if not session_id:
+        session = svc.create_session(title=f"Feishu:{chat_id[:30]}")
+        session_id = session.session_id
+        mapping[chat_id] = session_id
+        _save_feishu_session_map(mapping)
+        _feishu_logger.info("Created new session %s for Feishu chat %s", session_id, chat_id)
+
+    try:
+        result = await svc.send_message(session_id=session_id, content=text)
+        attempt_id = result.get("attempt_id") if isinstance(result, dict) else None
+        if attempt_id:
+            # Send the agent's reply back to Feishu when the attempt finishes
+            asyncio.create_task(_feishu_await_and_reply(svc, session_id, chat_id, attempt_id))
+    except Exception:
+        _feishu_logger.warning("Failed to route Feishu message to session %s", session_id, exc_info=True)
+
+
+@app.post("/feishu/webhook")
+async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Feishu webhook endpoint: receive events and route messages to the agent.
+
+    Handles:
+    - URL verification challenge (subscription setup in Feishu developer console)
+    - Signature verification via FEISHU_ENCRYPT_KEY when configured
+    - Verification token check via FEISHU_VERIFICATION_TOKEN when configured
+    - im.message.receive_v1 → session service routing
+    """
+    body_bytes = await request.body()
+
+    # Signature verification (skip when FEISHU_ENCRYPT_KEY is not configured)
+    if _FEISHU_ENCRYPT_KEY and not _feishu_verify_signature(request.headers, body_bytes):
+        _feishu_logger.warning("Feishu webhook rejected: invalid signature from %s", request.client)
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload: Dict[str, Any] = json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    # URL verification challenge — must respond before other security checks
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload.get("challenge", "")}
+
+    # Verification token check
+    if _FEISHU_VERIFICATION_TOKEN:
+        header = payload.get("header") or {}
+        incoming_token = str(header.get("token") or payload.get("token") or "")
+        if not incoming_token or not _hmac.compare_digest(incoming_token, _FEISHU_VERIFICATION_TOKEN):
+            _feishu_logger.warning("Feishu webhook rejected: invalid verification token from %s", request.client)
+            raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    event_type = str((payload.get("header") or {}).get("event_type") or "")
+
+    if event_type == "im.message.receive_v1":
+        event = payload.get("event") or {}
+        message = event.get("message") or {}
+        sender = event.get("sender") or {}
+
+        # Ignore bot-originated messages to prevent feedback loops
+        if sender.get("sender_type") == "bot":
+            return {"code": 0, "msg": "ok"}
+
+        chat_id = message.get("chat_id", "")
+        message_id = message.get("message_id", "")
+        if not chat_id or not message_id:
+            return {"code": 0, "msg": "ok"}
+
+        text = _extract_feishu_text(message)
+
+        # Strip @mentions (e.g. group chats)
+        for mention in (message.get("mentions") or []):
+            name = mention.get("name") or ""
+            if name:
+                text = text.replace(f"@{name}", "").strip()
+        text = text.strip()
+
+        if not text:
+            return {"code": 0, "msg": "ok"}
+
+        svc = _get_session_service()
+        if svc:
+            background_tasks.add_task(_feishu_route_message, svc, chat_id, text)
+            _feishu_logger.info(
+                "Queued Feishu message from chat %s (message_id=%s): %.80s",
+                chat_id, message_id, text,
+            )
+    else:
+        _feishu_logger.debug("Ignoring Feishu event type: %s", event_type or "(unknown)")
+
+    return {"code": 0, "msg": "ok"}
 
 
 # ============================================================================
