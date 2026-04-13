@@ -112,7 +112,14 @@ export function EChartsBlock({ config }: { config: string }) {
 
     setError(null);
     const chart = echarts.init(containerRef.current);
-    chart.setOption(merged);
+
+    try {
+      chart.setOption(merged);
+    } catch (e) {
+      chart.dispose();
+      setError(e instanceof Error ? e.message : "ECharts failed to render");
+      return;
+    }
 
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(containerRef.current);

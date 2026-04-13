@@ -2,6 +2,17 @@ import { useEffect, useId, useRef, useState } from "react";
 import mermaid from "mermaid";
 
 let mermaidInitialized = false;
+let renderCounter = 0;
+
+// Serialize mermaid.render() calls — mermaid uses global state and breaks under concurrency.
+let renderQueue: Promise<void> = Promise.resolve();
+function enqueueRender<T>(fn: () => Promise<T>): Promise<T> {
+  let resolve: (v: T) => void;
+  let reject: (e: unknown) => void;
+  const p = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  renderQueue = renderQueue.then(() => fn().then(resolve!, reject!), () => fn().then(resolve!, reject!));
+  return p;
+}
 
 const DIAGRAM_START_RE = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|timeline|mindmap|gitGraph|quadrantChart|xychart|sankey-beta|block-beta|architecture-beta|radar-beta)\b/i;
 
@@ -11,7 +22,7 @@ function ensureMermaidInitialized() {
   }
   mermaid.initialize({
     startOnLoad: false,
-    securityLevel: "strict",
+    securityLevel: "loose",
     theme: "neutral",
     themeVariables: {
       background: "transparent",
@@ -44,11 +55,21 @@ function stripHtmlFromLabel(text: string): string {
 }
 
 function sanitizeQuotedLabels(source: string): string {
-  // Mermaid node labels can break on nested quotes or HTML tags in model-generated text.
+  // Mermaid node labels can break on nested quotes, HTML tags, emoji, or special chars.
+  // Wrap bracket/paren/brace labels in double quotes and escape inner quotes.
   return source
-    .replace(/\[([^\]\n]*)\]/g, (_match, inner: string) => `[${stripHtmlFromLabel(inner).replace(/"/g, "'")}]`)
-    .replace(/\(([^\)\n]*)\)/g, (_match, inner: string) => `(${stripHtmlFromLabel(inner).replace(/"/g, "'")})`)
-    .replace(/\{([^\}\n]*)\}/g, (_match, inner: string) => `{${stripHtmlFromLabel(inner).replace(/"/g, "'")}}`);
+    .replace(/\[([^\]\n]*)\]/g, (_match, inner: string) => {
+      const clean = stripHtmlFromLabel(inner).replace(/"/g, "'");
+      return `["${clean}"]`;
+    })
+    .replace(/\(([^\)\n]*)\)/g, (_match, inner: string) => {
+      const clean = stripHtmlFromLabel(inner).replace(/"/g, "'");
+      return `("${clean}")`;
+    })
+    .replace(/\{([^\}\n]*)\}/g, (_match, inner: string) => {
+      const clean = stripHtmlFromLabel(inner).replace(/"/g, "'");
+      return `{"${clean}"}`;
+    });
 }
 
 /** Merge standalone `: event` continuation lines onto the preceding period line for timeline diagrams */
@@ -90,12 +111,14 @@ function buildRepairCandidates(raw: string): string[] {
 }
 
 export function MermaidBlock({ chart }: { chart: string }) {
-  const elementId = useId().replace(/:/g, "-");
+  const id = useId().replace(/:/g, "-");
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    // Unique token per effect invocation — survives React StrictMode double-mount.
+    const token = ++renderCounter;
     const source = chart.trim();
 
     if (!source) {
@@ -109,22 +132,24 @@ export function MermaidBlock({ chart }: { chart: string }) {
       const candidates = buildRepairCandidates(source);
       let lastError: unknown = null;
 
-      for (let i = 0; i < candidates.length; i += 1) {
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (cancelled) return;
         try {
-          const current = candidates[i];
-          const { svg, bindFunctions } = await mermaid.render(`mermaid-${elementId}-${i}`, current);
-          // Mermaid sometimes returns an error SVG instead of throwing — detect and reject it.
-          if (
-            svg.includes("Syntax error") ||
-            svg.includes("error-text") ||
-            svg.includes("error-icon") ||
-            svg.includes("#bomb")
-          ) {
-            throw new Error("Mermaid returned error SVG");
-          }
+          const current = candidates[index];
+          const renderId = `mermaid-${id}-${token}-${index}`;
+
+          const { svg, bindFunctions } = await enqueueRender(() =>
+            mermaid.render(renderId, current),
+          );
+
+          // Clean up the temp element mermaid may leave behind.
+          document.getElementById(renderId)?.remove();
+          document.getElementById(`d${renderId}`)?.remove();
+
           if (cancelled || !containerRef.current) {
             return;
           }
+
           containerRef.current.innerHTML = svg;
           bindFunctions?.(containerRef.current);
           setError(null);
@@ -137,8 +162,8 @@ export function MermaidBlock({ chart }: { chart: string }) {
       if (cancelled) {
         return;
       }
-      const message = lastError instanceof Error ? lastError.message : "Unable to render Mermaid diagram";
-      setError(message);
+
+      setError(lastError instanceof Error ? lastError.message : "Unable to render Mermaid diagram");
       if (containerRef.current) {
         containerRef.current.innerHTML = "";
       }
@@ -146,15 +171,14 @@ export function MermaidBlock({ chart }: { chart: string }) {
 
     void renderSafely();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [chart, elementId]);
+    return () => { cancelled = true; };
+  }, [chart, id]);
 
   if (error) {
     return (
       <div className="my-4 overflow-hidden rounded-2xl border border-amber-300/40 bg-amber-50/60 text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
         <div className="border-b border-current/10 px-4 py-2 text-xs font-medium">Mermaid render failed</div>
+        <pre className="m-0 overflow-x-auto border-b border-current/10 px-4 py-3 text-[11px] leading-relaxed whitespace-pre-wrap">{error}</pre>
         <pre className="m-0 overflow-x-auto p-4 text-[11px] leading-relaxed whitespace-pre-wrap">{chart}</pre>
       </div>
     );
@@ -162,10 +186,7 @@ export function MermaidBlock({ chart }: { chart: string }) {
 
   return (
     <div className="mermaid-block my-4 overflow-x-auto rounded-card border border-border bg-card p-4 text-foreground">
-      <div
-        ref={containerRef}
-        className="min-w-max [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:bg-transparent"
-      />
+      <div ref={containerRef} className="min-w-max [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:bg-transparent" />
     </div>
   );
 }

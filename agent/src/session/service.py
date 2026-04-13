@@ -64,9 +64,65 @@ _OUTPUT_FORMAT_PROMPT = (
     " keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.\n"
     "- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks\n"
     "  (```echarts ... ``` with a valid option object); do NOT produce ASCII/ANSI chart art.\n"
+    "- ECharts dual-axis rule: when any series uses \"yAxisIndex\": 1 you MUST define \"yAxis\" as a JSON\n"
+    "  array: [{primary axis}, {secondary axis}]. The key \"yAxis2\" does not exist in ECharts.\n"
     "- If you cannot provide valid ECharts JSON, fall back to a Markdown numeric table.\n"
     "- Never use ANSI escape codes or terminal color sequences in responses.\n"
 )
+
+
+import re as _re
+
+
+def _sanitize_echarts_blocks(text: str) -> str:
+    """Auto-repair common LLM mistakes in ```echarts ... ``` blocks.
+
+    Current repairs:
+    - ``yAxis2`` key → promote into a proper ``yAxis`` array so ECharts
+      dual-axis charts don't crash with "Cannot read properties of undefined".
+    """
+    _FENCE_RE = _re.compile(r'(```echarts\s*\n)(.*?)(\n```)', _re.DOTALL)
+
+    def _fix_block(m: _re.Match) -> str:  # type: ignore[type-arg]
+        fence_open, body, fence_close = m.group(1), m.group(2), m.group(3)
+        try:
+            obj = json.loads(body)
+        except Exception:
+            return m.group(0)  # leave unparseable blocks untouched
+
+        changed = False
+
+        # Fix: yAxis2 is not a valid ECharts key.  When it exists alongside a
+        # primary yAxis scalar, merge both into a [primary, secondary] array.
+        if 'yAxis2' in obj:
+            primary = obj.get('yAxis', {'type': 'value'})
+            secondary = obj.pop('yAxis2')
+            if isinstance(primary, dict):
+                obj['yAxis'] = [primary, secondary]
+            elif isinstance(primary, list):
+                # Already an array; just append secondary if missing
+                if len(primary) < 2:
+                    primary.append(secondary)
+                obj['yAxis'] = primary
+            obj.pop('yAxis2', None)
+            changed = True
+
+        # Ensure yAxis is an array when any series references yAxisIndex > 0
+        series = obj.get('series', [])
+        max_y_idx = 0
+        if isinstance(series, list):
+            for s in series:
+                if isinstance(s, dict):
+                    max_y_idx = max(max_y_idx, int(s.get('yAxisIndex', 0)))
+        if max_y_idx > 0 and isinstance(obj.get('yAxis'), dict):
+            obj['yAxis'] = [obj['yAxis']] + [{'type': 'value'} for _ in range(max_y_idx)]
+            changed = True
+
+        if not changed:
+            return m.group(0)
+        return fence_open + json.dumps(obj, ensure_ascii=False, indent=2) + fence_close
+
+    return _FENCE_RE.sub(_fix_block, text)
 
 
 from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
@@ -898,6 +954,7 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
+            final_text = _sanitize_echarts_blocks(final_text)
             if final_text:
                 try:
                     (run_dir / "report.md").write_text(final_text, encoding="utf-8")
