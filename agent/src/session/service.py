@@ -60,6 +60,7 @@ _OUTPUT_FORMAT_PROMPT = (
     " information. Plain code blocks are reserved for actual code (Python, SQL, bash, etc.) only."
     " Always use a Markdown pipe-table for named indicators or key-value pairs.\n"
     "- Render flowcharts and relationship diagrams as Mermaid code blocks (```mermaid ... ```).\n"
+    "- Mermaid layout: prefer top-down (TD) direction over left-right (LR) so diagrams render in portrait orientation.\n"
     "- Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes),"
     " keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.\n"
     "- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks\n"
