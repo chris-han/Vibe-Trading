@@ -12,7 +12,7 @@ const baseMarkdownProseClass =
 export function markdownProseClass(variant: "chat" | "report" = "report") {
   return cn(
     baseMarkdownProseClass,
-    variant === "report" && "rounded-xl border border-border bg-card p-4",
+    variant === "report" && "report rounded-xl border border-border bg-card p-4",
     variant === "chat" && "min-w-0"
   );
 }

@@ -46,3 +46,4 @@ run_scripts/
 agent/scripts/
 agent/uploads/
 agent/chris/
+.playwright-cli/

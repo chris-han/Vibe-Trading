@@ -24,6 +24,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 
 import logging
@@ -134,6 +136,41 @@ def _resolve_upload_dir(session_id: Optional[str] = None, run_id: Optional[str] 
 
 # Rich console for colored logs
 console = Console()
+
+_SPA_EXCLUDED_PREFIXES = (
+    "api",
+    "docs",
+    "health",
+    "openapi.json",
+    "redoc",
+    "run",
+    "runs",
+    "sessions",
+    "skills",
+    "swarm",
+    "system",
+    "upload",
+)
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve SPA assets and fall back to index.html for client-side routes."""
+
+    async def get_response(self, path: str, scope: Any):  # pragma: no cover - exercised through ASGI mount
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            normalized = path.strip("/")
+            first_segment = normalized.split("/", 1)[0] if normalized else ""
+            looks_like_asset = "." in Path(normalized).name if normalized else False
+            if (
+                exc.status_code != 404
+                or scope["method"] not in {"GET", "HEAD"}
+                or looks_like_asset
+                or first_segment in _SPA_EXCLUDED_PREFIXES
+            ):
+                raise
+            return await super().get_response("index.html", scope)
 
 
 # ============================================================================
@@ -2183,8 +2220,6 @@ def serve_main(argv: list[str] | None = None) -> int:
     import argparse
     import subprocess
     import uvicorn
-    from fastapi.staticfiles import StaticFiles
-
     parser = argparse.ArgumentParser(description="semantier Server")
     parser.add_argument("--port", type=int, default=8899, help="Listen port (default 8899)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
@@ -2211,7 +2246,7 @@ def serve_main(argv: list[str] | None = None) -> int:
         print(f"[dev] API: http://localhost:{args.port}")
     elif frontend_dist.exists():
         if not any(route.path == "/" for route in app.routes):
-            app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+            app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend")
         print(f"[prod] Frontend served from {frontend_dist}")
     else:
         print(f"[warn] No frontend build found at {frontend_dist}")
