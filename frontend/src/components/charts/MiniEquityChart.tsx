@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { VChart } from "@visactor/vchart";
 import { getChartTheme } from "@/lib/chart-theme";
+import { ensureRegistered } from "@/lib/vchart-register";
 import { useDarkMode } from "@/hooks/useDarkMode";
 
 interface Props {
@@ -11,16 +12,20 @@ interface Props {
 export function MiniEquityChart({ data, height = 80 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const { dark } = useDarkMode();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ref.current || data.length < 2) return;
+    ensureRegistered();
     const t = getChartTheme();
     const values = data.map((d) => Number(d.equity));
     const positive = values[values.length - 1] >= values[0];
     const color = positive ? t.upColor : t.downColor;
+    let chart: VChart | null = null;
 
-    const chart = new VChart(
-      {
+    try {
+      chart = new VChart(
+        {
         type: "area",
         background: "transparent",
         padding: 0,
@@ -51,11 +56,17 @@ export function MiniEquityChart({ data, height = 80 }: Props) {
         crosshair: { xField: { visible: false }, yField: { visible: false } },
         tooltip: { visible: false },
         animation: false,
-      },
-      { dom: ref.current }
-    );
+        },
+        { dom: ref.current }
+      );
 
-    chart.renderSync();
+      chart.renderSync();
+      setError(null);
+    } catch (e) {
+      chart?.release();
+      setError(e instanceof Error ? e.message : "Chart failed to render");
+      return;
+    }
 
     const ro = new ResizeObserver(() => {
       if (ref.current) chart.resize(ref.current.clientWidth, height);
@@ -68,6 +79,6 @@ export function MiniEquityChart({ data, height = 80 }: Props) {
   }, [data, dark, height]);
 
   if (data.length < 2) return null;
+  if (error) return null;
   return <div ref={ref} style={{ height }} className="rounded-lg overflow-hidden" />;
 }
-

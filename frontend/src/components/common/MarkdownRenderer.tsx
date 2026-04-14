@@ -75,11 +75,17 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
 /** Strip the <pre> wrapper when the child is a rich block (mermaid / vchart). */
 function MarkdownPre({ children, className, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: ReactNode }) {
   // ReactMarkdown renders <pre><code class="language-*">…</code></pre>.
-  // Only strip the <pre> wrapper for rich blocks we replace with custom components.
+  // MarkdownCode is called first and returns <Suspense> for vchart/mermaid blocks,
+  // so by the time MarkdownPre runs, `children` is a <Suspense> element (not a <code>).
+  // We strip <pre> for any non-DOM component child (Suspense, lazy components) OR if
+  // the child's className directly matches a rich-block language class.
   if (children && typeof children === "object" && !Array.isArray(children) && "props" in children) {
     const child = children as React.ReactElement<{ className?: string }>;
     const childClass = String(child.props?.className || "");
-    if (/(?:^|\s)language-(?:mermaid|vchart)(?:\s|$)/.test(childClass)) {
+    if (
+      typeof child.type !== "string" ||
+      /(?:^|\s)language-(?:mermaid|vchart)(?:\s|$)/.test(childClass)
+    ) {
       return <>{children}</>;
     }
   }

@@ -38,6 +38,7 @@ interface Props {
 export function CandlestickChart({ data, markers, indicators, height = 500 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<VChart | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [sub, setSub] = useState<Sub>("vol");
   const [range, setRange] = useState<Range>("ALL");
   const [overlays, setOverlays] = useState<Set<Overlay>>(new Set(["ma5", "ma20"]));
@@ -86,6 +87,7 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
 
   useEffect(() => {
     if (!containerRef.current || data.length === 0) return;
+    setError(null);
     const t = getChartTheme();
 
     const candleValues = data.map((d) => ({
@@ -234,10 +236,17 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       chartRef.current.release();
       chartRef.current = null;
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chart = new VChart(spec as any, { dom: containerRef.current });
-    chart.renderSync();
-    chartRef.current = chart;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const chart = new VChart(spec as any, { dom: containerRef.current });
+      chart.renderSync();
+      chartRef.current = chart;
+    } catch (e) {
+      chartRef.current?.release();
+      chartRef.current = null;
+      setError(e instanceof Error ? e.message : "Chart failed to render");
+      return;
+    }
 
     const ro = new ResizeObserver(() => {
       if (containerRef.current) chartRef.current?.resize(containerRef.current.clientWidth, height);
@@ -252,6 +261,9 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
 
   if (data.length === 0) {
     return <div className="text-muted-foreground text-sm p-4">No price data</div>;
+  }
+  if (error) {
+    return <div className="text-muted-foreground text-sm p-4">Chart unavailable</div>;
   }
 
   return (

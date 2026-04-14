@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import { VChart } from "@visactor/vchart";
 import { getChartTheme } from "@/lib/chart-theme";
 import { useDarkMode } from "@/hooks/useDarkMode";
+import { ensureRegistered } from "@/lib/vchart-register";
 
 interface MetricDef {
   key: string;
@@ -100,12 +101,15 @@ interface EquityChartOverlayProps {
 function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: EquityChartOverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { dark } = useDarkMode();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
     if (leftCurve.length === 0 && rightCurve.length === 0) return;
+    ensureRegistered();
 
     const t = getChartTheme();
+    let chart: VChart | null = null;
 
     // Merge dates from both curves and sort
     const dateSet = new Set<string>();
@@ -194,9 +198,16 @@ function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: Eq
       ],
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chart = new VChart(spec as any, { dom: ref.current });
-    chart.renderSync();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      chart = new VChart(spec as any, { dom: ref.current });
+      chart.renderSync();
+      setError(null);
+    } catch (e) {
+      chart?.release();
+      setError(e instanceof Error ? e.message : "Chart failed to render");
+      return;
+    }
 
     const ro = new ResizeObserver(() => {
       if (ref.current) chart.resize(ref.current.clientWidth, ref.current.clientHeight);
@@ -206,6 +217,7 @@ function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: Eq
   }, [leftCurve, rightCurve, leftLabel, rightLabel, dark]);
 
   if (leftCurve.length === 0 && rightCurve.length === 0) return null;
+  if (error) return <div className="text-sm text-muted-foreground p-4">Comparison chart unavailable</div>;
 
   return <div ref={ref} style={{ height: 320 }} />;
 }

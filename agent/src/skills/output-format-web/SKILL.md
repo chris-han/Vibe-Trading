@@ -20,11 +20,19 @@ category: tool
 
 **Allowed single types:** `line`, `bar`, `area`, `pie`, `scatter`, `radar`, `funnel`, `candlestick`.
 
-For multi-series of the **same** chart type (e.g. two lines), use a single type with `seriesField`:
+**Critical rule: every field name referenced in `xField`, `yField`, `seriesField`, `categoryField`, `valueField`, etc. MUST be an exact key present in the data `values` objects. Never invent a field name that is not in the data.**
+
+For multi-series of the **same** chart type (e.g. two lines), convert to **long/tidy format** — one row per data point with a `value` column and a `series` column:
 
 ```json
-{"type":"line","data":{"values":[{"month":"Jan","value":1200,"series":"Sales"},{"month":"Jan","value":1000,"series":"Target"}]},"xField":"month","yField":"value","seriesField":"series"}
+{"type":"line","data":{"values":[{"month":"Jan","value":1200,"series":"Sales"},{"month":"Jan","value":1000,"series":"Target"},{"month":"Feb","value":1400,"series":"Sales"},{"month":"Feb","value":1100,"series":"Target"}]},"xField":"month","yField":"value","seriesField":"series","axes":[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]}
 ```
+
+**Anti-pattern (WRONG) — wide format with mismatched field names:**
+```json
+{"type":"line","data":{"values":[{"month":"Jan","Sales":1200,"Target":1000}]},"xField":"month","yField":"value","seriesField":"type"}
+```
+This is wrong because `"value"` and `"type"` are not keys in the data rows. Always use long format for multi-series.
 
 For mixing **different** chart types (e.g. bar + line combo), use `type: "common"` with a `series` array. Each series must have its own `xField`/`yField`. Data is a top-level array with `id` per entry:
 
@@ -35,6 +43,7 @@ For mixing **different** chart types (e.g. bar + line combo), use `type: "common
 Do NOT use unsupported types. If a chart idea requires an unsupported type, fall back to a Markdown table.
 
 - **Data format:** `"data": {"values": [...]}` for most types. Pie uses `categoryField`/`valueField`; candlestick uses `openField`/`closeField`/`lowField`/`highField`.
-- **Axes:** Cartesian charts (line, bar, area, scatter, common, candlestick) MUST include an `axes` array: `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]`.
+- **Axes:** Cartesian charts (line, bar, area, scatter, common, candlestick) MUST include an `axes` array: `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]`. This applies to both single-series and multi-series charts.
+- **Self-check before output:** For every field name in the spec (`xField`, `yField`, `seriesField`, etc.), verify it is an exact key in the `values` array objects. If any field name is missing from the data, fix the data or the field name before outputting.
 - **Style:** Use VChart-native fields and styles only. VChart tooltips: use `"tooltip": {}`. VChart smooth lines: use `"line": {"style": {"curveType": "monotone"}}`.
 - If you cannot produce a valid VChart spec, fall back to a Markdown numeric table.

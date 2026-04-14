@@ -1,5 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { VChart } from "@visactor/vchart";
+import { ensureRegistered } from "@/lib/vchart-register";
+
+function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> {
+  const spec: Record<string, unknown> = { ...input };
+
+  const data = spec.data;
+  if (data && !Array.isArray(data) && typeof data === "object") {
+    const values = (data as { values?: unknown }).values;
+    if (Array.isArray(values)) {
+      spec.data = [{ id: "source", values }];
+    }
+  }
+
+  if (spec.type === "pie" && spec.isDonut === true && spec.innerRadius == null) {
+    spec.innerRadius = 0.6;
+  }
+
+  return spec;
+}
 
 /**
  * Renders a VChart chart from a JSON spec string inside a markdown code fence.
@@ -15,6 +34,7 @@ export function VChartBlock({ config }: { config: string }) {
 
   useEffect(() => {
     if (!containerRef.current) return;
+    ensureRegistered();
 
     let spec: Record<string, unknown>;
     try {
@@ -24,10 +44,10 @@ export function VChartBlock({ config }: { config: string }) {
       return;
     }
 
-    // Inject a transparent background if not specified
+    // Normalize common agent-emitted shorthand and inject a default background.
     const mergedSpec: Record<string, unknown> = {
       background: "transparent",
-      ...spec,
+      ...normalizeSpec(spec),
     };
 
     let chart: VChart | null = null;
@@ -37,7 +57,9 @@ export function VChartBlock({ config }: { config: string }) {
       setError(null);
     } catch (e) {
       chart?.release();
-      setError(e instanceof Error ? e.message : "VChart failed to render");
+      const msg = e instanceof Error ? e.message : "VChart failed to render";
+      console.error("[VChartBlock] render error:", msg, "\nspec:", JSON.stringify(mergedSpec, null, 2));
+      setError(msg);
       return;
     }
 
@@ -54,7 +76,10 @@ export function VChartBlock({ config }: { config: string }) {
 
   if (error) {
     return (
-      <pre className="my-2 whitespace-pre-wrap text-sm leading-relaxed">{config}</pre>
+      <div className="my-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+        <div className="mb-1 font-medium text-destructive">VChart error: {error}</div>
+        <pre className="whitespace-pre-wrap text-xs text-muted-foreground leading-relaxed">{config}</pre>
+      </div>
     );
   }
 

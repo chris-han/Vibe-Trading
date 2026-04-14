@@ -114,8 +114,8 @@ export function WelcomeScreen({ onExample }: Props) {
     <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center">
       {/* Header */}
       <div className="space-y-3">
-        <div className="h-16 w-16 mx-auto rounded-button flex items-center justify-center shadow-sm">
-          <img src="/avatar.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
+        <div className="h-16 w-16 mx-auto rounded-button bg-primary flex items-center justify-center shadow-sm">
+          <img src="/logo-wireframe.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
         </div>
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-foreground">semantier</h2>
@@ -173,5 +173,4 @@ export function WelcomeScreen({ onExample }: Props) {
     </div>
   );
 }
-
 

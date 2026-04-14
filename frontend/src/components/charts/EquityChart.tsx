@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EquityPoint } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { abbreviateNum } from "@/lib/formatters";
 import { VChart } from "@visactor/vchart";
+import { ensureRegistered } from "@/lib/vchart-register";
 import { useDarkMode } from "@/hooks/useDarkMode";
 
 interface Props {
@@ -13,18 +14,22 @@ interface Props {
 export function EquityChart({ data, height = 300 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const { dark } = useDarkMode();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ref.current || data.length === 0) return;
+    ensureRegistered();
     const t = getChartTheme();
+    let chart: VChart | null = null;
 
     const equityValues = data.map((d) => ({ time: d.time, value: Number(d.equity) }));
     const drawdownValues = data.map((d) => ({ time: d.time, value: Number(d.drawdown) * 100 }));
     const minDD = Math.min(...drawdownValues.map((d) => d.value));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chart = new VChart(
-      {
+    try {
+      chart = new VChart(
+        {
         type: "common",
         background: "transparent",
         layout: {
@@ -137,11 +142,18 @@ export function EquityChart({ data, height = 300 }: Props) {
         },
         animation: false,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      { dom: ref.current }
-    );
+        } as any,
+        { dom: ref.current }
+      );
 
-    chart.renderSync();
+      chart.renderSync();
+      setError(null);
+    } catch (e) {
+      chart?.release();
+      setError(e instanceof Error ? e.message : "Chart failed to render");
+      return;
+    }
+
     const ro = new ResizeObserver(() => {
       if (ref.current) chart.resize(ref.current.clientWidth, height);
     });
@@ -155,6 +167,8 @@ export function EquityChart({ data, height = 300 }: Props) {
   if (data.length === 0) {
     return <div className="text-muted-foreground text-sm p-4">No equity data</div>;
   }
+  if (error) {
+    return <div className="text-muted-foreground text-sm p-4">Chart unavailable</div>;
+  }
   return <div ref={ref} style={{ height }} />;
 }
-
