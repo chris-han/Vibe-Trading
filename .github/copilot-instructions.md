@@ -21,7 +21,7 @@
 - For browser debugging, use Chrome DevTools with remote Chrome on port `9222`. Do not use the integrated browser.
 - Use Markdown-native output for reports shown in the UI. Prefer Markdown tables, Mermaid, and VChart JSON; avoid ANSI art or terminal box drawing.
 - Frontend imports use the `@/` alias defined in `frontend/vite.config.ts` and `frontend/tsconfig.json`.
-- Mermaid, VChart, and legacy ECharts rendering flows through `frontend/src/components/common/MarkdownRenderer.tsx`. If rich content rendering breaks, debug that path first instead of patching page components.
+- Mermaid and VChart rendering flows through `frontend/src/components/common/MarkdownRenderer.tsx`. If rich content rendering breaks, debug that path first instead of patching page components.
 - Session, run, and swarm artifacts are file-backed under the data root resolved by `agent/runtime_env.py`. Do not hardcode `agent/runs` or `agent/sessions`; `TERMINAL_CWD` may redirect storage to nested paths such as `agent/chris/`.
 - If a task touches generated runtime output or model-rendered blocks, prefer fixing the sanitizer/prompt path at the source instead of only masking the frontend symptom.
 

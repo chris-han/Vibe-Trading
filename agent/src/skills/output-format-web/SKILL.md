@@ -35,5 +35,5 @@ Do NOT use unsupported types. If a chart idea requires an unsupported type, fall
 
 - **Data format:** `"data": {"values": [...]}` for most types. Pie uses `categoryField`/`valueField`; candlestick uses `openField`/`closeField`/`lowField`/`highField`.
 - **Axes:** Cartesian charts (line, bar, area, scatter, common, candlestick) MUST include an `axes` array: `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]`.
-- **Style:** Do NOT use ECharts properties (`xAxis`, `yAxis`, `areaStyle`, `lineStyle`, `color`, `smooth`, `tooltip.trigger`). VChart tooltips: use `"tooltip": {}`. VChart smooth lines: use `"line": {"style": {"curveType": "monotone"}}`.
+- **Style:** Use VChart-native fields and styles only. VChart tooltips: use `"tooltip": {}`. VChart smooth lines: use `"line": {"style": {"curveType": "monotone"}}`.
 - If you cannot produce a valid VChart spec, fall back to a Markdown numeric table.

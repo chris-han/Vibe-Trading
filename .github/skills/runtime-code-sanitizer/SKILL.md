@@ -1,23 +1,22 @@
 ---
 name: runtime-code-sanitizer
-description: "Add sanitizer functions and prompt guards for components that generate code at runtime (VChart JSON, legacy ECharts JSON, Mermaid diagrams, SQL, Python scripts). Use when: adding a new LLM output type that gets executed or rendered; reviewing whether an existing generator has validation; auditing runtime-generated code paths; fixing render crashes caused by invalid LLM output. Also installs the pre-commit hook that runs the checker automatically on every commit."
+description: "Add prompt guards for components that generate code at runtime (VChart JSON, Mermaid diagrams, SQL, Python scripts). Use when: adding a new LLM output type that gets executed or rendered; reviewing whether an existing generator has validation; auditing runtime-generated code paths; fixing render crashes caused by invalid LLM output. Also installs the pre-commit hook that runs the checker automatically on every commit."
 ---
 
 # Runtime Code Sanitizer
 
 ## Purpose
 
-Any component that takes LLM-generated text and passes it to a renderer or executor (VChart, legacy ECharts, Mermaid, Python `exec`, SQL, bash) must have:
+Any component that takes LLM-generated text and passes it to a renderer or executor (VChart, Mermaid, Python `exec`, SQL, bash) must have:
 
-1. **A server-side sanitizer** — post-processes LLM output before it is stored or streamed to the frontend
-2. **A prompt guard** — adds explicit rules to the system prompt so the LLM generates valid output in the first place
-3. **A pre-commit checker** — `scripts/check_sanitizers.py` verifies both exist whenever relevant files change
+1. **A prompt guard** — adds explicit rules to the system prompt so the LLM generates valid output in the first place
+2. **A pre-commit checker** — `scripts/check_sanitizers.py` verifies the prompt guard whenever relevant files change
 
 ---
 
 ## When to Use This Skill
 
-- You are adding a new `````vchart`````, legacy `````echarts`````, `````mermaid`````, `````sql`````, or other rendered/executed code fence type
+- You are adding a new `````vchart`````, `````mermaid`````, `````sql`````, or other rendered/executed code fence type
 - A renderer is crashing with undefineds, parse errors, or syntax errors from LLM output
 - You are onboarding a new LLM output channel (Feishu card, Slack block, etc.)
 - You want to audit what runtime-generated code paths currently have sanitization
@@ -36,8 +35,8 @@ In `_OUTPUT_FORMAT_PROMPT`, add an explicit rule for the output type. Example pa
 
 ```
 "- Prefer VChart JSON blocks for new charts.\n"
-"- Do NOT emit echarts blocks for new reports. Use vchart instead, or fall back to a Markdown table if unsure.\n"
-"- If a legacy ECharts example is ever produced and uses \"yAxisIndex\": N you MUST define \"yAxis\" as a JSON array with N+1 elements.\n"
+"- Render tables as Markdown pipe-tables.\n"
+"- Use Mermaid for diagrams and flowcharts.\n"
 ```
 
 Rules must be:
@@ -45,33 +44,11 @@ Rules must be:
 - Specific about the exact API shape
 - Fallback-aware ("fall back to a Markdown table if unsure")
 
-### 3. Add / update the sanitizer function
+### 3. Register the guard in the checker
 
-Add a `_sanitize_<type>_blocks(text: str) -> str` function near `_OUTPUT_FORMAT_PROMPT` in `service.py`. The function must:
-- Use a compiled regex to extract fenced blocks (e.g. ` ```vchart ... ``` ` or legacy ` ```echarts ... ``` `)
-- Parse the block content
-- Apply each repair deterministically
-- Return the original text unchanged if parsing fails
-- Only rewrite a block when a repair was actually needed (`changed` flag pattern)
+Add the new rule to [scripts/check_sanitizers.py](./scripts/check_sanitizers.py) so the pre-commit hook validates it.
 
-See the existing legacy `_sanitize_echarts_blocks()` in [service.py](../../../../agent/src/session/service.py) as the compatibility example. New chart work should target `vchart` first.
-
-### 4. Wire the sanitizer into the output pipeline
-
-In `_run_with_agent()`, call the sanitizer on `final_text` before writing `report.md`:
-
-```python
-final_text = _sanitize_echarts_blocks(final_text)  # legacy compatibility only
-# add new sanitizer calls here as needed:
-# final_text = _sanitize_vchart_blocks(final_text)
-# final_text = _sanitize_mermaid_blocks(final_text)
-```
-
-### 5. Register the type in the checker
-
-Add the new type to [scripts/check_sanitizers.py](./scripts/check_sanitizers.py) so the pre-commit hook validates it.
-
-### 6. Install the pre-commit hook (once per clone)
+### 4. Install the pre-commit hook (once per clone)
 
 ```bash
 cp .github/skills/runtime-code-sanitizer/scripts/pre-commit .git/hooks/pre-commit
@@ -87,14 +64,14 @@ python .github/skills/runtime-code-sanitizer/scripts/check_sanitizers.py --insta
 
 ## Sanitizer Contract
 
-Every sanitizer function must satisfy:
+Every prompt guard must satisfy:
 
 | Requirement | Why |
 |---|---|
-| Idempotent | Calling twice must not change output |
-| Fail-open | Parse error → return original text, never raise |
-| Only change what's broken | Don't reformat valid output |
-| Log repairs | `logger.debug("sanitized %s blocks", count)` |
+| States the positive form | "MUST use X" not just "never use Y" |
+| Names the exact key/format | Avoids ambiguity for the LLM |
+| Provides a fallback | LLM knows what to do when unsure |
+| One rule per output type | Keeps the prompt scannable |
 
 ---
 
@@ -113,18 +90,17 @@ Every prompt guard rule must satisfy:
 
 ## Known Sanitized Types
 
-| Type | Sanitizer | Prompt guard | Pre-commit check |
+| Type | Prompt guard | Pre-commit check |
 |---|---|---|---|
-| VChart JSON | prompt-first, no sanitizer yet | `_OUTPUT_FORMAT_PROMPT` VChart preference rule | ✅ |
-| Legacy ECharts JSON | `_sanitize_echarts_blocks()` | `_OUTPUT_FORMAT_PROMPT` legacy compatibility rule | ✅ |
+| VChart JSON | `_OUTPUT_FORMAT_PROMPT` VChart preference rule | ✅ |
+| Mermaid diagrams | `_OUTPUT_FORMAT_PROMPT` Mermaid rule | ✅ |
+| Markdown tables | `_OUTPUT_FORMAT_PROMPT` Markdown table rule | ✅ |
 
 ---
 
 ## Adding a New Type — Checklist
 
 - [ ] Prompt guard added to `_OUTPUT_FORMAT_PROMPT`
-- [ ] `_sanitize_<type>_blocks()` function added before the imports block
-- [ ] Sanitizer called on `final_text` in `_run_with_agent()`
-- [ ] Type registered in `scripts/check_sanitizers.py` `REQUIRED_TYPES`
+- [ ] Rule registered in `scripts/check_sanitizers.py`
 - [ ] Pre-commit hook installed (`--install-hook`)
 - [ ] Table row added in "Known Sanitized Types" above

@@ -59,65 +59,12 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
 _OUTPUT_FORMAT_PROMPT = (
     "Output format rules:\n"
     "- Prefer Markdown, Mermaid, and vchart blocks for rich visual output.\n"
-    "- Do NOT emit echarts blocks for new reports. Use vchart instead.\n"
-    "- If unsure, fall back to a Markdown table rather than emitting ECharts.\n"
-    "- If a legacy ECharts example is ever produced and uses yAxisIndex, you MUST define yAxis as a JSON array with enough entries for every referenced axis index.\n"
+    "- Render tables as Markdown pipe-tables.\n"
+    "- Use Mermaid for diagrams and flowcharts.\n"
+    "- Use vchart blocks for charts.\n"
+    "- If unsure, fall back to a Markdown table rather than emitting a chart fence.\n"
+    "- Never use ANSI art or terminal box-drawing characters.\n"
 )
-
-_ECHARTS_BLOCK_RE = re.compile(r"```echarts\s*(.*?)```", re.DOTALL | re.IGNORECASE)
-
-
-def _sanitize_echarts_blocks(text: str) -> str:
-    """Repair obviously broken legacy echarts blocks without changing valid text."""
-    if not text or "```echarts" not in text.lower():
-        return text
-
-    repaired = 0
-
-    def _fix_block(match: re.Match[str]) -> str:
-        nonlocal repaired
-        raw = match.group(1).strip()
-        try:
-            obj = json.loads(raw)
-        except Exception:
-            return match.group(0)
-
-        changed = False
-        if isinstance(obj, dict):
-            series = obj.get("series")
-            if isinstance(series, list):
-                max_axis_index = -1
-                for item in series:
-                    if isinstance(item, dict) and isinstance(item.get("yAxisIndex"), int):
-                        max_axis_index = max(max_axis_index, int(item["yAxisIndex"]))
-                if max_axis_index >= 0:
-                    y_axis = obj.get("yAxis")
-                    if isinstance(y_axis, dict):
-                        obj["yAxis"] = [y_axis]
-                        y_axis = obj["yAxis"]
-                        changed = True
-                    elif y_axis is None:
-                        obj["yAxis"] = [{} for _ in range(max_axis_index + 1)]
-                        y_axis = obj["yAxis"]
-                        changed = True
-                    if isinstance(y_axis, list) and len(y_axis) <= max_axis_index:
-                        y_axis.extend({} for _ in range(max_axis_index + 1 - len(y_axis)))
-                        changed = True
-
-            if "yAxis2" in obj and "yAxis" not in obj:
-                obj["yAxis"] = obj.pop("yAxis2")
-                changed = True
-
-        if not changed:
-            return match.group(0)
-
-        repaired += 1
-        return "```echarts\n" + json.dumps(obj, ensure_ascii=False, indent=2) + "\n```"
-
-    result = _ECHARTS_BLOCK_RE.sub(_fix_block, text)
-    if repaired:
-        logger.debug("sanitized %s echarts blocks", repaired)
-    return result
 
 
 def _load_output_format_skill(channel: str) -> str:
@@ -979,7 +926,6 @@ class SessionService:
                     sid[:8],
                 )
             if final_text:
-                final_text = _sanitize_echarts_blocks(final_text)
                 try:
                     (run_dir / "report.md").write_text(final_text, encoding="utf-8")
                 except Exception:

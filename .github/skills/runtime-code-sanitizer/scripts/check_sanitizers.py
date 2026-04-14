@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Pre-commit checker: verify that every runtime-generated code type has both
-a sanitizer function and a prompt guard in service.py.
+"""Pre-commit checker: verify that the output-format prompt keeps the VChart,
+Mermaid, and Markdown table rules and does not regress to legacy ECharts
+language.
 
 Usage:
   python check_sanitizers.py              # check only (exits non-zero on failure)
@@ -20,23 +21,20 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Config — add new output types here
+# Config — add prompt rules here
 # ---------------------------------------------------------------------------
 
-# Each entry:  (type_name, sanitizer_fn_name, prompt_guard_phrase)
-# prompt_guard_phrase: a substring that MUST appear in _OUTPUT_FORMAT_PROMPT
-REQUIRED_TYPES: list[tuple[str, str, str]] = [
-    (
-        "Legacy ECharts",
-        "_sanitize_echarts_blocks",
-        "Do NOT emit echarts blocks for new reports. Use vchart instead.",
-    ),
-    # Template for adding more types:
-    # (
-    #     "Mermaid",
-    #     "_sanitize_mermaid_blocks",
-    #     "Mermaid safety",
-    # ),
+REQUIRED_PROMPT_PHRASES: list[tuple[str, str]] = [
+    ("VChart charts", "Use vchart blocks for charts."),
+    ("Markdown tables", "Render tables as Markdown pipe-tables."),
+    ("Mermaid diagrams", "Use Mermaid for diagrams and flowcharts."),
+]
+
+FORBIDDEN_PROMPT_PHRASES = [
+    "ECharts",
+    "echarts",
+    "legacy chart",
+    "_sanitize_echarts_blocks",
 ]
 
 # Paths relative to repo root
@@ -84,33 +82,20 @@ def check_all(source: str) -> list[tuple[str, bool, str]]:
     """Return list of (check_label, passed, detail)."""
     results: list[tuple[str, bool, str]] = []
     prompt_text = _extract_output_format_prompt(source)
-
-    for type_name, sanitizer_fn, guard_phrase in REQUIRED_TYPES:
-        # 1. Sanitizer function defined
-        fn_defined = f"def {sanitizer_fn}(" in source
+    for label, phrase in REQUIRED_PROMPT_PHRASES:
+        present = phrase in prompt_text
         results.append((
-            f"{type_name}: sanitizer function '{sanitizer_fn}' defined",
-            fn_defined,
-            "" if fn_defined else f"  → add 'def {sanitizer_fn}(text: str) -> str:' to {SERVICE_PY}",
+            f"{label}: prompt guard contains '{phrase}'",
+            present,
+            "" if present else f"  → add a rule mentioning '{phrase}' to _OUTPUT_FORMAT_PROMPT",
         ))
 
-        # 2. Sanitizer called on final_text
-        call_pattern = re.compile(
-            rf'final_text\s*=\s*{re.escape(sanitizer_fn)}\s*\(', re.MULTILINE
-        )
-        fn_called = bool(call_pattern.search(source))
+    for phrase in FORBIDDEN_PROMPT_PHRASES:
+        absent = phrase not in prompt_text
         results.append((
-            f"{type_name}: sanitizer '{sanitizer_fn}' wired into output pipeline",
-            fn_called,
-            "" if fn_called else f"  → add 'final_text = {sanitizer_fn}(final_text)' before report.md write",
-        ))
-
-        # 3. Prompt guard present
-        guard_present = guard_phrase in prompt_text
-        results.append((
-            f"{type_name}: prompt guard contains '{guard_phrase}'",
-            guard_present,
-            "" if guard_present else f"  → add a rule mentioning '{guard_phrase}' to _OUTPUT_FORMAT_PROMPT",
+            f"Prompt guard no longer mentions '{phrase}'",
+            absent,
+            "" if absent else f"  → remove '{phrase}' from _OUTPUT_FORMAT_PROMPT",
         ))
 
     return results
