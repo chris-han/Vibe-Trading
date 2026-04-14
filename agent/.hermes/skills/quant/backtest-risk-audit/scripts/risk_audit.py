@@ -22,32 +22,47 @@ def load_data(run_dir):
 
 
 def drawdown_analysis(equity):
-    """Analyze historical drawdowns - depth, duration, recovery."""
+    """Analyze historical drawdowns - depth, duration, recovery.
+    
+    FIX: Properly tracks trough within each drawdown event and calculates recovery_days.
+    """
     peak = equity.cummax()
     drawdown = (equity - peak) / peak
     
     dd_events = []
     in_drawdown = False
     start_idx = None
+    current_trough = None
+    current_trough_val = 0
     
-    for idx, dd in drawdown.items():
+    # Track trough during drawdown, not after exit
+    for idx in drawdown.index:
+        dd = drawdown.loc[idx]
         if dd < -0.05 and not in_drawdown:
             in_drawdown = True
             start_idx = idx
-        elif in_drawdown and dd >= -0.01:
-            in_drawdown = False
-            trough_idx = drawdown.loc[start_idx:idx].idxmin()
-            recovery_mask = equity.loc[trough_idx:] >= equity.loc[start_idx]
-            recovery_idx = recovery_mask[recovery_mask].index[0] if recovery_mask.any() else None
-            
-            dd_events.append({
-                'start': str(start_idx),
-                'trough': str(trough_idx),
-                'end': str(idx),
-                'recovery': str(recovery_idx) if recovery_idx else None,
-                'depth': float(drawdown.loc[trough_idx]),
-                'duration_days': (idx - start_idx).days,
-            })
+            current_trough = idx
+            current_trough_val = dd
+        elif in_drawdown:
+            if dd < current_trough_val:
+                current_trough = idx
+                current_trough_val = dd
+            if dd >= -0.01:
+                in_drawdown = False
+                # Calculate recovery from trough to original peak
+                peak_val = equity.loc[start_idx]
+                recovery_mask = equity.loc[current_trough:] >= peak_val
+                recovery_idx = recovery_mask[recovery_mask].index[0] if recovery_mask.any() else None
+                
+                dd_events.append({
+                    'start': str(start_idx),
+                    'trough': str(current_trough),
+                    'end': str(idx),
+                    'recovery': str(recovery_idx) if recovery_idx else None,
+                    'depth': float(current_trough_val),
+                    'duration_days': (idx - start_idx).days,
+                    'recovery_days': (recovery_idx - current_trough).days if recovery_idx else None
+                })
     
     dd_events = sorted(dd_events, key=lambda x: x['depth'])[:5]
     
@@ -67,9 +82,10 @@ def drawdown_analysis(equity):
         'max_dd_trough': max_dd_idx.strftime('%Y-%m-%d') if hasattr(max_dd_idx, 'strftime') else str(max_dd_idx),
         'max_dd_recovery': recovery_idx.strftime('%Y-%m-%d') if recovery_idx and hasattr(recovery_idx, 'strftime') else 'Not recovered',
         'max_dd_duration_days': dd_duration,
+        'max_dd_recovery_days': (recovery_idx - max_dd_idx).days if recovery_idx else None,
         'top_drawdowns': dd_events,
-        'avg_drawdown': float(drawdown[drawdown < -0.05].mean()) if (drawdown < -0.05).any() else 0,
-        'time_in_drawdown': float((drawdown < -0.05).sum() / len(drawdown))
+        'avg_drawdown_depth': float(drawdown[drawdown < -0.05].mean()) if (drawdown < -0.05).any() else 0,
+        'time_in_drawdown_pct': float((drawdown < -0.05).sum() / len(drawdown) * 100)
     }
 
 
@@ -150,7 +166,10 @@ def tail_risk_analysis(equity):
 
 
 def overfitting_checks(equity, trades):
-    """Check IS vs OOS performance and trade-level metrics."""
+    """Check IS vs OOS performance and trade-level metrics.
+    
+    FIX: Filter to sell trades only for win rate calculation (buy trades have pnl=0).
+    """
     returns = equity.pct_change().dropna()
     
     split_idx = len(returns) * 2 // 3
@@ -169,13 +188,20 @@ def overfitting_checks(equity, trades):
     monthly_returns = returns.resample('ME').sum()
     monthly_win_rate = (monthly_returns > 0).mean()
     
-    if len(trades) > 0 and 'pnl' in trades.columns and 'cost' in trades.columns:
-        trade_returns = trades['pnl'] / trades['cost']
-        trade_win_rate = (trade_returns > 0).mean()
-        profit_factor = trade_returns[trade_returns > 0].sum() / abs(trade_returns[trade_returns < 0].sum()) if trade_returns[trade_returns < 0].sum() != 0 else 0
-    else:
-        trade_win_rate = 0
-        profit_factor = 0
+    # FIX: Filter to sell trades only (buy trades have pnl=0, skewing win rate)
+    trade_win_rate = 0
+    profit_factor = 0
+    total_trades = 0
+    if len(trades) > 0 and 'pnl' in trades.columns:
+        sell_trades = trades[trades['side'] == 'sell'] if 'side' in trades.columns else trades[trades['pnl'] != 0]
+        total_trades = len(sell_trades)
+        if total_trades > 0:
+            winning_trades = sell_trades[sell_trades['pnl'] > 0]
+            losing_trades = sell_trades[sell_trades['pnl'] < 0]
+            trade_win_rate = len(winning_trades) / total_trades
+            gross_profit = winning_trades['pnl'].sum()
+            gross_loss = abs(losing_trades['pnl'].sum())
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
     
     overfitting_flags = []
     if oos_return - is_return < -0.1:
@@ -188,15 +214,18 @@ def overfitting_checks(equity, trades):
         overfitting_flags.append("Low trade win rate (<35%)")
     
     return {
-        'is_return': float(is_return),
-        'oos_return': float(oos_return),
-        'return_degradation': float(oos_return - is_return),
+        'is_period': f"{returns.index[0].strftime('%Y-%m-%d')} to {returns.index[split_idx-1].strftime('%Y-%m-%d')}",
+        'oos_period': f"{returns.index[split_idx].strftime('%Y-%m-%d')} to {returns.index[-1].strftime('%Y-%m-%d')}",
+        'is_return_pct': float(is_return * 100),
+        'oos_return_pct': float(oos_return * 100),
+        'return_degradation_pct': float((oos_return - is_return) * 100),
         'is_sharpe': float(is_sharpe),
         'oos_sharpe': float(oos_sharpe),
         'sharpe_degradation': float(oos_sharpe - is_sharpe),
-        'monthly_win_rate': float(monthly_win_rate),
-        'trade_win_rate': float(trade_win_rate),
+        'monthly_win_rate_pct': float(monthly_win_rate * 100),
+        'trade_win_rate_pct': float(trade_win_rate * 100),
         'trade_profit_factor': float(profit_factor),
+        'total_trades': total_trades,
         'overfitting_flags': overfitting_flags,
         'overfitting_risk': 'HIGH' if len(overfitting_flags) >= 2 else 'MEDIUM' if len(overfitting_flags) == 1 else 'LOW'
     }
@@ -251,36 +280,145 @@ def risk_recommendations(dd_analysis, vol_analysis, tail_analysis):
     return recommendations
 
 
+def generate_cro_decision(dd_analysis, vol_analysis, tail_analysis, overfit_analysis, recommendations):
+    """Generate CRO-style decision framework with risk thresholds assessment."""
+    
+    high_priority_count = sum(1 for r in recommendations if r['priority'] == 'HIGH')
+    
+    if high_priority_count >= 3:
+        decision = "REJECTED"
+        status_color = "RED"
+    elif high_priority_count >= 1:
+        decision = "CONDITIONAL"
+        status_color = "YELLOW"
+    else:
+        decision = "APPROVED"
+        status_color = "GREEN"
+    
+    # Risk thresholds assessment
+    thresholds = {
+        'Max Drawdown': {'value': f"{dd_analysis['max_drawdown']:.1%}", 'status': 'RED' if dd_analysis['max_drawdown'] < -0.25 else 'YELLOW' if dd_analysis['max_drawdown'] < -0.15 else 'GREEN'},
+        'Annual Volatility': {'value': f"{vol_analysis['annual_volatility']:.1%}", 'status': 'RED' if vol_analysis['annual_volatility'] > 0.25 else 'YELLOW' if vol_analysis['annual_volatility'] > 0.15 else 'GREEN'},
+        'CVaR/VaR Ratio': {'value': f"{tail_analysis['cvar_var_ratio']:.2f}x", 'status': 'RED' if tail_analysis['cvar_var_ratio'] > 1.5 else 'YELLOW' if tail_analysis['cvar_var_ratio'] > 1.3 else 'GREEN'},
+        'Kurtosis': {'value': f"{tail_analysis['kurtosis']:.1f}", 'status': 'RED' if tail_analysis['kurtosis'] > 10 else 'YELLOW' if tail_analysis['kurtosis'] > 5 else 'GREEN'},
+        'OOS Sharpe Degradation': {'value': f"{overfit_analysis['sharpe_degradation']:.2f}", 'status': 'RED' if overfit_analysis['sharpe_degradation'] < -0.5 else 'YELLOW' if overfit_analysis['sharpe_degradation'] < -0.3 else 'GREEN'},
+        'Trade Win Rate': {'value': f"{overfit_analysis['trade_win_rate_pct']:.1f}%", 'status': 'RED' if overfit_analysis['trade_win_rate_pct'] < 35 else 'YELLOW' if overfit_analysis['trade_win_rate_pct'] < 45 else 'GREEN'},
+    }
+    
+    return {
+        'decision': decision,
+        'status_color': status_color,
+        'high_priority_issues': high_priority_count,
+        'risk_thresholds': thresholds,
+        'deployment_prerequisites': [
+            'Stop-loss logic implemented' if any(r['category'] == 'Stop-Loss' for r in recommendations) else 'N/A',
+            'Position sizing adjusted for target vol' if any(r['category'] == 'Position Sizing' for r in recommendations) else 'N/A',
+            'Overfitting concerns addressed' if overfit_analysis['overfitting_risk'] != 'LOW' else 'N/A',
+            'Tail hedge mechanism evaluated' if any(r['category'] == 'Tail Risk Hedge' for r in recommendations) else 'Optional',
+        ]
+    }
+
+
 def main(run_dir):
-    """Run complete risk audit and save results."""
+    """Run complete risk audit and save results with formatted console output."""
     run_dir = Path(run_dir)
     
-    print("=" * 80)
-    print("RISK AUDIT REPORT")
-    print("=" * 80)
+    print("=" * 60)
+    print("BACKTEST RISK AUDIT")
+    print(f"Run: {run_dir.name}")
+    print("=" * 60)
     
+    # Load data
+    print("\n[1/6] Loading data...")
     equity, trades = load_data(run_dir)
-    print(f"\nData loaded: {len(equity)} days, {len(trades)} trades")
+    print(f"  - Equity curve: {len(equity)} days ({equity.index[0].date()} to {equity.index[-1].date()})")
+    print(f"  - Trades: {len(trades)} records")
     
+    # Drawdown analysis
+    print("\n[2/6] Analyzing drawdowns...")
     dd_analysis = drawdown_analysis(equity)
+    print(f"  - Max drawdown: {dd_analysis['max_drawdown']:.1%}")
+    print(f"  - Peak: {dd_analysis['max_dd_peak']} -> Trough: {dd_analysis['max_dd_trough']}")
+    print(f"  - Recovery: {dd_analysis['max_dd_recovery']}")
+    print(f"  - Time in drawdown (>5%): {dd_analysis['time_in_drawdown_pct']:.1f}%")
+    
+    # Volatility assessment
+    print("\n[3/6] Assessing volatility...")
     vol_analysis = volatility_assessment(equity)
+    print(f"  - Annual volatility: {vol_analysis['annual_volatility']:.1%}")
+    print(f"  - Downside volatility: {vol_analysis['downside_volatility']:.1%}")
+    print(f"  - Vol clustering (AC1): {vol_analysis['vol_clustering_ac1']:.3f} {'(SIGNIFICANT)' if vol_analysis['vol_clustering_significant'] else ''}")
+    print(f"  - Kurtosis: {vol_analysis['volatility_kurtosis']:.1f}")
+    
+    # Tail risk analysis
+    print("\n[4/6] Computing tail risk...")
     tail_analysis = tail_risk_analysis(equity)
+    print(f"  - 95% VaR (daily): {tail_analysis['var_95_daily']:.2%}")
+    print(f"  - 95% CVaR (daily): {tail_analysis['cvar_95_daily']:.2%}")
+    print(f"  - CVaR/VaR ratio: {tail_analysis['cvar_var_ratio']:.2f}x")
+    print(f"  - Worst day: {tail_analysis['worst_day_return']:.2%}")
+    
+    # Overfitting checks
+    print("\n[5/6] Checking for overfitting...")
     overfit_analysis = overfitting_checks(equity, trades)
+    print(f"  - IS return: {overfit_analysis['is_return_pct']:.1f}%, OOS return: {overfit_analysis['oos_return_pct']:.1f}%")
+    print(f"  - IS Sharpe: {overfit_analysis['is_sharpe']:.2f}, OOS Sharpe: {overfit_analysis['oos_sharpe']:.2f}")
+    print(f"  - Trade win rate: {overfit_analysis['trade_win_rate_pct']:.1f}%")
+    print(f"  - Overfitting risk: {overfit_analysis['overfitting_risk']}")
+    if overfit_analysis['overfitting_flags']:
+        for flag in overfit_analysis['overfitting_flags']:
+            print(f"    ⚠ {flag}")
+    
+    # Risk recommendations
+    print("\n[6/6] Generating recommendations...")
     recommendations = risk_recommendations(dd_analysis, vol_analysis, tail_analysis)
     
+    # Add overfitting recommendation if needed
+    if overfit_analysis['overfitting_risk'] in ['HIGH', 'MEDIUM']:
+        recommendations.append({
+            'category': 'Overfitting Mitigation',
+            'issue': f"Overfitting risk: {overfit_analysis['overfitting_risk']}",
+            'recommendation': 'Simplify model, reduce parameters, or expand test period',
+            'priority': 'HIGH' if overfit_analysis['overfitting_risk'] == 'HIGH' else 'MEDIUM'
+        })
+    
+    # Add signal quality recommendation if win rate low
+    if overfit_analysis['trade_win_rate_pct'] < 45:
+        recommendations.append({
+            'category': 'Signal Quality',
+            'issue': f"Trade win rate {overfit_analysis['trade_win_rate_pct']:.1f}% below 45% threshold",
+            'recommendation': 'Improve entry signals with additional filters',
+            'priority': 'HIGH' if overfit_analysis['trade_win_rate_pct'] < 35 else 'MEDIUM'
+        })
+    
+    # Sort by priority
+    priority_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
+    recommendations.sort(key=lambda x: priority_order.get(x['priority'], 3))
+    
+    for i, rec in enumerate(recommendations, 1):
+        print(f"  {i}. [{rec['priority']}] {rec['category']}: {rec['recommendation']}")
+    
+    # CRO decision
+    cro_decision = generate_cro_decision(dd_analysis, vol_analysis, tail_analysis, overfit_analysis, recommendations)
+    print("\n" + "=" * 60)
+    print(f"FINAL CRO RECOMMENDATION: {cro_decision['decision']}")
+    print("=" * 60)
+    
+    # Save results
     results = {
         'drawdown_analysis': dd_analysis,
         'volatility_assessment': vol_analysis,
         'tail_risk': tail_analysis,
         'overfitting_checks': overfit_analysis,
-        'recommendations': recommendations
+        'recommendations': recommendations,
+        'cro_decision': cro_decision
     }
     
     output_path = run_dir / "artifacts" / "risk_audit.json"
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2, default=str)
-    
     print(f"\nResults saved to: {output_path}")
+    
     return results
 
 
