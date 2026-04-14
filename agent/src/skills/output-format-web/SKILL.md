@@ -12,6 +12,7 @@ category: tool
 - Mermaid syntax: **always open with a diagram-type keyword on the first line**, e.g. `graph TD` or `flowchart TD`. Never write `top-down`, `left-right`, or any other English direction phrase as the first line — these are not valid Mermaid syntax. Valid opening keywords: `graph TD`, `graph LR`, `flowchart TD`, `flowchart LR`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`, `erDiagram`, `gantt`, `pie`, `timeline`, `mindmap`, `gitGraph`.
 - Mermaid layout: use `TD` (top-down) orientation for most diagrams; use `LR` only when node labels are very wide.
 - Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes), keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.
+- Mermaid timeline safety: for `timeline`, write section headers as `section Label` only, not `section Label : detail`; keep event text on the same `Period : Event` line and avoid HTML like `<br>`.
 - Render time-series, bar charts, pie charts, and quantitative plots as VChart JSON blocks (` ```vchart ... ``` ` with a valid VChart spec object); do NOT produce ASCII/ANSI chart art.
 - Never use ANSI escape codes or terminal color sequences in responses.
 

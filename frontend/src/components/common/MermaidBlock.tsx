@@ -112,27 +112,40 @@ function sanitizeTimelineDiagram(source: string): string {
 function buildRepairCandidates(raw: string): string[] {
   const base = stripFences(raw);
   const clipped = trimToDiagramBody(base);
+  const isTimeline = /^\s*timeline\b/i.test(clipped);
   const sanitized = sanitizeQuotedLabels(clipped);
   const sanitizedUnescaped = sanitizeQuotedLabels(clipped.replace(/\\"/g, '"'));
   const merged = mergeTimelineContinuations(clipped);
   const mergedSanitized = sanitizeQuotedLabels(mergeTimelineContinuations(sanitizedUnescaped));
   const timelineSanitized = sanitizeTimelineDiagram(clipped);
   const timelineMergedSanitized = sanitizeTimelineDiagram(mergeTimelineContinuations(clipped));
-  const candidates = [
-    clipped,
-    sanitized,
-    sanitizedUnescaped,
-    timelineSanitized,
-    timelineMergedSanitized,
-    merged,
-    mergedSanitized,
-    sanitizeQuotedLabels(
-      clipped
-        .split("\n")
-        .filter((line) => !/^\s{0,3}#{1,6}\s+/.test(line))
-        .join("\n"),
-    ),
-  ];
+  const headingStrippedSanitized = sanitizeQuotedLabels(
+    clipped
+      .split("\n")
+      .filter((line) => !/^\s{0,3}#{1,6}\s+/.test(line))
+      .join("\n"),
+  );
+
+  // Mermaid timeline parsing is brittle: malformed section headers like
+  // `section 2022 : Defensive` can throw before later repair candidates run.
+  // Try the normalized timeline forms first so we avoid poisoning the render.
+  const candidates = isTimeline
+    ? [
+        timelineMergedSanitized,
+        timelineSanitized,
+        mergeTimelineContinuations(timelineSanitized),
+        merged,
+      ]
+    : [
+        clipped,
+        sanitized,
+        sanitizedUnescaped,
+        timelineSanitized,
+        timelineMergedSanitized,
+        merged,
+        mergedSanitized,
+        headingStrippedSanitized,
+      ];
 
   // If no recognized diagram-type keyword was found on the first line, prepend "graph TD"
   // to catch cases where the model wrote "top-down" or similar invalid openers.

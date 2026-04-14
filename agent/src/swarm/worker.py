@@ -253,7 +253,10 @@ def run_worker(
     # Configure hermes built-in file/terminal tools to write into the artifact dir.
     try:
         from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
-        register_task_env_overrides(str(task_id), {"cwd": str(artifact_dir)})
+        register_task_env_overrides(str(task_id), {
+            "cwd": str(artifact_dir),
+            "safe_write_root": str(artifact_dir),
+        })
         _hermes_overrides_set = True
     except Exception:
         _hermes_overrides_set = False

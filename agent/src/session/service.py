@@ -854,7 +854,10 @@ class SessionService:
 
         try:
             from tools.terminal_tool import register_task_env_overrides
-            register_task_env_overrides(sid, {"cwd": str(file_root)})
+            register_task_env_overrides(sid, {
+                "cwd": str(file_root),
+                "safe_write_root": str(file_root),
+            })
         except Exception:
             pass  # Non-fatal: TERMINAL_CWD env-var fallback still applies
 
@@ -903,7 +906,10 @@ class SessionService:
         # artifact directory instead of the process cwd.
         try:
             from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
-            register_task_env_overrides(sid, {"cwd": str(run_dir / "artifacts")})
+            register_task_env_overrides(sid, {
+                "cwd": str(run_dir / "artifacts"),
+                "safe_write_root": str(run_dir / "artifacts"),
+            })
             _hermes_overrides_set = True
         except Exception:
             _hermes_overrides_set = False

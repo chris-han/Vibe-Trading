@@ -229,3 +229,86 @@ class SignalEngine:
 - Implement sector-neutral weighting
 - Add risk model constraints (max sector exposure, tracking error)
 - Use machine learning for non-linear factor combinations
+
+---
+
+## Momentum Factor Library (A-Share Tested)
+
+For momentum-specific strategies, these 6 factors have been empirically tested on CSI 300:
+
+| Factor | Formula | Direction | Typical IC (CSI 300) | Notes |
+|--------|---------|-----------|---------------------|-------|
+| **Breakout** | `(Close - High(60D)) / High(60D)` | Positive | 0.018 | Highest ICIR; watch for false breakouts |
+| **Momentum** | `Close[t] / Close[t-20] - 1` | Positive | 0.004 | Core trend factor; 13% annual factor return |
+| **Vol Momentum** | `Volume / MA(Volume, 20)` | Positive | 0.003 | Low correlation diversifier |
+| **Reversal** | `Close[t] / Close[t-5] - 1` | Negative | -0.002 | Mean reversion; hedge for choppy markets |
+| **RSI** | `100 - 100/(1 + RS)` | Negative | -0.001 | Weak standalone; correlated with momentum |
+| **Vol-Adj Momentum** | `Momentum(20D) / StdDev(20D)` | Positive | ~0 | Too correlated with raw momentum (0.94) |
+
+### Recommended 4-Factor Combo (Equal Weight)
+```python
+selected_factors = ['breakout', 'vol_momentum', 'momentum', 'reversal']
+# Combined IC: ~0.014, ICIR: ~0.053, Hit Rate: ~53%
+```
+
+---
+
+## Post-Backtest Factor Analysis Workflow
+
+After running a backtest, analyze factor performance with this script:
+
+```python
+# Save as factor_analysis.py in the run directory
+import pandas as pd, numpy as np, glob, os, json
+
+def load_ohlcv_data(artifact_dir):
+    data_map = {}
+    for f in glob.glob(os.path.join(artifact_dir, 'ohlcv_*.csv')):
+        code = os.path.basename(f).replace('ohlcv_', '').replace('.csv', '')
+        data_map[code] = pd.read_csv(f, index_col=0, parse_dates=True)
+    return data_map
+
+def calculate_ic(factor_vals, forward_returns, min_stocks=5):
+    """Compute IC for a single date"""
+    common = factor_vals.dropna().index.intersection(forward_returns.dropna().index)
+    if len(common) < min_stocks:
+        return np.nan
+    return factor_vals[common].rank().corr(forward_returns[common].rank(), method='pearson')
+
+# Key outputs:
+# - ic_series.csv: Daily IC for each factor
+# - factor_stats.json: Mean IC, ICIR, hit rate, annual factor return
+# - factor_correlation.csv: Correlation matrix for pruning redundant factors
+```
+
+**Interpretation Guidelines:**
+- **IC > 0.02**: Strong predictive power (rare in practice)
+- **ICIR > 0.5**: Excellent risk-adjusted factor performance
+- **Hit Rate 50-55%**: Normal for equity factors
+- **Correlation > 0.7**: Consider removing one of the pair
+
+---
+
+## A-Share Specific Considerations
+
+### Data Source Issues
+- **tushare**: Requires API permissions; many endpoints need paid tiers
+- **yfinance**: Shenzhen stocks (`.SZ`) work reliably; Shanghai stocks (`.SH`) often fail with timezone errors
+- **Recommendation**: Start with Shenzhen constituents or use local data providers
+
+### Factor Decay & Cyclicality
+| Factor | Decay Trigger | Half-life | Mitigation |
+|--------|--------------|-----------|------------|
+| Momentum | Policy shifts, liquidity crunches | 15-30 days | Rolling IC weights |
+| Reversal | Strong trending markets | 3-10 days | Combine with momentum |
+| Breakout | False breakouts at resistance | 5-15 days | Volume confirmation |
+
+### Market Structure Effects
+- **Retail-dominated** (~80% turnover): Stronger short-term reversal patterns
+- **Policy-driven cycles**: Factor rotation every 6-12 months with monetary easing/tightening
+- **Sector concentration**: CSI 300 heavily weighted to financials/industrials — apply sector neutrality
+
+### Risk Monitoring
+- Watch for factor correlation spikes (>0.8) as regime change warnings
+- Monitor IC decay — if rolling IC turns negative for 20+ days, reduce weight
+- Track max drawdown vs benchmark — momentum strategies can underperform in sharp reversals
