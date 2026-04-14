@@ -18,7 +18,7 @@ category: tool
 
 ## VChart Spec Rules
 
-**Allowed single types:** `line`, `bar`, `area`, `pie`, `scatter`, `radar`, `funnel`, `candlestick`.
+**Allowed single types:** `line`, `bar`, `area`, `pie`, `scatter`, `radar`, `funnel`, `gauge`, `circularProgress`, `linearProgress`, `wordCloud`, `waterfall`, `histogram`, `rose`, `rangeColumn`, `rangeArea`, `boxPlot`, `heatmap`, `sunburst`, `circlePacking`, `treemap`, `sankey`, `correlation`, `sequence`, `map`, `candlestick`.
 
 **Critical rule: every field name referenced in `xField`, `yField`, `seriesField`, `categoryField`, `valueField`, etc. MUST be an exact key present in the data `values` objects. Never invent a field name that is not in the data.**
 

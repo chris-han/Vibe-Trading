@@ -23,7 +23,8 @@
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.6.0",
-    "zustand": "^5.0.0"
+    "zustand": "^5.0.0",
+    "superpowers": "github:obra/superpowers#systematic-debugging"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^11.12.0",

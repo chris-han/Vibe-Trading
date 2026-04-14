@@ -7,8 +7,8 @@
 /* Autaut Grotesk - Local variable font face */
 @font-face {
   font-family: "Autaut Grotesk";
-  src: url("/fonts/AutautGrotesk-VF.woff2") format("woff2-variations");
-  font-weight: 400 900;
+  src: url("/font/AutautGrotesk-Regular.woff2") format("woff2");
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }

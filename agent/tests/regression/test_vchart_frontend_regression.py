@@ -46,19 +46,46 @@ def _read(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 REQUIRED_CHART_REGISTRARS = [
+    # Cartesian
     "registerLineChart",
     "registerBarChart",
     "registerAreaChart",
-    "registerPieChart",
     "registerScatterChart",
+    "registerHistogramChart",
+    "registerRangeColumnChart",
+    "registerRangeAreaChart",
+    "registerWaterfallChart",
+    "registerBoxplotChart",
+    "registerHeatmapChart",
+    # Polar / circular
+    "registerPieChart",
+    "registerRoseChart",
     "registerRadarChart",
     "registerFunnelChart",
+    "registerGaugeChart",
+    "registerCircularProgressChart",
+    "registerLinearProgressChart",
+    "registerSunburstChart",
+    "registerTreemapChart",
+    "registerSankeyChart",
+    # Specialised
+    "registerWordCloudChart",
+    "registerWordCloudShapeChart",
+    # Combo
     "registerCommonChart",
 ]
 
 REQUIRED_AXIS_REGISTRARS = [
     "registerCartesianLinearAxis",
     "registerCartesianBandAxis",
+    "registerCartesianTimeAxis",
+    "registerCartesianLogAxis",
+    "registerPolarLinearAxis",
+    "registerPolarBandAxis",
+    "registerIndicator",
+    "registerDataZoom",
+    "registerBrush",
+    "registerFormatPlugin",
 ]
 
 REQUIRED_EXTENSION_REGISTRARS = [
@@ -118,7 +145,8 @@ class TestVChartRegistration:
         assert m, "Could not parse VChart.useRegisters([...]) block"
         registered = {s.strip().rstrip(",") for s in m.group(1).split(",") if s.strip()}
         for symbol in registered:
-            if not symbol:
+            # Skip blank entries and non-identifier tokens (e.g. "...")
+            if not symbol or not re.match(r"^[A-Za-z_$][A-Za-z0-9_$]*$", symbol):
                 continue
             assert re.search(rf"\bimport\b.*\b{re.escape(symbol)}\b", src), (
                 f"Symbol '{symbol}' is passed to useRegisters but not imported."
