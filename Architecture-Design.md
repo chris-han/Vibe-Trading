@@ -755,6 +755,22 @@ These tests live in:
 - [test_hermes_sse_regression.py](/home/chris/repo/Vibe-Trading/backend/tests/regression/test_hermes_sse_regression.py)
 - [test_backtest_bootstrap.py](/home/chris/repo/Vibe-Trading/backend/tests/regression/test_backtest_bootstrap.py)
 
+**File I/O sandbox invariants** are covered by a dedicated suite:
+
+| Test | Guarantee |
+|------|-----------|
+| `TestRegisteredCwdAnchor` | `terminal_tool` always passes the registered task cwd to `env.execute()`, not just when `workdir` is explicit |
+| `TestCwdDriftPrevention` | `env.cwd` mutation from an internal `cd` inside a command does not leak into subsequent calls |
+| `TestWriteFileCwdAnchor` | `write_file_tool` routes to the correct task-scoped `_get_file_ops` and blocks sensitive paths |
+| `TestRegisterTaskEnvOverrides` | Override registry set/clear/isolation/replace mechanics are correct |
+| `TestWrapCommandCwdInjection` | `_wrap_command` always uses the provided cwd argument, ignoring drifted `self.cwd` |
+| `TestLocalEnvironmentExecuteCwdFallback` | `BaseEnvironment.execute()` applies explicit cwd arg or falls back to `self.cwd` |
+| `TestWriteSafeRootIntegration` | `HERMES_WRITE_SAFE_ROOT` allows writes inside the root, blocks outside, and blocks symlink escapes |
+
+This suite lives in:
+
+- [hermes-agent/tests/tools/test_task_cwd_sandbox.py](/home/chris/repo/Vibe-Trading/hermes-agent/tests/tools/test_task_cwd_sandbox.py)
+
 Any future refactor of session runtime, swarm runtime, or backtest tool behavior must preserve these invariants.
 
 ---
@@ -2175,6 +2191,22 @@ Hermes resolves an `effective_task_id` inside `run_conversation()`. Passing `tas
 
 Hermes runs concurrent tool calls via `ThreadPoolExecutor`. The `register_task_env_overrides` lookup is keyed by `task_id` (a plain dict lookup), not by Python `contextvars`, so it is **thread-safe by design** — no `copy_context()` plumbing is needed at the VT layer. The fix in `hermes-agent/run_agent.py` that propagates `contextvars` for `_session_runs_dir_var` (used by `vibe_trading_helper`) still applies.
 
+**CWD drift regression (pltr_ohlcv incident)**
+
+When a generated script is executed with a `cd /repo/agent && python /abs/script.py` command, the bash `eval` inside `_wrap_command` runs the `cd` after the anchor `cd <registered_cwd>` has already been applied. This mutates `env.self.cwd` via `_update_cwd` for subsequent calls, effectively escaping the registered anchor. A concrete incident was `pltr_data.py` writing `open('pltr_ohlcv.json', 'w')` to `agent/` instead of the run's artifact directory.
+
+**Fix:** `terminal_tool` now resolves `effective_execute_cwd = workdir if workdir else registered_cwd` and passes it explicitly to `env.execute()` on every foreground call. The registered task cwd (from `_task_env_overrides[task_id]`) is re-applied on each call regardless of `env.cwd` drift from prior commands. An explicit `workdir` argument from the LLM still takes precedence.
+
+```python
+# hermes-agent/tools/terminal_tool.py  (foreground execution path)
+registered_cwd = cwd  # resolved from overrides or config above
+effective_execute_cwd = workdir if workdir else registered_cwd
+execute_kwargs = {"timeout": effective_timeout}
+if effective_execute_cwd:
+    execute_kwargs["cwd"] = effective_execute_cwd
+result = env.execute(command, **execute_kwargs)
+```
+
 **Enforcement Summary:**
 
 | Escape path | Guard | Implementation |
@@ -2183,8 +2215,21 @@ Hermes runs concurrent tool calls via `ThreadPoolExecutor`. The `register_task_e
 | `write_file` — absolute out-of-tree | Hermes `write_file` resolves relative to `cwd`; absolute paths pass through | caller's responsibility |
 | `bash` / `terminal` — relative cwd writes | `cwd` override applied to all terminal tool invocations | `register_task_env_overrides` in `service.py` / `worker.py` |
 | Agent-generated scripts via bash | Inherits enforced cwd | same |
+| `env.cwd` drift from internal `cd` in commands | Registered task cwd re-passed on every `env.execute()` call | `terminal_tool.py` foreground path |
 | Missing `state.json` on backtest run dir | Propagated after `run_id` redirect | `session/service.py` |
 | Context vars lost in thread pool workers (finance tools) | `copy_context()` propagated into each `executor.submit` | `hermes-agent/run_agent.py` |
+
+**Unit test coverage — `hermes-agent/tests/tools/test_task_cwd_sandbox.py`:**
+
+| Test group | Tests | What it guards |
+|-----------|-------|----------------|
+| `TestRegisteredCwdAnchor` (4) | Registered cwd injected on every call; global fallback; explicit `workdir` wins; all consecutive calls anchored | Core fix: task override cwd always reaches `env.execute()` |
+| `TestCwdDriftPrevention` (2) | `env.cwd` mutation after a `cd`-escape does not bleed into next call; no-override case uses config cwd not drifted `env.cwd` | The pltr_ohlcv regression itself |
+| `TestWriteFileCwdAnchor` (5) | `write_file_tool` routes to correct task `_get_file_ops`; `/etc/passwd` blocked; `~/.ssh/id_rsa` blocked; run-dir absolute paths pass through | Two-layer write protection |
+| `TestRegisterTaskEnvOverrides` (5) | Set/clear/idempotent-clear/task isolation/replace mechanics | Override registry correctness |
+| `TestWrapCommandCwdInjection` (2) | `_wrap_command` uses provided cwd, not `self.cwd`; drifted `self.cwd` never appears in wrapped script | Low-level env invariant |
+| `TestLocalEnvironmentExecuteCwdFallback` (2) | `execute(cmd, cwd=explicit)` uses explicit; `execute(cmd)` falls back to `self.cwd` | `BaseEnvironment.execute()` contract |
+| `TestWriteSafeRootIntegration` (4) | Run-dir inside `HERMES_WRITE_SAFE_ROOT` allowed; outside blocked; bare filename at process cwd blocked; symlink traversal blocked | `HERMES_WRITE_SAFE_ROOT` sandbox |
 
 #### 6.9.7 State File Propagation
 

@@ -17,6 +17,10 @@
       1775951357631661797,
       7950
     ],
+    "productivity/feishu-card-charts/SKILL.md": [
+      1776078149062843562,
+      3573
+    ],
     "quant/multi-factor-alpha/SKILL.md": [
       1775951357631661797,
       9048
@@ -87,6 +91,19 @@
       "category": "detailed-risk-analysis",
       "frontmatter_name": "detailed-risk-analysis",
       "description": "Perform detailed risk analysis involving data fetching, c...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "feishu-card-charts",
+      "category": "productivity",
+      "frontmatter_name": "feishu-card-charts",
+      "description": "Feishu/Lark Card chart specifications and supported chart...",
       "platforms": [],
       "conditions": {
         "fallback_for_toolsets": [],

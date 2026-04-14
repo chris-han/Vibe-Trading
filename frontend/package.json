@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@visactor/vchart": "^2.0.21",
+    "@visactor/vchart-extension": "^2.0.21",
     "clsx": "^2.1.0",
     "echarts": "^6.0.0",
     "lucide-react": "^0.460.0",

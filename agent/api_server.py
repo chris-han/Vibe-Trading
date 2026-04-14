@@ -1093,31 +1093,103 @@ except Exception:
         )
 
 
-_MERMAID_FENCE_RE = _re.compile(r'```mermaid\s*\n(.*?)\n\s*```', _re.DOTALL)
+
+_VCHART_FENCE_RE = _re.compile(r'```vchart\s*\n(.*?)\n\s*```', _re.DOTALL)
 
 
-def _feishu_preprocess_markdown(text: str) -> str:
-    """Replace ```mermaid ... ``` blocks with inline SVG.
+def _sanitize_vchart_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce common LLM-generated VChart spec mistakes into valid shapes.
 
-    Feishu Card 2.0 markdown elements do not render Mermaid code blocks, so we
-    convert each diagram to an SVG using the local mmdc renderer.
-    Falls back to a plain code block if rendering fails.
+    Feishu Card v2 validates chart specs against the VChart JSON schema.
+    The most common failure is ``title`` being a plain string instead of an
+    object.  For example the LLM may emit ``"title": "My Chart"`` but the
+    schema requires ``"title": {"text": "My Chart", "visible": true}``.
     """
-    try:
-        from mmdc import MermaidConverter  # type: ignore[import]
-        converter = MermaidConverter()
-    except Exception:
-        return text  # mmdc unavailable — leave as-is
+    spec = dict(spec)
+    if "title" in spec:
+        t = spec["title"]
+        if isinstance(t, str):
+            spec["title"] = {"text": t, "visible": bool(t)}
+        elif isinstance(t, dict):
+            # Ensure required "text" key exists; some LLMs emit {"value": "..."}
+            if "text" not in t and "value" in t:
+                t = dict(t)
+                t["text"] = t.pop("value")
+                spec["title"] = t
+    return spec
 
-    def _to_svg(m: _re.Match) -> str:  # type: ignore[type-arg]
-        diagram = m.group(1).strip()
+
+def _feishu_split_card_elements(text: str, *, aspect_ratio: str = "4:3") -> List[Dict[str, Any]]:
+    """Split markdown text into alternating markdown and chart card elements.
+
+    Each ```vchart ... ``` block becomes a {"tag": "chart", "chart_spec": ...}
+    element.  Surrounding prose becomes {"tag": "markdown"} elements.  Empty
+    prose segments are dropped so the caller never receives blank markdown
+    elements.
+    """
+    elements: List[Dict[str, Any]] = []
+    last_end = 0
+    for m in _VCHART_FENCE_RE.finditer(text):
+        prose = text[last_end:m.start()].strip()
+        if prose:
+            elements.append({"tag": "markdown", "content": prose})
         try:
-            svg = converter.to_svg(diagram)
-            return svg
+            chart_spec = _sanitize_vchart_spec(json.loads(m.group(1).strip()))
+            elements.append({"tag": "chart", "aspect_ratio": aspect_ratio, "chart_spec": chart_spec})
         except Exception:
-            return m.group(0)  # fall back to original block
+            _feishu_logger.warning("[Feishu] vchart block JSON parse failed — rendering as code block")
+            elements.append({"tag": "markdown", "content": m.group(0)})
+        last_end = m.end()
+    trailing = text[last_end:].strip()
+    if trailing:
+        elements.append({"tag": "markdown", "content": trailing})
+    if not elements:
+        elements.append({"tag": "markdown", "content": " "})
+    return elements
 
-    return _MERMAID_FENCE_RE.sub(_to_svg, text)
+
+async def _feishu_patch_card_body(
+    card_ctx: Dict[str, Any],
+    title: str,
+    elements: List[Dict[str, Any]],
+    *,
+    template: str = "blue",
+) -> None:
+    """Replace the full card body with a new element list via the CardKit update API.
+
+    Must be called AFTER _feishu_set_card_streaming_mode(enabled=False) because
+    Feishu ignores structural card updates while streaming mode is active.
+    Uses PUT /open-apis/cardkit/v1/cards/{card_id} which replaces the card JSON
+    in-place.  This is the only endpoint that supports Card v2 chart elements.
+    """
+    from urllib.parse import quote
+
+    card_id = str(card_ctx.get("card_id") or "")
+    if not card_id:
+        _feishu_logger.warning("[Feishu] Cannot patch card body: card_id missing from card_ctx")
+        return
+
+    card: Dict[str, Any] = {
+        "schema": "2.0",
+        "config": {"width_mode": "fill"},
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "template": template,
+        },
+        "body": {"elements": elements},
+    }
+    await _feishu_openapi_request(
+        "PUT",
+        f"/open-apis/cardkit/v1/cards/{quote(card_id, safe='')}",
+        {
+            "card": {
+                "type": "card_json",
+                "data": json.dumps(card, ensure_ascii=False),
+            },
+            "uuid": uuid.uuid4().hex,
+            "sequence": _feishu_take_card_sequence(card_ctx),
+        },
+    )
 
 
 def _feishu_build_card_v2(
@@ -1133,9 +1205,7 @@ def _feishu_build_card_v2(
     Feishu Card JSON v2 spec (https://open.feishu.cn/document/feishu-cards/card-json-v2-structure).
     Supported by Feishu clients >= 7.20.
     """
-    elements: List[Dict[str, Any]] = [
-        {"tag": "markdown", "content": markdown_body},
-    ]
+    elements: List[Dict[str, Any]] = _feishu_split_card_elements(markdown_body)
     if actions:
         elements.append({"tag": "action", "actions": actions})
     card: Dict[str, Any] = {
@@ -1234,18 +1304,37 @@ def _feishu_snapshot_attempt_state(svc: Any, session_id: str, attempt_id: str) -
 
 
 def _feishu_http_json(method: str, url: str, headers: Dict[str, str], body: Dict[str, Any]) -> Dict[str, Any]:
-    """Send a JSON request to the Feishu OpenAPI and parse the JSON response."""
+    """Send a JSON request to the Feishu OpenAPI and parse the JSON response.
+
+    Retries up to 2 times on transient HTTP errors (502/503/504) and timeouts.
+    """
     import urllib.error
     import urllib.request
 
     payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(url, data=payload, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        response_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Feishu HTTP {exc.code}: {response_body}") from exc
+    _RETRYABLE_CODES = (502, 503, 504)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(min(1.0 * attempt, 3.0))
+        req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            response_body = exc.read().decode("utf-8", errors="replace")
+            if exc.code in _RETRYABLE_CODES and attempt < 2:
+                _feishu_logger.debug("[Feishu] Retrying %s %s after HTTP %s (attempt %d)", method, url, exc.code, attempt + 1)
+                last_exc = RuntimeError(f"Feishu HTTP {exc.code}: {response_body}")
+                continue
+            raise RuntimeError(f"Feishu HTTP {exc.code}: {response_body}") from exc
+        except (TimeoutError, OSError) as exc:
+            if attempt < 2:
+                _feishu_logger.debug("[Feishu] Retrying %s %s after timeout (attempt %d)", method, url, attempt + 1)
+                last_exc = exc
+                continue
+            raise RuntimeError(f"Feishu request timeout: {exc}") from exc
+    raise RuntimeError(f"Feishu request failed after retries") from last_exc
 
 
 async def _feishu_get_tenant_access_token() -> str:
@@ -1459,19 +1548,36 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
 
         final_text, final_error = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
 
-        # Convert mermaid blocks to images — Feishu Card 2.0 markdown cannot render them.
-        final_text = _feishu_preprocess_markdown(final_text)
-
         if card_ctx:
             try:
-                final_body = _feishu_render_stream_body(final_text, error=final_error)
-                if final_body != last_pushed_body:
-                    await _feishu_stream_card_text(card_ctx, final_body)
+                has_charts = bool(_VCHART_FENCE_RE.search(final_text))
+                if has_charts:
+                    # Push prose-only text to the streaming element so vchart
+                    # fences never appear as code blocks in the live stream view.
+                    prose_text = _VCHART_FENCE_RE.sub("", final_text).strip()
+                    prose_body = _feishu_render_stream_body(prose_text or " ", error=final_error)
+                    if prose_body != last_pushed_body:
+                        await _feishu_stream_card_text(card_ctx, prose_body)
+                else:
+                    final_body = _feishu_render_stream_body(final_text, error=final_error)
+                    if final_body != last_pushed_body:
+                        await _feishu_stream_card_text(card_ctx, final_body)
+
+                # Close streaming mode first — Feishu ignores structural card
+                # updates (body element replacement) while streaming is active.
                 await _feishu_set_card_streaming_mode(
                     card_ctx,
                     enabled=False,
                     summary="Failed" if final_error else "Complete",
                 )
+
+                # After streaming is closed, replace the card body with proper
+                # chart elements via the IM message update endpoint.
+                if has_charts:
+                    final_elements = _feishu_split_card_elements(final_text)
+                    if final_error:
+                        final_elements.append({"tag": "markdown", "content": f"\n\n---\n\n**Error:** {final_error}"})
+                    await _feishu_patch_card_body(card_ctx, "semantier", final_elements)
                 _feishu_logger.info("[Feishu WS] Streamed card reply to chat=%s (attempt=%s)", chat_id, attempt_id)
                 return
             except Exception:
@@ -1776,7 +1882,7 @@ async def _feishu_route_message(svc: Any, chat_id: str, text: str) -> None:
         session_id = None
 
     if not session_id:
-        session = svc.create_session(title=f"Feishu:{chat_id[:30]}")
+        session = svc.create_session(title=f"Feishu:{chat_id[:30]}", config={"channel": "feishu"})
         session_id = session.session_id
         mapping[chat_id] = session_id
         _save_feishu_session_map(mapping)

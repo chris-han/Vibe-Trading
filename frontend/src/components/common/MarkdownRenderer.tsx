@@ -10,9 +10,9 @@ const LazyMermaidBlock = lazy(async () => {
   return { default: module.MermaidBlock };
 });
 
-const LazyEChartsBlock = lazy(async () => {
-  const module = await import("./EChartsBlock");
-  return { default: module.EChartsBlock };
+const LazyVChartBlock = lazy(async () => {
+  const module = await import("./VChartBlock");
+  return { default: module.VChartBlock };
 });
 
 type CodeProps = React.ComponentPropsWithoutRef<"code"> & {
@@ -50,7 +50,7 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
     );
   }
 
-  if (!inline && typeof className === "string" && /(?:^|\s)language-echarts(?:\s|$)/.test(className)) {
+  if (!inline && typeof className === "string" && /(?:^|\s)language-vchart(?:\s|$)/.test(className)) {
     return (
       <Suspense
         fallback={
@@ -59,7 +59,7 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
           </div>
         }
       >
-        <LazyEChartsBlock config={source} />
+        <LazyVChartBlock config={source} />
       </Suspense>
     );
   }
@@ -71,14 +71,14 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
   );
 }
 
-/** Strip the <pre> wrapper when the child is a rich block (mermaid / echarts). */
+/** Strip the <pre> wrapper when the child is a rich block (mermaid / vchart). */
 function MarkdownPre({ children, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: ReactNode }) {
   // ReactMarkdown renders <pre><code>…</code></pre>.
   // When MarkdownCode returns a rich block the child is no longer a <code> element —
   // detect that and render without the <pre> wrapper so no dark background appears.
   if (children && typeof children === "object" && !Array.isArray(children) && "type" in children) {
     const child = children as React.ReactElement<{ className?: string }>;
-    // MermaidBlock / EChartsBlock / Suspense — none of these are <code>
+    // MermaidBlock / VChartBlock / Suspense — none of these are <code>
     if (typeof child.type !== "string" || child.type !== "code") {
       return <>{children}</>;
     }

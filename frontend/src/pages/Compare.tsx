@@ -3,7 +3,7 @@ import { GitCompare, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, type RunListItem, type RunData, type EquityPoint } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { echarts, CHART_GROUP, connectCharts } from "@/lib/echarts";
+import { VChart } from "@visactor/vchart";
 import { getChartTheme } from "@/lib/chart-theme";
 import { useDarkMode } from "@/hooks/useDarkMode";
 
@@ -106,9 +106,6 @@ function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: Eq
     if (leftCurve.length === 0 && rightCurve.length === 0) return;
 
     const t = getChartTheme();
-    const chart = echarts.init(ref.current);
-    chart.group = CHART_GROUP;
-    connectCharts();
 
     // Merge dates from both curves and sort
     const dateSet = new Set<string>();
@@ -116,79 +113,96 @@ function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: Eq
     for (const p of rightCurve) dateSet.add(p.time);
     const dates = Array.from(dateSet).sort();
 
-    // Build lookup maps
+    // Build value arrays aligned to merged dates
     const leftMap = new Map(leftCurve.map((p) => [p.time, Number(p.equity)]));
     const rightMap = new Map(rightCurve.map((p) => [p.time, Number(p.equity)]));
+    const leftValues = dates.map((d) => ({ time: d, value: leftMap.get(d) ?? null }));
+    const rightValues = dates.map((d) => ({ time: d, value: rightMap.get(d) ?? null }));
 
-    const leftData = dates.map((d) => leftMap.get(d) ?? null);
-    const rightData = dates.map((d) => rightMap.get(d) ?? null);
+    const colorA = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-a").trim() || "#3b82f6";
+    const colorB = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-b").trim() || "#f59e0b";
 
-    const PRIMARY_COLOR = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-a").trim() || "#3b82f6";
-    const SECONDARY_COLOR = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-b").trim() || "#f59e0b";
-
-    chart.setOption({
-      backgroundColor: "transparent",
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-        backgroundColor: t.tooltipBg,
-        borderColor: t.tooltipBorder,
-        textStyle: { color: t.tooltipText, fontSize: 11 },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        formatter: (params: any) => {
-          if (!Array.isArray(params) || !params.length) return "";
-          let html = `<b>${params[0].axisValue}</b>`;
-          for (const p of params) {
-            if (p.value == null) continue;
-            html += `<br/>${p.marker} ${p.seriesName}: <b>${Number(p.value).toLocaleString()}</b>`;
-          }
-          return html;
-        },
-      },
-      legend: {
-        data: [leftLabel, rightLabel],
-        textStyle: { color: t.textColor, fontSize: 11 },
-        right: 8,
-        top: 4,
-      },
-      grid: { left: 8, right: 8, top: 36, bottom: 40, containLabel: true },
-      xAxis: {
-        type: "category",
-        data: dates,
-        axisLine: { lineStyle: { color: t.axisColor } },
-        axisLabel: { color: t.textColor, fontSize: 10 },
-      },
-      yAxis: {
-        type: "value",
-        splitLine: { lineStyle: { color: t.gridColor } },
-        axisLabel: { color: t.textColor, fontSize: 10 },
-      },
-      dataZoom: [{ type: "inside" }, { type: "slider", height: 20, bottom: 4 }],
+    const spec = {
+      type: "common",
+      background: "transparent",
+      padding: { top: 8, right: 8, bottom: 8, left: 8 },
+      data: [
+        { id: "leftData", values: leftValues },
+        { id: "rightData", values: rightValues },
+      ],
       series: [
         {
-          name: leftLabel,
           type: "line",
-          data: leftData,
-          smooth: false,
-          symbol: "none",
-          lineStyle: { color: PRIMARY_COLOR, width: 2 },
-          connectNulls: true,
+          dataIndex: 0,
+          xField: "time",
+          yField: "value",
+          name: leftLabel,
+          line: { style: { stroke: colorA, lineWidth: 2 } },
+          point: { visible: false },
         },
         {
-          name: rightLabel,
           type: "line",
-          data: rightData,
-          smooth: false,
-          symbol: "none",
-          lineStyle: { color: SECONDARY_COLOR, width: 2 },
-          connectNulls: true,
+          dataIndex: 1,
+          xField: "time",
+          yField: "value",
+          name: rightLabel,
+          line: { style: { stroke: colorB, lineWidth: 2 } },
+          point: { visible: false },
         },
       ],
-    });
+      axes: [
+        {
+          orient: "bottom",
+          type: "band",
+          label: { style: { fill: t.textColor, fontSize: 10 } },
+          domainLine: { style: { stroke: t.axisColor } },
+          tick: { visible: false },
+          sampling: true,
+        },
+        {
+          orient: "left",
+          type: "linear",
+          label: { style: { fill: t.textColor, fontSize: 10 } },
+          grid: { style: { stroke: t.gridColor } },
+        },
+      ],
+      legends: [
+        {
+          visible: true,
+          position: "top",
+          orient: "horizontal",
+          item: { label: { style: { fill: t.textColor, fontSize: 11 } } },
+        },
+      ],
+      tooltip: {
+        mark: { visible: true },
+        dimension: { visible: true },
+        style: {
+          panel: { padding: 8, background: { fill: t.tooltipBg } },
+          titleLabel: { fill: t.tooltipText },
+          keyLabel: { fill: t.tooltipText },
+          valueLabel: { fill: t.tooltipText },
+        },
+      },
+      scrollBar: [
+        {
+          orient: "bottom",
+          start: 0,
+          end: 1,
+          roamZoom: { enable: true },
+        },
+      ],
+    };
 
-    const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(ref.current!);
-    return () => { ro.disconnect(); chart.dispose(); };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart = new VChart(spec as any, { dom: ref.current });
+    chart.renderSync();
+
+    const ro = new ResizeObserver(() => {
+      if (ref.current) chart.resize(ref.current.clientWidth, ref.current.clientHeight);
+    });
+    ro.observe(ref.current);
+    return () => { ro.disconnect(); chart.release(); };
   }, [leftCurve, rightCurve, leftLabel, rightLabel, dark]);
 
   if (leftCurve.length === 0 && rightCurve.length === 0) return null;

@@ -10,6 +10,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -54,76 +55,94 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
 )
 
 _OUTPUT_FORMAT_PROMPT = (
-    "Output format rules (web UI rendering):\n"
-    "- Render all tables using Markdown pipe-table syntax, never ANSI or terminal box-drawing characters.\n"
-    "- Never use plain fenced code blocks (``` with no language tag) to display data, metrics, or key-value"
-    " information. Plain code blocks are reserved for actual code (Python, SQL, bash, etc.) only."
-    " Always use a Markdown pipe-table for named indicators or key-value pairs.\n"
-    "- Render flowcharts and relationship diagrams as Mermaid code blocks (```mermaid ... ```).\n"
-    "- Mermaid layout: prefer top-down (TD) direction over left-right (LR) so diagrams render in portrait orientation.\n"
-    "- Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes),"
-    " keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.\n"
-    "- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks\n"
-    "  (```echarts ... ``` with a valid option object); do NOT produce ASCII/ANSI chart art.\n"
-    "- ECharts dual-axis rule: when any series uses \"yAxisIndex\": 1 you MUST define \"yAxis\" as a JSON\n"
-    "  array: [{primary axis}, {secondary axis}]. The key \"yAxis2\" does not exist in ECharts.\n"
-    "- If you cannot provide valid ECharts JSON, fall back to a Markdown numeric table.\n"
-    "- Never use ANSI escape codes or terminal color sequences in responses.\n"
+    "Output format rules:\n"
+    "- Prefer Markdown, Mermaid, and vchart blocks for rich visual output.\n"
+    "- Do NOT emit echarts blocks for new reports. Use vchart instead, or fall back to a Markdown table if unsure.\n"
+    "- If a legacy ECharts example is ever produced and uses yAxisIndex, you MUST define yAxis as a JSON array with enough entries for every referenced axis index.\n"
 )
 
-
-import re as _re
+_ECHARTS_BLOCK_RE = re.compile(r"```echarts\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 def _sanitize_echarts_blocks(text: str) -> str:
-    """Auto-repair common LLM mistakes in ```echarts ... ``` blocks.
+    """Repair obviously broken legacy echarts blocks without changing valid text."""
+    if not text or "```echarts" not in text.lower():
+        return text
 
-    Current repairs:
-    - ``yAxis2`` key → promote into a proper ``yAxis`` array so ECharts
-      dual-axis charts don't crash with "Cannot read properties of undefined".
-    """
-    _FENCE_RE = _re.compile(r'(```echarts\s*\n)(.*?)(\n```)', _re.DOTALL)
+    repaired = 0
 
-    def _fix_block(m: _re.Match) -> str:  # type: ignore[type-arg]
-        fence_open, body, fence_close = m.group(1), m.group(2), m.group(3)
+    def _fix_block(match: re.Match[str]) -> str:
+        nonlocal repaired
+        raw = match.group(1).strip()
         try:
-            obj = json.loads(body)
+            obj = json.loads(raw)
         except Exception:
-            return m.group(0)  # leave unparseable blocks untouched
+            return match.group(0)
 
         changed = False
+        if isinstance(obj, dict):
+            series = obj.get("series")
+            if isinstance(series, list):
+                max_axis_index = -1
+                for item in series:
+                    if isinstance(item, dict) and isinstance(item.get("yAxisIndex"), int):
+                        max_axis_index = max(max_axis_index, int(item["yAxisIndex"]))
+                if max_axis_index >= 0:
+                    y_axis = obj.get("yAxis")
+                    if isinstance(y_axis, dict):
+                        obj["yAxis"] = [y_axis]
+                        y_axis = obj["yAxis"]
+                        changed = True
+                    elif y_axis is None:
+                        obj["yAxis"] = [{} for _ in range(max_axis_index + 1)]
+                        y_axis = obj["yAxis"]
+                        changed = True
+                    if isinstance(y_axis, list) and len(y_axis) <= max_axis_index:
+                        y_axis.extend({} for _ in range(max_axis_index + 1 - len(y_axis)))
+                        changed = True
 
-        # Fix: yAxis2 is not a valid ECharts key.  When it exists alongside a
-        # primary yAxis scalar, merge both into a [primary, secondary] array.
-        if 'yAxis2' in obj:
-            primary = obj.get('yAxis', {'type': 'value'})
-            secondary = obj.pop('yAxis2')
-            if isinstance(primary, dict):
-                obj['yAxis'] = [primary, secondary]
-            elif isinstance(primary, list):
-                # Already an array; just append secondary if missing
-                if len(primary) < 2:
-                    primary.append(secondary)
-                obj['yAxis'] = primary
-            obj.pop('yAxis2', None)
-            changed = True
-
-        # Ensure yAxis is an array when any series references yAxisIndex > 0
-        series = obj.get('series', [])
-        max_y_idx = 0
-        if isinstance(series, list):
-            for s in series:
-                if isinstance(s, dict):
-                    max_y_idx = max(max_y_idx, int(s.get('yAxisIndex', 0)))
-        if max_y_idx > 0 and isinstance(obj.get('yAxis'), dict):
-            obj['yAxis'] = [obj['yAxis']] + [{'type': 'value'} for _ in range(max_y_idx)]
-            changed = True
+            if "yAxis2" in obj and "yAxis" not in obj:
+                obj["yAxis"] = obj.pop("yAxis2")
+                changed = True
 
         if not changed:
-            return m.group(0)
-        return fence_open + json.dumps(obj, ensure_ascii=False, indent=2) + fence_close
+            return match.group(0)
 
-    return _FENCE_RE.sub(_fix_block, text)
+        repaired += 1
+        return "```echarts\n" + json.dumps(obj, ensure_ascii=False, indent=2) + "\n```"
+
+    result = _ECHARTS_BLOCK_RE.sub(_fix_block, text)
+    if repaired:
+        logger.debug("sanitized %s echarts blocks", repaired)
+    return result
+
+
+def _load_output_format_skill(channel: str) -> str:
+    """Load the channel-appropriate output-format skill body from its SKILL.md file.
+
+    Reads directly from the skills directory instead of using SkillsLoader so
+    that only the one relevant file is touched at agent bootstrap time.
+
+    Args:
+        channel: Session channel identifier (e.g. "feishu" or "" for web UI).
+
+    Returns:
+        Skill body text (frontmatter stripped), or an empty string on failure.
+    """
+    skill_name = "output-format-feishu" if channel == "feishu" else "output-format-web"
+    skills_dir = Path(__file__).resolve().parents[1] / "skills"
+    skill_file = skills_dir / skill_name / "SKILL.md"
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except Exception:
+        logger.warning("output-format skill not found: %s", skill_file)
+        return ""
+    # Strip YAML frontmatter (--- ... ---)
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4:]
+    return text.strip()
 
 
 from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
@@ -919,6 +938,7 @@ class SessionService:
                 f"{_DOCUMENT_WORKFLOW_PROMPT}"
                 f"{_MARKET_DATA_WORKFLOW_PROMPT}"
                 f"{_OUTPUT_FORMAT_PROMPT}"
+                f"{_load_output_format_skill((self.store.get_session(sid) or Session()).config.get('channel', ''))}\n"
             ),
             skip_context_files=True,
             **agent_kwargs,
@@ -955,8 +975,8 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
-            final_text = _sanitize_echarts_blocks(final_text)
             if final_text:
+                final_text = _sanitize_echarts_blocks(final_text)
                 try:
                     (run_dir / "report.md").write_text(final_text, encoding="utf-8")
                 except Exception:

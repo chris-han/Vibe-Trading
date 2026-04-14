@@ -86,6 +86,29 @@ function mergeTimelineContinuations(source: string): string {
   return out.join("\n");
 }
 
+/**
+ * Fix Mermaid `timeline` diagrams:
+ *  1. `section Name : extra` → `section Name`  (section lines must not contain `:`)
+ *  2. Strip HTML tags (e.g. `<br/>`) from event text on Period : Event lines
+ */
+function sanitizeTimelineDiagram(source: string): string {
+  if (!/^\s*timeline\b/i.test(source)) return source;
+  return source
+    .split("\n")
+    .map((line) => {
+      // Fix section lines: strip everything after the first colon
+      if (/^\s*section\s/i.test(line)) {
+        return line.replace(/(:.*$)/, "").trimEnd();
+      }
+      // Strip HTML tags from event values (text after `:` separator)
+      if (/:\s*\S/.test(line)) {
+        return line.replace(/:\s*(.+)/, (_m, val: string) => ": " + val.replace(/<[^>]+>/g, " ").trim());
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 function buildRepairCandidates(raw: string): string[] {
   const base = stripFences(raw);
   const clipped = trimToDiagramBody(base);
@@ -93,10 +116,14 @@ function buildRepairCandidates(raw: string): string[] {
   const sanitizedUnescaped = sanitizeQuotedLabels(clipped.replace(/\\"/g, '"'));
   const merged = mergeTimelineContinuations(clipped);
   const mergedSanitized = sanitizeQuotedLabels(mergeTimelineContinuations(sanitizedUnescaped));
+  const timelineSanitized = sanitizeTimelineDiagram(clipped);
+  const timelineMergedSanitized = sanitizeTimelineDiagram(mergeTimelineContinuations(clipped));
   const candidates = [
     clipped,
     sanitized,
     sanitizedUnescaped,
+    timelineSanitized,
+    timelineMergedSanitized,
     merged,
     mergedSanitized,
     sanitizeQuotedLabels(
@@ -106,6 +133,17 @@ function buildRepairCandidates(raw: string): string[] {
         .join("\n"),
     ),
   ];
+
+  // If no recognized diagram-type keyword was found on the first line, prepend "graph TD"
+  // to catch cases where the model wrote "top-down" or similar invalid openers.
+  const firstLine = clipped.split("\n")[0]?.trim() ?? "";
+  if (!DIAGRAM_START_RE.test(firstLine)) {
+    const withPrefix = `graph TD\n${clipped}`;
+    candidates.push(
+      withPrefix,
+      sanitizeQuotedLabels(withPrefix),
+    );
+  }
 
   return [...new Set(candidates.map((item) => item.trim()).filter(Boolean))];
 }
@@ -176,11 +214,7 @@ export function MermaidBlock({ chart }: { chart: string }) {
 
   if (error) {
     return (
-      <div className="my-4 overflow-hidden rounded-2xl border border-amber-300/40 bg-amber-50/60 text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
-        <div className="border-b border-current/10 px-4 py-2 text-xs font-medium">Mermaid render failed</div>
-        <pre className="m-0 overflow-x-auto border-b border-current/10 px-4 py-3 text-[11px] leading-relaxed whitespace-pre-wrap">{error}</pre>
-        <pre className="m-0 overflow-x-auto p-4 text-[11px] leading-relaxed whitespace-pre-wrap">{chart}</pre>
-      </div>
+      <pre className="my-2 whitespace-pre-wrap text-sm leading-relaxed">{chart}</pre>
     );
   }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { echarts } from "@/lib/echarts";
+import { VChart } from "@visactor/vchart";
 import { getChartTheme } from "@/lib/chart-theme";
 import { useDarkMode } from "@/hooks/useDarkMode";
 
@@ -15,33 +15,59 @@ export function MiniEquityChart({ data, height = 80 }: Props) {
   useEffect(() => {
     if (!ref.current || data.length < 2) return;
     const t = getChartTheme();
-    const chart = echarts.init(ref.current);
-
-    const values = data.map(d => Number(d.equity));
+    const values = data.map((d) => Number(d.equity));
     const positive = values[values.length - 1] >= values[0];
     const color = positive ? t.upColor : t.downColor;
 
-    chart.setOption({
-      backgroundColor: "transparent",
-      grid: { left: 0, right: 0, top: 0, bottom: 0 },
-      xAxis: { type: "category", data: data.map(d => d.time), show: false },
-      yAxis: { type: "value", show: false, scale: true },
-      series: [{
-        type: "line", data: values, symbol: "none", smooth: true,
-        lineStyle: { color, width: 1.5 },
-        areaStyle: {
-          color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [{ offset: 0, color: color + "30" }, { offset: 1, color: color + "05" }],
+    const chart = new VChart(
+      {
+        type: "area",
+        background: "transparent",
+        padding: 0,
+        data: [{ id: "equity", values: data.map((d) => ({ time: d.time, equity: Number(d.equity) })) }],
+        xField: "time",
+        yField: "equity",
+        axes: [
+          { orient: "bottom", visible: false },
+          { orient: "left", visible: false, zero: false },
+        ],
+        line: { style: { stroke: color, lineWidth: 1.5 } },
+        area: {
+          style: {
+            fill: {
+              gradient: "linear",
+              x0: 0,
+              y0: 0,
+              x1: 0,
+              y1: 1,
+              stops: [
+                { offset: 0, color, opacity: 0.18 },
+                { offset: 1, color, opacity: 0.02 },
+              ],
+            },
           },
         },
-      }],
-    });
+        point: { visible: false },
+        crosshair: { xField: { visible: false }, yField: { visible: false } },
+        tooltip: { visible: false },
+        animation: false,
+      },
+      { dom: ref.current }
+    );
 
-    const ro = new ResizeObserver(() => chart.resize());
+    chart.renderSync();
+
+    const ro = new ResizeObserver(() => {
+      if (ref.current) chart.resize(ref.current.clientWidth, height);
+    });
     ro.observe(ref.current);
-    return () => { ro.disconnect(); chart.dispose(); };
-  }, [data, dark]);
+    return () => {
+      ro.disconnect();
+      chart.release();
+    };
+  }, [data, dark, height]);
 
   if (data.length < 2) return null;
   return <div ref={ref} style={{ height }} className="rounded-lg overflow-hidden" />;
 }
+

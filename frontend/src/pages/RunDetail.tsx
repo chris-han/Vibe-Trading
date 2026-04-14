@@ -175,7 +175,7 @@ function ReportTab({ run }: { run: RunData }) {
 
   return (
     <div className="p-4">
-      <div className="prose prose-sm dark:prose-invert max-w-none rounded-xl border border-border bg-card p-4 text-foreground leading-relaxed prose-table:border prose-table:border-border prose-th:bg-muted/50 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:text-xs [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:border [&_pre]:border-border [&_pre]:p-3 [&_code]:text-[11px] [&_pre:has(.echarts-block)]:bg-transparent [&_pre:has(.echarts-block)]:border-0 [&_pre:has(.echarts-block)]:p-0 [&_pre:has(.mermaid-block)]:bg-transparent [&_pre:has(.mermaid-block)]:border-0 [&_pre:has(.mermaid-block)]:p-0">
+      <div className="prose prose-sm dark:prose-invert max-w-none rounded-xl border border-border bg-card p-4 text-foreground leading-relaxed prose-table:border prose-table:border-border prose-th:bg-muted/50 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:text-left prose-th:text-xs prose-th:font-medium prose-td:text-xs [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:border [&_pre]:border-border [&_pre]:p-3 [&_code]:text-[11px] [&_pre:has(.vchart-block)]:bg-transparent [&_pre:has(.vchart-block)]:border-0 [&_pre:has(.vchart-block)]:p-0 [&_pre:has(.mermaid-block)]:bg-transparent [&_pre:has(.mermaid-block)]:border-0 [&_pre:has(.mermaid-block)]:p-0">
         <MarkdownRenderer>{report}</MarkdownRenderer>
       </div>
     </div>
