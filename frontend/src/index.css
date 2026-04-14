@@ -143,6 +143,26 @@
   .prose table { border-collapse: collapse; width: 100%; }
   .prose th, .prose td { border: 1px solid hsl(var(--border)); }
   .prose tbody tr:nth-child(even) { background: hsl(var(--muted) / 0.3); }
+  .prose pre {
+    white-space: pre;
+    overflow-x: auto;
+    color: hsl(var(--foreground));
+  }
+  .prose pre code {
+    white-space: inherit;
+    word-break: normal;
+    color: hsl(var(--foreground));
+  }
+  .prose pre code,
+  .prose pre code span,
+  .prose pre .hljs,
+  .prose pre .hljs * {
+    color: hsl(var(--foreground));
+  }
+  .prose pre code::before,
+  .prose pre code::after {
+    content: none !important;
+  }
 
   /* Smooth scrollbar for webkit */
   ::-webkit-scrollbar { width: 6px; height: 6px; }

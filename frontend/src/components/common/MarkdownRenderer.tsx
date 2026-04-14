@@ -2,6 +2,7 @@ import { Suspense, lazy, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { cn } from "@/lib/utils";
 
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];
@@ -72,18 +73,28 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
 }
 
 /** Strip the <pre> wrapper when the child is a rich block (mermaid / vchart). */
-function MarkdownPre({ children, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: ReactNode }) {
-  // ReactMarkdown renders <pre><code>…</code></pre>.
-  // When MarkdownCode returns a rich block the child is no longer a <code> element —
-  // detect that and render without the <pre> wrapper so no dark background appears.
-  if (children && typeof children === "object" && !Array.isArray(children) && "type" in children) {
+function MarkdownPre({ children, className, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: ReactNode }) {
+  // ReactMarkdown renders <pre><code class="language-*">…</code></pre>.
+  // Only strip the <pre> wrapper for rich blocks we replace with custom components.
+  if (children && typeof children === "object" && !Array.isArray(children) && "props" in children) {
     const child = children as React.ReactElement<{ className?: string }>;
-    // MermaidBlock / VChartBlock / Suspense — none of these are <code>
-    if (typeof child.type !== "string" || child.type !== "code") {
+    const childClass = String(child.props?.className || "");
+    if (/(?:^|\s)language-(?:mermaid|vchart)(?:\s|$)/.test(childClass)) {
       return <>{children}</>;
     }
   }
-  return <pre {...props}>{children}</pre>;
+  return (
+    <pre
+      className={cn(
+        "overflow-x-auto whitespace-pre break-normal",
+        "[&_code]:whitespace-pre [&_code]:break-normal [&_code]:font-mono",
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </pre>
+  );
 }
 
 export function MarkdownRenderer({ children }: { children: string }) {
