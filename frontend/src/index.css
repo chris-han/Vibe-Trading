@@ -4,11 +4,11 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Autaut Grotesk - Local font face (Book) */
+/* Autaut Grotesk - Local variable font face */
 @font-face {
   font-family: "Autaut Grotesk";
-  src: url("/font/AutautGrotesk-Regular.woff2") format("woff2");
-  font-weight: 400 700;
+  src: url("/fonts/AutautGrotesk-VF.woff2") format("woff2-variations");
+  font-weight: 400 900;
   font-style: normal;
   font-display: swap;
 }
