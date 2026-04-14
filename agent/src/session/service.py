@@ -48,7 +48,9 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
     "- Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.\n"
     "- Use the project-supported Python patterns from load_skill (for example yfinance or OKX API helpers).\n"
     "- Prefer writing one focused Python script with write_file, then execute it with bash.\n"
-    "- The terminal already starts in the agent/ working directory; use ./.venv/bin/python for script execution.\n"
+    "- The terminal/file tools are already scoped to the active session or run artifact directory; keep output paths relative so the runtime chooses the final location.\n"
+    "- Never hardcode output file paths such as /app/agent/... or agent/... in scripts, skills, or bash commands.\n"
+    "- Use the repo-local interpreter via ./.venv/bin/python for script execution.\n"
     "- For package installs, use ./.venv/bin/python -m pip. Do NOT call pip/pip3 directly.\n"
     "- Do NOT embed long Python programs directly in bash commands.\n"
     "- If an external endpoint or symbol looks suspicious, validate it against the loaded skill before using it.\n"
@@ -57,7 +59,8 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
 _OUTPUT_FORMAT_PROMPT = (
     "Output format rules:\n"
     "- Prefer Markdown, Mermaid, and vchart blocks for rich visual output.\n"
-    "- Do NOT emit echarts blocks for new reports. Use vchart instead, or fall back to a Markdown table if unsure.\n"
+    "- Do NOT emit echarts blocks for new reports. Use vchart instead.\n"
+    "- If unsure, fall back to a Markdown table rather than emitting ECharts.\n"
     "- If a legacy ECharts example is ever produced and uses yAxisIndex, you MUST define yAxis as a JSON array with enough entries for every referenced axis index.\n"
 )
 

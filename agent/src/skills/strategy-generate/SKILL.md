@@ -8,12 +8,18 @@ description: Create, modify, and optimize quantitative trading strategies, then 
 1. **Requirements parsing**: parse user intent, extract instrument codes, time range, and strategy logic, then write `config.json`
 2. **Strategy design**: think through the 5 questions of data / signal / position sizing / backtest / validation
 3. **Strategy coding**: write `code/signal_engine.py` (following the `SignalEngine` contract)
-4. **Syntax check**: `bash("python -m py_compile code/signal_engine.py && echo OK")`
+4. **Syntax check**: `bash("./.venv/bin/python -m py_compile code/signal_engine.py && echo OK")`
 5. **Run backtest**: call the `backtest` tool (built into the engine; no need to write `run_backtest.py`)
 6. **Evaluate results**: read `artifacts/metrics.csv` and judge by the review criteria
 7. **Iterative fixing**: if results are poor, modify with `edit_file` → run `backtest` → re-evaluate
 
 **You only need to write `signal_engine.py` and `config.json`. The `backtest` tool automatically handles data loading and backtest execution.**
+
+## Runtime Rules
+
+- Do not hardcode output paths like `/app/agent/...` or `agent/...`.
+- Keep file paths relative to `run_dir`; `config.json` belongs in the run root and strategy code belongs in `code/signal_engine.py`.
+- Use `./.venv/bin/python` for local Python commands and `./.venv/bin/python -m pip` for package installs.
 
 ## Requirements Parsing
 

@@ -14,19 +14,27 @@ metadata:
 
 ## Data Fetching and Cleaning
 
+## Output Path Rule
+
+- Never hardcode output paths like `/app/agent/...` or `agent/...`.
+- Write artifacts to relative paths only so the Hermes session/run directory controls the real destination.
+- If a script needs multiple outputs, define `output_dir = Path(".")` or a caller-provided relative subdirectory and join filenames from there.
+
 ### Fetch Financial Data for NVDA
 ```python
 import yfinance as yf
 import pandas as pd
 import json
+from pathlib import Path
 
 def fetch_nvda_data():
     # Define the ticker symbol
     ticker = 'NVDA'
+    output_dir = Path(".")
 
     # Fetch historical data for the past 5 years
     data = yf.download(ticker, start='2021-01-01', end='2026-03-30', progress=False)
-    data.to_csv('nvda_data.csv')
+    data.to_csv(output_dir / 'nvda_data.csv')
 
     # Fetch additional company information
     nvda = yf.Ticker(ticker)
@@ -36,13 +44,13 @@ def fetch_nvda_data():
     cashflow = nvda.cashflow
 
     # Save the additional company information to JSON files
-    with open('nvda_info.json', 'w') as f:
+    with open(output_dir / 'nvda_info.json', 'w') as f:
         json.dump(info, f)
-    with open('nvda_financials.json', 'w') as f:
+    with open(output_dir / 'nvda_financials.json', 'w') as f:
         financials.T.to_json(f)
-    with open('nvda_balance_sheet.json', 'w') as f:
+    with open(output_dir / 'nvda_balance_sheet.json', 'w') as f:
         balance_sheet.T.to_json(f)
-    with open('nvda_cashflow.json', 'w') as f:
+    with open(output_dir / 'nvda_cashflow.json', 'w') as f:
         cashflow.T.to_json(f)
 ```
 
@@ -67,9 +75,11 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 import json
+from pathlib import Path
 
 # Load historical data
-data = pd.read_csv('nvda_data.csv', skiprows=3, index_col=0, parse_dates=True)
+output_dir = Path(".")
+data = pd.read_csv(output_dir / 'nvda_data.csv', skiprows=3, index_col=0, parse_dates=True)
 
 # Correct column names if needed
 if len(data.columns) == 6:
@@ -204,7 +214,8 @@ results = {
     'max_drawdown': max_dd_info
 }
 
-with open('nvda_risk_analysis.json', 'w') as f:
+output_dir = Path(".")
+with open(output_dir / 'nvda_risk_analysis.json', 'w') as f:
     json.dump(results, f)
 ```
 
@@ -251,17 +262,160 @@ STRESS_SCENARIOS = {
 }
 for name, shock in STRESS_SCENARIOS.items():
     print(f"{name}: ${position_notional * shock/1e6:.1f}M loss")
+
+# Portfolio-level impact (at recommended position weight)
+position_weight = recommended_max  # e.g., 0.047 = 4.7%
+for name, shock in STRESS_SCENARIOS.items():
+    port_impact = position_weight * shock
+    print(f"{name}: {shock*100:.0f}% asset → {port_impact*100:.2f}% portfolio")
 ```
+
+### Bull/Bear Claim Validation
+
+```python
+# RSI calculation for overbought/oversold claims
+delta = data['Close'].diff()
+gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+rs = gain / loss
+rsi = 100 - (100 / (1 + rs))
+current_rsi = rsi.iloc[-1]
+
+# Validate specific claims against fetched data
+claims = {
+    'bull_pe_undervalued': info.get('forwardPE', 30) < 20,
+    'bull_roe_high': info.get('returnOnEquity', 0) > 1.0,
+    'bear_pe_premium': info.get('trailingPE', 30) / sector_pe > 1.5,
+    'bear_rsi_overbought': current_rsi > 70,
+}
+
+for claim, is_true in claims.items():
+    status = '✓ CONFIRMED' if is_true else '✗ NOT SUPPORTED'
+    print(f"{claim}: {status}")
+```
+
+### Hedge Structure Specifications
+
+```python
+# Protective Put
+put_strike = current_price * 0.90  # 10% OTM
+put_expiry_days = 90
+hedge_cost_annual = 0.03  # ~3% of position
+
+# Collar (self-financing)
+put_strike = current_price * 0.90
+call_strike = current_price * 1.15
+collar_range = (put_strike, call_strike)
+
+# Put Spread (cheaper tail protection)
+long_put_strike = current_price * 0.95
+short_put_strike = current_price * 0.85
+spread_cost = 0.015  # ~1.5% of position
+```
+
+## CRO Risk Review Framework (Decision Output)
+
+After computing metrics, structure findings as a formal CRO review:
+
+### 1. Bull/Bear Argument Validation Table
+For each analyst claim, fact-check against data:
+
+| # | Claim | Reliability (1-5) | Risk Pushback |
+|---|-------|-------------------|---------------|
+| 1 | [Claim text] | [1-5] | [Data-driven counterpoint] |
+
+**Key:** 5/5 = confirmed by data, 3/5 = partially true, 1/5 = factually wrong
+
+### 2. Blind-Spot Risk Identification
+List risks neither analyst emphasized:
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| [Risk] | LOW/MED/HIGH | HIGH/EXTREME | [Action] |
+
+### 3. Position Sizing Tiers
+Use conservative of all methods, then create tiers:
+
+| Conviction | Size | Conditions |
+|------------|------|------------|
+| Core | 3-4% | Existing long, add on dips |
+| New Entry | 2-3% | Initiate with hedge |
+| Maximum | [min of methods] | Only with full hedge |
+| Unhedged Max | Quarter-Kelly | Naked long limit |
+
+### 4. Mandatory Hedge Requirements
+Tie hedge requirements to position size:
+
+| Position Size | Hedge Required | Structure |
+|---------------|----------------|-----------|
+| ≤3% | Optional | — |
+| 3-5% | Mandatory | Collar or protective put |
+| >5% | Not approved | — |
+
+### 5. Stress Scenario P&L (Portfolio-Level)
+Show impact at the recommended position weight:
+
+| Scenario | Probability | Asset Impact | Portfolio Impact (at X% weight) |
+|----------|-------------|--------------|--------------------------------|
+| [Scenario] | X% | -Y% | -(X% × Y%) |
+
+### 6. CRO Decision Format
+
+```
+## FINAL CRO RECOMMENDATION
+
+### [APPROVED | CONDITIONAL | REJECTED]
+
+| Parameter | Specification |
+|-----------|---------------|
+| Max Position | X% of portfolio |
+| Entry Zone | $X-$Y |
+| Stop-Loss | $X hard, $Y technical |
+| Hedge | [Required/Optional] |
+| Review Trigger | [Earnings/metric] |
+| Risk Budget | X% daily VaR at 95% |
+```
+
+### 7. Risk Conditions for Approval
+
+**Prerequisites Before Initiation:**
+- [ ] Hedge in place for positions >X%
+- [ ] Stop-loss order entered
+- [ ] Earnings blackout observed
+- [ ] Correlation check passed
+- [ ] Liquidity buffer maintained
+
+**Triggers for Position Reduction:**
+| Trigger | Action |
+|---------|--------|
+| [Metric] deterioration | Reduce X% |
+| Close below $X | Exit X%, trail rest |
+| [Event] | Re-evaluate thesis |
+
+---
 
 ## Workflow
 
 1. Fetch with yfinance → flatten MultiIndex columns
 2. Compute returns → VaR/CVaR/tail metrics
 3. Correlation/Beta → market sensitivity
-4. Position sizing → Kelly, vol-adjusted, beta-adjusted
+4. Position sizing → Kelly, vol-adjusted, beta-adjusted → **take minimum**
 5. Stop-losses → ATR, percentage, technical
-6. Stress test → historical scenarios
-7. Hedge recs → puts, collars, beta hedge
-8. JSON output
+6. Stress test → historical scenarios → **compute portfolio-level P&L**
+7. Hedge recs → puts, collars, beta hedge → **tie to position size**
+8. **Bull/Bear validation** → fact-check each claim, assign reliability score
+9. **Blind-spot identification** → what did both analysts miss?
+10. **CRO decision** → approved/conditional/rejected with specific conditions
+11. JSON output
 
-Complete skill for comprehensive risk analysis: data fetching, volatility, VaR/CVaR, tail risk, correlation/beta, position sizing, stop-losses, stress testing, and hedge recommendations.
+## Pitfalls
+
+- **yfinance MultiIndex:** Columns may be `('Close', 'NVDA')` — flatten before access
+- **scipy.stats imports:** `gpd` doesn't exist; use only `norm` for parametric VaR
+- **Pandas rolling apply:** Don't use `lambda x: x` in rolling().apply() — causes Series type errors
+- **Kelly Criterion:** Full Kelly is aggressive; use half or quarter for real portfolios
+- **Beta-adjusted sizing:** `cap / beta` often binds before other methods for high-beta names
+- **CVaR/VaR ratio:** >1.5x indicates fat tail risk requiring larger hedges
+- **Hedge cost:** Protective puts cost ~3%/yr; collars can be self-financing but cap upside
+
+Complete skill for comprehensive risk analysis: data fetching, volatility, VaR/CVaR, tail risk, correlation/beta, position sizing, stop-losses, stress testing, hedge recommendations, **plus CRO decision framework with bull/bear validation, blind-spot identification, and conditional approval structure**.

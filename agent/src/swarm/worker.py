@@ -33,8 +33,9 @@ _DOCUMENT_WORKFLOW_HINT = (
 )
 
 _MARKET_DATA_WORKFLOW_HINT = (
-    "- `execute_code` is forbidden in this runtime. Use `write_file` plus `bash` from agent/ instead.\n"
+    "- `execute_code` is forbidden in this runtime. Use `write_file` plus `bash` with the runtime-provided cwd instead.\n"
     "- **NEVER use curl/requests/urllib to fetch market data.** Call `load_skill('yfinance')` first, then write a Python script.\n"
+    "- Never hardcode output file paths such as `/app/agent/...` or `agent/...`; keep outputs relative so Hermes stores them under the task artifact directory.\n"
 )
 
 
@@ -128,8 +129,8 @@ def build_worker_prompt(
         "- `load_skill` first to get data access methods and analysis patterns.\n"
         f"{_MARKET_DATA_WORKFLOW_HINT}"
         "- Prefer writing one focused Python script with write_file, then execute it with bash.\n"
-        "- Write ONE focused Python script via `write_file`, then change into agent/ and run it with `./.venv/bin/python`.\n"
-        "- Install packages only from agent/ with `./.venv/bin/python -m pip`. Do NOT call `pip` or `pip3` directly.\n"
+        "- Write ONE focused Python script via `write_file`, then run it from the current runtime cwd with `./.venv/bin/python`.\n"
+        "- Install packages with `./.venv/bin/python -m pip`. Do NOT call `pip` or `pip3` directly.\n"
         "- Do NOT write long Python code inside bash. Use write_file + bash.\n"
         "- Do NOT fetch data with curl/requests. Use the patterns from load_skill (yfinance, OKX API via Python).\n"
         f"{_BACKTEST_WORKFLOW_HINT}"

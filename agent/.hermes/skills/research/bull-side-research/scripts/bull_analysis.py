@@ -17,6 +17,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import json
 import sys
+from pathlib import Path
 
 def fetch_data(ticker_symbol, days=730):
     """Fetch historical data and company info."""
@@ -283,10 +284,11 @@ def generate_report(symbol, ticker, df, info, t, sentiment, tech_score, fund_sco
         }
     }
     
-    with open(f"{symbol.lower()}_bull_metrics.json", "w") as f:
+    output_path = Path(".") / f"{symbol.lower()}_bull_metrics.json"
+    with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
     
-    print(f"\nMetrics saved to {symbol.lower()}_bull_metrics.json")
+    print(f"\nMetrics saved to {output_path}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

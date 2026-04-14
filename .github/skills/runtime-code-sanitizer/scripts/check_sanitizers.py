@@ -27,9 +27,9 @@ from pathlib import Path
 # prompt_guard_phrase: a substring that MUST appear in _OUTPUT_FORMAT_PROMPT
 REQUIRED_TYPES: list[tuple[str, str, str]] = [
     (
-        "ECharts",
+        "Legacy ECharts",
         "_sanitize_echarts_blocks",
-        "yAxisIndex",           # dual-axis guard phrase in the prompt
+        "Do NOT emit echarts blocks for new reports. Use vchart instead.",
     ),
     # Template for adding more types:
     # (

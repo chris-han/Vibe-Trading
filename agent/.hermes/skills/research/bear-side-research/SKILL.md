@@ -208,11 +208,26 @@ worst_1pct = np.percentile(final_returns, 1)
 4. Monte Carlo worst 5% scenario
 5. Stress scenario (-40% from current)
 
-**Top Risk Bullets:** Extract top 3-5 most severe bearish signals
+**Top Risk Bullets:** Extract top 3-5 most severe bearish signals with severity ratings (HIGH/MEDIUM/LOW)
 
-**Disproof Conditions:** List what would invalidate the bear thesis
+**Disproof Conditions:** List what would invalidate the bear thesis with specific thresholds
+
+**Confidence Scoring:**
+- Count total bearish signals triggered across all 6 dimensions
+- HIGH confidence: ≥10 signals
+- MEDIUM confidence: 6-9 signals
+- LOW confidence: <6 signals
+
+**Actionable Recommendations:**
+- For long holders: trim levels, protective put strikes, stop-loss
+- For short sellers: entry zone, stop-loss, price targets
+- For options traders: spread structures, overwriting strategies
 
 ## Output Format
+
+**Artifact Path Rule:**
+- Never hardcode `/app/agent/...`, `agent/...`, or any absolute output path.
+- If you save helper artifacts, use runtime-relative paths only so Hermes keeps them under the active task/session artifact directory.
 
 ```markdown
 # [STOCK] BEAR-SIDE RESEARCH REPORT
@@ -256,6 +271,66 @@ worst_1pct = np.percentile(final_returns, 1)
 9. **yfinance None values**: Use defensive pattern `info.get('field', 0) or 0` to handle both missing keys AND None values in one line
 10. **Data availability**: yfinance may not provide all fundamental fields for all tickers — gracefully handle missing data with fallbacks or "N/A" messaging
 11. **yfinance API changes**: Yahoo Finance occasionally changes response structure — always test data fetching separately before full analysis
+12. **Insider transactions column names**: Use `'Transaction Start Date'` not `'Transaction Date'`; wrap in try/except as structure varies
+13. **Major holders parsing**: Values are numpy.float64, not strings — don't call `.replace()` on them; access via `.iloc[row, col]`
+14. **Earnings history columns**: Use `'epsEstimate'` and `'epsActual'` (lowercase), not `'EPS Estimate'`
+15. **Institutional holders change**: Column `'Change in Shares'` may be missing — check with `if 'Change in Shares' in df.columns`
+
+## Enhanced Analysis: Insider & Institutional Flows
+
+Add this section for catalyst identification:
+
+```python
+# Insider Transactions
+insider = ticker.insider_transactions
+if insider is not None and len(insider) > 0:
+    recent_6m = insider[insider['Transaction Start Date'] >= (datetime.now() - timedelta(days=180))]
+    buys = len(recent_6m[recent_6m['Shares'] > 0])
+    sells = len(recent_6m[recent_6m['Shares'] < 0])
+    # Bearish if sells > buys * 2
+
+# Institutional Holders
+institutions = ticker.institutional_holders
+if institutions is not None:
+    if 'Change in Shares' in institutions.columns:
+        net_change = institutions['Change in Shares'].sum()
+        # Bearish if net_change < 0 (reduction)
+
+# Options Sentiment (Put/Call Ratio)
+options = ticker.options
+if options and len(options) > 0:
+    opt_chain = ticker.option_chain(options[0])
+    put_call_ratio = opt_chain.puts['openInterest'].sum() / opt_chain.calls['openInterest'].sum()
+    # Bearish if > 1.2 (hedging or speculative puts)
+```
+
+## Enhanced Output Format (with Severity & Actions)
+
+```markdown
+## Top Bear Risk Bullets
+| Risk | Severity | Evidence |
+|------|----------|----------|
+| Valuation Bubble | HIGH | P/E 76% premium to sector |
+| Technical Overextension | HIGH | RSI 74.9, Bollinger 96.4% |
+| Margin Compression | MEDIUM | Gross margin -3.9pp |
+| Fat Tail Risk | HIGH | GPD ξ=1.03, kurtosis 4.74 |
+| Insider Selling | MEDIUM | $100M+ sales in recent month |
+
+## Recommended Actions
+
+### For Long Holders
+- Trim position at resistance zone
+- Buy protective puts: strike X, expiry Y
+- Set stop-loss: $Z (below critical support)
+
+### For Short Sellers
+- Entry zone: $A-$B (near resistance)
+- Stop-loss: $C (above 52W high)
+- Targets: $D (-30%), $E (-50%)
+
+### Bear Case Confidence: HIGH/MEDIUM/LOW
+Signal Count: N/15 indicators triggered
+```
 
 ## Dependencies
 

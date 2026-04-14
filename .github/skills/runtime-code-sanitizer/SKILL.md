@@ -1,13 +1,13 @@
 ---
 name: runtime-code-sanitizer
-description: "Add sanitizer functions and prompt guards for components that generate code at runtime (ECharts JSON, Mermaid diagrams, SQL, Python scripts). Use when: adding a new LLM output type that gets executed or rendered; reviewing whether an existing generator has validation; auditing runtime-generated code paths; fixing render crashes caused by invalid LLM output. Also installs the pre-commit hook that runs the checker automatically on every commit."
+description: "Add sanitizer functions and prompt guards for components that generate code at runtime (VChart JSON, legacy ECharts JSON, Mermaid diagrams, SQL, Python scripts). Use when: adding a new LLM output type that gets executed or rendered; reviewing whether an existing generator has validation; auditing runtime-generated code paths; fixing render crashes caused by invalid LLM output. Also installs the pre-commit hook that runs the checker automatically on every commit."
 ---
 
 # Runtime Code Sanitizer
 
 ## Purpose
 
-Any component that takes LLM-generated text and passes it to a renderer or executor (ECharts, Mermaid, Python `exec`, SQL, bash) must have:
+Any component that takes LLM-generated text and passes it to a renderer or executor (VChart, legacy ECharts, Mermaid, Python `exec`, SQL, bash) must have:
 
 1. **A server-side sanitizer** — post-processes LLM output before it is stored or streamed to the frontend
 2. **A prompt guard** — adds explicit rules to the system prompt so the LLM generates valid output in the first place
@@ -17,7 +17,7 @@ Any component that takes LLM-generated text and passes it to a renderer or execu
 
 ## When to Use This Skill
 
-- You are adding a new `````echarts`````, `````mermaid`````, `````sql`````, or other rendered/executed code fence type
+- You are adding a new `````vchart`````, legacy `````echarts`````, `````mermaid`````, `````sql`````, or other rendered/executed code fence type
 - A renderer is crashing with undefineds, parse errors, or syntax errors from LLM output
 - You are onboarding a new LLM output channel (Feishu card, Slack block, etc.)
 - You want to audit what runtime-generated code paths currently have sanitization
@@ -35,8 +35,9 @@ Find the Python file that builds the system/ephemeral prompt and calls the agent
 In `_OUTPUT_FORMAT_PROMPT`, add an explicit rule for the output type. Example pattern:
 
 ```
-"- ECharts dual-axis rule: when any series uses \"yAxisIndex\": N you MUST define \"yAxis\" "
-"  as a JSON array with N+1 elements. The key \"yAxis2\" does not exist in ECharts.\n"
+"- Prefer VChart JSON blocks for new charts.\n"
+"- Do NOT emit echarts blocks for new reports. Use vchart instead, or fall back to a Markdown table if unsure.\n"
+"- If a legacy ECharts example is ever produced and uses \"yAxisIndex\": N you MUST define \"yAxis\" as a JSON array with N+1 elements.\n"
 ```
 
 Rules must be:
@@ -47,21 +48,22 @@ Rules must be:
 ### 3. Add / update the sanitizer function
 
 Add a `_sanitize_<type>_blocks(text: str) -> str` function near `_OUTPUT_FORMAT_PROMPT` in `service.py`. The function must:
-- Use a compiled regex to extract fenced blocks (e.g. ` ```echarts ... ``` `)
+- Use a compiled regex to extract fenced blocks (e.g. ` ```vchart ... ``` ` or legacy ` ```echarts ... ``` `)
 - Parse the block content
 - Apply each repair deterministically
 - Return the original text unchanged if parsing fails
 - Only rewrite a block when a repair was actually needed (`changed` flag pattern)
 
-See the existing `_sanitize_echarts_blocks()` in [service.py](../../../../agent/src/session/service.py) as the canonical example.
+See the existing legacy `_sanitize_echarts_blocks()` in [service.py](../../../../agent/src/session/service.py) as the compatibility example. New chart work should target `vchart` first.
 
 ### 4. Wire the sanitizer into the output pipeline
 
 In `_run_with_agent()`, call the sanitizer on `final_text` before writing `report.md`:
 
 ```python
-final_text = _sanitize_echarts_blocks(final_text)
-# add new sanitizer calls here:
+final_text = _sanitize_echarts_blocks(final_text)  # legacy compatibility only
+# add new sanitizer calls here as needed:
+# final_text = _sanitize_vchart_blocks(final_text)
 # final_text = _sanitize_mermaid_blocks(final_text)
 ```
 
@@ -113,7 +115,8 @@ Every prompt guard rule must satisfy:
 
 | Type | Sanitizer | Prompt guard | Pre-commit check |
 |---|---|---|---|
-| ECharts JSON | `_sanitize_echarts_blocks()` | `_OUTPUT_FORMAT_PROMPT` dual-axis rule | ✅ |
+| VChart JSON | prompt-first, no sanitizer yet | `_OUTPUT_FORMAT_PROMPT` VChart preference rule | ✅ |
+| Legacy ECharts JSON | `_sanitize_echarts_blocks()` | `_OUTPUT_FORMAT_PROMPT` legacy compatibility rule | ✅ |
 
 ---
 

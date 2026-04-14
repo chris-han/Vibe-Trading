@@ -70,7 +70,7 @@ DOCUMENT_WORKFLOW_PROMPT = (
 )
 MARKET_DATA_WORKFLOW_PROMPT = (
     "Market data workflow rules:\n"
-    "- execute_code is forbidden in this runtime. Use write_file plus bash in agent/ instead.\n"
+    "- execute_code is forbidden in this runtime. Use write_file plus bash with the runtime-provided cwd instead.\n"
     "- For finance or research tasks, call load_skill first to get approved data access methods and symbol conventions.\n"
     "- Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.\n"
 )

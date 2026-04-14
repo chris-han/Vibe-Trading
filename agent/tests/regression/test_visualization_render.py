@@ -1,13 +1,15 @@
 """Regression tests for visualization rendering.
 
-Covers three output formats declared in _OUTPUT_FORMAT_PROMPT and produced
+Covers the output formats declared in _OUTPUT_FORMAT_PROMPT and produced
 throughout the agent/ codebase:
 
-  1. ECharts JSON blocks (```echarts```) – rendered by the frontend ECharts JS
-     component; sanitized on the Python side by _sanitize_echarts_blocks().
+  1. Legacy ECharts JSON blocks (```echarts```) – compatibility-only path,
+     sanitized on the Python side by _sanitize_echarts_blocks().
   2. Mermaid blocks (```mermaid```) – rendered by the frontend Mermaid JS
      renderer; the service enforces format rules via prompt.
   3. Markdown pipe-tables – rendered natively by the frontend Markdown renderer.
+
+New chart output should prefer ```vchart``` blocks rather than ```echarts```.
 
 Tests are purely unit-level (no LLM calls, no network).
 """
@@ -333,7 +335,7 @@ class TestMarkdownPipeTable:
 
     def test_no_bare_plain_code_block_for_key_value_data(self):
         """Plain ``` blocks must not be used for key-value / metrics data.
-        Data fences must declare a language (echarts, mermaid, python, etc.)."""
+        Data fences must declare a language (vchart, echarts, mermaid, python, etc.)."""
         bad_output = "```\nSharpe: 1.42\nReturn: 12%\n```"
         # A plain fence has no language tag right after the backticks
         plain_fence_re = re.compile(r"^```\s*\n", re.MULTILINE)
@@ -366,16 +368,16 @@ class TestOutputFormatPrompt:
         assert "mermaid" in p.lower()
         assert "flowchart" in p.lower() or "diagram" in p.lower()
 
-    def test_prompt_requires_echarts_for_charts(self):
+    def test_prompt_requires_vchart_for_new_charts(self):
         p = self._get_prompt()
-        assert "echarts" in p.lower()
-        assert "bar chart" in p.lower() or "bar charts" in p.lower()
+        assert "vchart" in p.lower()
+        assert "do not emit echarts blocks for new reports" in p.lower()
 
     def test_prompt_forbids_ansi_art(self):
         p = self._get_prompt()
         assert "ANSI" in p or "ASCII" in p
 
-    def test_prompt_includes_echarts_dual_axis_rule(self):
+    def test_prompt_keeps_legacy_echarts_dual_axis_rule(self):
         p = self._get_prompt()
         assert "yAxisIndex" in p
         assert "yAxis" in p

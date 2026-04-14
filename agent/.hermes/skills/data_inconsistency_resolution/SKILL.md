@@ -23,31 +23,34 @@ This skill outlines the steps needed to handle data inconsistencies and deprecat
 ```python
 import yfinance as yf
 import pandas as pd
+from pathlib import Path
+
+output_dir = Path(".")
 
 # Step 1: Handling Deprecated APIs
 def fetch_data(ticker, start_date, end_date):
     data = yf.download(ticker, start=start_date, end=end_date)
-    data.to_csv(f"{ticker}_historical_data.csv")
+    data.to_csv(output_dir / f"{ticker}_historical_data.csv")
 
     nvda = yf.Ticker(ticker)
     financials = nvda.financials
-    financials.to_csv(f"{ticker}_financials.csv")
+    financials.to_csv(output_dir / f"{ticker}_financials.csv")
 
     balance_sheet = nvda.balance_sheet
-    balance_sheet.to_csv(f"{ticker}_balance_sheet.csv")
+    balance_sheet.to_csv(output_dir / f"{ticker}_balance_sheet.csv")
 
     cashflow = nvda.cashflow
-    cashflow.to_csv(f"{ticker}_cashflow.csv")
+    cashflow.to_csv(output_dir / f"{ticker}_cashflow.csv")
 
     # Handle net income using income statement.
     income_stmt = nvda.financials
-    income_stmt.to_csv(f"{ticker}_income_statement.csv")
+    income_stmt.to_csv(output_dir / f"{ticker}_income_statement.csv")
 
 # Step 2: Adjusting CSV Data
 def clean_csv(file_path, skip_rows, new_columns):
     df = pd.read_csv(file_path, skiprows=skip_rows)
     df.columns = new_columns
-    cleaned_file_path = f"cleaned_{file_path}"
+    cleaned_file_path = output_dir / f"cleaned_{Path(file_path).name}"
     df.to_csv(cleaned_file_path, index=False)
     return cleaned_file_path
 
@@ -61,7 +64,7 @@ def valuation_analysis(financials_path, balance_sheet_path):
     
     valuation_metrics = {"PE Ratio": pe_ratio, "PB Ratio": pb_ratio}
     valuation_df = pd.DataFrame(valuation_metrics)
-    valuation_df.to_csv("nvda_valuation_metrics.csv")
+    valuation_df.to_csv(output_dir / "nvda_valuation_metrics.csv")
 
 # Step 4: Execute Analysis
 fetch_data("NVDA", "2010-01-01", "2023-10-01")
