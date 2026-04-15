@@ -40,7 +40,7 @@ agent:
 
 skills:
   external_dirs:
-    - ${VIBE_TRADING_ROOT}/backend/src/skills
+    - ${VIBE_TRADING_ROOT}/agent/src/skills
     - ${VIBE_TRADING_ROOT}/hermes-agent/skills
 
 fallback_model:

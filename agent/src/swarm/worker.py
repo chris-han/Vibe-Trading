@@ -39,6 +39,62 @@ _MARKET_DATA_WORKFLOW_HINT = (
 )
 
 
+def _normalize_usage(raw: dict) -> dict:
+    """Map Hermes result fields into a stable worker usage payload."""
+    input_tokens = int(raw.get("input_tokens") or 0)
+    output_tokens = int(raw.get("output_tokens") or 0)
+    cached_input_tokens = int(raw.get("cache_read_tokens") or 0)
+    cache_write_tokens = int(raw.get("cache_write_tokens") or 0)
+    reasoning_tokens = int(raw.get("reasoning_tokens") or 0)
+    api_call_count = int(raw.get("api_calls") or 0)
+    tool_call_count = sum(
+        len(msg.get("tool_calls") or [])
+        for msg in (raw.get("messages") or [])
+        if isinstance(msg, dict) and msg.get("role") == "assistant"
+    )
+    estimated_cost = raw.get("estimated_cost_usd")
+    if estimated_cost is not None:
+        try:
+            estimated_cost = float(estimated_cost)
+        except (TypeError, ValueError):
+            estimated_cost = None
+
+    has_usage = any((
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cache_write_tokens,
+        reasoning_tokens,
+        api_call_count,
+        tool_call_count,
+    )) or estimated_cost not in (None, 0.0)
+
+    has_primary_usage = any((
+        input_tokens,
+        output_tokens,
+        raw.get("total_tokens") or 0,
+    ))
+
+    return {
+        "provider": raw.get("provider"),
+        "model": raw.get("model"),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "tool_call_count": tool_call_count,
+        "api_call_count": api_call_count,
+        "estimated_cost": estimated_cost,
+        "cost_status": raw.get("cost_status"),
+        "cost_source": raw.get("cost_source"),
+        "usage_source": "hermes" if has_usage else "none",
+        "usage_status": (
+            "complete" if has_primary_usage else "partial" if has_usage else "missing"
+        ),
+    }
+
+
 def _emit(
     callback: Callable[[SwarmEvent], None] | None,
     event_type: str,
@@ -205,7 +261,14 @@ def run_worker(
                   {"tool": tool_name, "args": args or {}})
         elif event_type == "tool.completed":
             _emit(event_callback, "tool_result", agent_id, task_id,
-                  {"tool": tool_name, "is_error": kwargs.get("is_error", False)})
+                  {
+                      "tool": tool_name,
+                      "is_error": kwargs.get("is_error", False),
+                      **(
+                          {"duration": kwargs["duration"]}
+                          if kwargs.get("duration") is not None else {}
+                      ),
+                  })
 
     def _on_stream_delta(delta: str | None) -> None:
         if delta:
@@ -228,6 +291,7 @@ def run_worker(
         max_iterations=max_iterations,
         quiet_mode=True,
         session_id=f"swarm-{agent_id}-{task_id}",
+        persist_session=False,
         enabled_toolsets=[
             "terminal",
             "file",
@@ -263,6 +327,7 @@ def run_worker(
     try:
         raw = agent.run_conversation(user_message=user_prompt, task_id=str(task_id))
         summary = (raw.get("final_response") or "").strip()
+        usage = _normalize_usage(raw)
         _write_summary(artifact_dir, summary)
         _emit(event_callback, "worker_completed", agent_id, task_id)
         return WorkerResult(
@@ -270,8 +335,9 @@ def run_worker(
             summary=summary,
             artifact_paths=_collect_artifacts(artifact_dir),
             iterations=raw.get("iterations", 0),
-            input_tokens=raw.get("input_tokens", 0),
-            output_tokens=raw.get("output_tokens", 0),
+            input_tokens=int(usage["input_tokens"]),
+            output_tokens=int(usage["output_tokens"]),
+            usage=usage,
         )
     except Exception as exc:
         error_msg = str(exc)

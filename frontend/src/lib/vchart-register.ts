@@ -77,7 +77,6 @@ import {
   registerPoptip,
   // ── Plugins & interactions ────────────────────────────────────────────────
   registerAllMarks,
-  registerAnimate,
   registerFormatPlugin,
   registerDomTooltipHandler,
   registerCanvasTooltipHandler,
@@ -164,7 +163,6 @@ export function ensureRegistered() {
     registerPoptip,
     // Plugins & interactions
     registerAllMarks,
-    registerAnimate,
     registerFormatPlugin,
     registerDomTooltipHandler,
     registerCanvasTooltipHandler,

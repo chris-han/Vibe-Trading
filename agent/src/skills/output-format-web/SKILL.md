@@ -42,8 +42,9 @@ For mixing **different** chart types (e.g. bar + line combo), use `type: "common
 
 Do NOT use unsupported types. If a chart idea requires an unsupported type, fall back to a Markdown table.
 
-- **Data format:** `"data": {"values": [...]}` for most types. Pie uses `categoryField`/`valueField`; candlestick uses `openField`/`closeField`/`lowField`/`highField`.
-- **Axes:** Cartesian charts (line, bar, area, scatter, common, candlestick) MUST include an `axes` array: `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]`. This applies to both single-series and multi-series charts.
+- **Data format:** `"data": {"values": [...]}` for most types. Pie uses `categoryField`/`valueField`; **radar uses `categoryField`/`valueField`** (NOT `xField`/`yField`); candlestick uses `openField`/`closeField`/`lowField`/`highField`.
+- **Radar chart field names:** ALWAYS use `categoryField` for the dimension axis and `valueField` for the score axis. Using `xField`/`yField` on a radar chart renders only a single dot — this is a known silent failure.
+- **Axes:** Cartesian charts (line, bar, area, scatter, common, candlestick) MUST include an `axes` array: `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]`. Radar charts do NOT use an `axes` array.
 - **Self-check before output:** For every field name in the spec (`xField`, `yField`, `seriesField`, etc.), verify it is an exact key in the `values` array objects. If any field name is missing from the data, fix the data or the field name before outputting.
 - **Style:** Use VChart-native fields and styles only. VChart tooltips: use `"tooltip": {}`. VChart smooth lines: use `"line": {"style": {"curveType": "monotone"}}`.
 - If you cannot produce a valid VChart spec, fall back to a Markdown numeric table.
