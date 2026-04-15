@@ -560,6 +560,31 @@ def _compute_fetch_start_date(run_dir: Path, start_date: str) -> str:
     return (start_dt - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
 
 
+def _normalize_timestamp(ts: Any) -> Optional[str]:
+    """Normalize a timestamp, preserving intraday precision.
+
+    Unlike ``format_run_date``, this does NOT truncate datetime strings to the
+    date portion.  Intraday values like ``"2026-04-10 09:45:00"`` are kept as-is
+    so that the frontend chart can plot individual 5-minute (or other sub-daily)
+    bars without collapsing all intraday bars onto the same calendar date.
+
+    Args:
+        ts: Raw timestamp value from a CSV row or data frame.
+
+    Returns:
+        A normalised string, or ``None`` when the input is empty.
+    """
+    if not ts:
+        return None
+    value = str(ts).strip()
+    if not value:
+        return None
+    # YYYYMMDD → YYYY-MM-DD (compact daily format only)
+    if len(value) == 8 and value.isdigit():
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    return value
+
+
 def _normalize_price_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Normalize stored price rows for charting.
 
@@ -571,7 +596,7 @@ def _normalize_price_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     normalized: List[Dict[str, Any]] = []
     for row in rows:
-        timestamp = format_run_date(row.get("timestamp") or row.get("time"))
+        timestamp = _normalize_timestamp(row.get("timestamp") or row.get("time"))
         if not timestamp:
             continue
         normalized.append(

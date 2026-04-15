@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, Security, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
@@ -576,8 +576,13 @@ async def get_run_code(run_id: str):
 
 
 @app.get("/runs/{run_id}", response_model=RunResponse)
-async def get_run_result(run_id: str):
+async def get_run_result(run_id: str, request: Request):
     """Fetch full details for a historical run by ``run_id``."""
+    # Browser page-refresh sends Accept: text/html — serve the SPA instead of JSON
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept and "application/json" not in accept and _FRONTEND_DIST is not None:
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
     run_dir = _resolve_run_dir(run_id)
 
     if run_dir is None:
@@ -1131,7 +1136,7 @@ except Exception:
 
 
 
-_VCHART_FENCE_RE = _re.compile(r'```vchart\s*\n(.*?)\n\s*```', _re.DOTALL)
+_VCHART_FENCE_RE = _re.compile(r'```(?:vchart|chart)\s*\n(.*?)\n\s*```', _re.DOTALL)
 
 
 def _sanitize_vchart_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -2015,6 +2020,7 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
 # ============================================================================
 
 _swarm_runtime = None
+_FRONTEND_DIST: Optional[Path] = None  # set during startup when SPA is mounted
 
 
 def _get_swarm_runtime():
@@ -2246,6 +2252,8 @@ def serve_main(argv: list[str] | None = None) -> int:
         print(f"[dev] API: http://localhost:{args.port}")
     elif frontend_dist.exists():
         if not any(route.path == "/" for route in app.routes):
+            global _FRONTEND_DIST
+            _FRONTEND_DIST = frontend_dist
             app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend")
         print(f"[prod] Frontend served from {frontend_dist}")
     else:

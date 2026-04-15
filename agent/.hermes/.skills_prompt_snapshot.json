@@ -25,6 +25,10 @@
       1776133179275003371,
       13527
     ],
+    "quant/macro-factor-correlation/SKILL.md": [
+      1776246151512454061,
+      12492
+    ],
     "quant/momentum-stock-screening/SKILL.md": [
       1776132805435003670,
       6657
@@ -125,6 +129,19 @@
       "category": "quant",
       "frontmatter_name": "backtest-risk-audit",
       "description": "Comprehensive risk audit framework for strategy backtests...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "macro-factor-correlation",
+      "category": "quant",
+      "frontmatter_name": "macro-factor-correlation",
+      "description": "Macro factor correlation analysis for individual stocks —...",
       "platforms": [],
       "conditions": {
         "fallback_for_toolsets": [],

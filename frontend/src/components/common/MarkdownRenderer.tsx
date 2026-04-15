@@ -51,7 +51,7 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
     );
   }
 
-  if (!inline && typeof className === "string" && /(?:^|\s)language-vchart(?:\s|$)/.test(className)) {
+  if (!inline && typeof className === "string" && /(?:^|\s)language-(?:vchart|chart)(?:\s|$)/.test(className)) {
     return (
       <Suspense
         fallback={
@@ -84,7 +84,7 @@ function MarkdownPre({ children, className, ...props }: React.ComponentPropsWith
     const childClass = String(child.props?.className || "");
     if (
       typeof child.type !== "string" ||
-      /(?:^|\s)language-(?:mermaid|vchart)(?:\s|$)/.test(childClass)
+      /(?:^|\s)language-(?:mermaid|vchart|chart)(?:\s|$)/.test(childClass)
     ) {
       return <>{children}</>;
     }

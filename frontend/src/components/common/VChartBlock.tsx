@@ -132,7 +132,12 @@ function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> 
     if (typeof xVal === "string") {
       // String-keyed correlation matrix → heatmap
       spec.type = "heatmap";
-      // xField, yField, valueField are already correct
+      // Map common matrix intensity fields to heatmap.valueField so the
+      // renderer knows which property to color (supports `correlation`,
+      // `value`, `size`, or an explicit `colorField`).
+      spec.valueField = spec.valueField ?? spec.sizeField ?? spec.colorField ?? "correlation";
+      // heatmap doesn't use `sizeField`; remove it to avoid confusion.
+      if (spec.sizeField) delete spec.sizeField;
     } else {
       // Numeric scatter-like correlation → scatter
       spec.type = "scatter";
