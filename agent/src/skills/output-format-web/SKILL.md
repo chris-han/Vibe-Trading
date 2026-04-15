@@ -1,6 +1,6 @@
 ---
 name: output-format-web
-description: Output formatting rules for the Vibe-Trading web UI — Markdown tables, Mermaid diagrams, and VChart JSON chart specs.
+description: Output formatting rules for the Vibe-Trading web UI — Markdown tables, Mermaid diagrams, and ECharts JSON chart specs.
 category: tool
 ---
 
@@ -13,38 +13,36 @@ category: tool
 - Mermaid layout: use `TD` (top-down) orientation for most diagrams; use `LR` only when node labels are very wide.
 - Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes), keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.
 - Mermaid timeline safety: for `timeline`, write section headers as `section Label` only, not `section Label : detail`; keep event text on the same `Period : Event` line and avoid HTML like `<br>`.
-- Render time-series, bar charts, pie charts, and quantitative plots as VChart JSON blocks (` ```vchart ... ``` ` with a valid VChart spec object); do NOT produce ASCII/ANSI chart art.
+- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks (` ```echarts ... ``` ` with a valid ECharts option object); do NOT produce ASCII/ANSI chart art.
 - Never use ANSI escape codes or terminal color sequences in responses.
 
-## VChart Spec Rules
+## ECharts Spec Rules
 
-**Allowed single types:** `line`, `bar`, `area`, `pie`, `scatter`, `radar`, `funnel`, `gauge`, `circularProgress`, `linearProgress`, `wordCloud`, `waterfall`, `histogram`, `rose`, `rangeColumn`, `rangeArea`, `boxPlot`, `heatmap`, `sunburst`, `circlePacking`, `treemap`, `sankey`, `correlation`, `sequence`, `map`, `candlestick`.
+Use standard ECharts option objects.
 
-**Critical rule: every field name referenced in `xField`, `yField`, `seriesField`, `categoryField`, `valueField`, etc. MUST be an exact key present in the data `values` objects. Never invent a field name that is not in the data.**
+**Critical rule: every series must reference real data fields or literal arrays that exist in the option. Never invent field names or dimensions that are not present in the data source.**
 
-For multi-series of the **same** chart type (e.g. two lines), convert to **long/tidy format** — one row per data point with a `value` column and a `series` column:
-
-```json
-{"type":"line","data":{"values":[{"month":"Jan","value":1200,"series":"Sales"},{"month":"Jan","value":1000,"series":"Target"},{"month":"Feb","value":1400,"series":"Sales"},{"month":"Feb","value":1100,"series":"Target"}]},"xField":"month","yField":"value","seriesField":"series","axes":[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]}
-```
-
-**Anti-pattern (WRONG) — wide format with mismatched field names:**
-```json
-{"type":"line","data":{"values":[{"month":"Jan","Sales":1200,"Target":1000}]},"xField":"month","yField":"value","seriesField":"type"}
-```
-This is wrong because `"value"` and `"type"` are not keys in the data rows. Always use long format for multi-series.
-
-For mixing **different** chart types (e.g. bar + line combo), use `type: "common"` with a `series` array. Each series must have its own `xField`/`yField`. Data is a top-level array with `id` per entry:
+For standard time-series charts, prefer explicit arrays with `xAxis.data` and `series[].data` because they are robust in the web renderer.
 
 ```json
-{"type":"common","data":[{"id":"d0","values":[{"x":"Jan","bar":120,"line":90}]}],"series":[{"type":"bar","dataIndex":0,"xField":"x","yField":"bar"},{"type":"line","dataIndex":0,"xField":"x","yField":"line"}],"axes":[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]}
+{"title":{"text":"Monthly Sales"},"tooltip":{"trigger":"axis"},"legend":{"data":["Sales","Target"]},"xAxis":{"type":"category","data":["Jan","Feb"]},"yAxis":{"type":"value"},"series":[{"name":"Sales","type":"line","data":[1200,1400]},{"name":"Target","type":"line","data":[1000,1100]}]}
 ```
 
-Do NOT use unsupported types. If a chart idea requires an unsupported type, fall back to a Markdown table.
+**Candlestick charts for the web UI should use standard ECharts candlestick options**, with:
+- `xAxis.data` for timestamps
+- `series[].type = "candlestick"`
+- OHLC rows in `[open, close, low, high]` order
 
-- **Data format:** `"data": {"values": [...]}` for most types. Pie uses `categoryField`/`valueField`; **radar uses `categoryField`/`valueField`** (NOT `xField`/`yField`); candlestick uses `openField`/`closeField`/`lowField`/`highField`.
-- **Radar chart field names:** ALWAYS use `categoryField` for the dimension axis and `valueField` for the score axis. Using `xField`/`yField` on a radar chart renders only a single dot — this is a known silent failure.
-- **Axes:** Cartesian charts (line, bar, area, scatter, common, candlestick) MUST include an `axes` array: `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]`. Radar charts do NOT use an `axes` array.
-- **Self-check before output:** For every field name in the spec (`xField`, `yField`, `seriesField`, etc.), verify it is an exact key in the `values` array objects. If any field name is missing from the data, fix the data or the field name before outputting.
-- **Style:** Use VChart-native fields and styles only. VChart tooltips: use `"tooltip": {}`. VChart smooth lines: use `"line": {"style": {"curveType": "monotone"}}`.
-- If you cannot produce a valid VChart spec, fall back to a Markdown numeric table.
+**Anti-pattern (WRONG):**
+```json
+{"type":"candlestick","data":{"values":[{"time":"2026-04-01","open":1,"high":2,"low":0.5,"close":1.5}]}}
+```
+This is wrong for the web UI because it is a VChart spec, not an ECharts option object.
+
+For mixed charts, use a normal ECharts `series` array with one shared set of axes.
+
+```json
+{"tooltip":{"trigger":"axis"},"legend":{"data":["Volume","Price"]},"xAxis":{"type":"category","data":["Jan","Feb"]},"yAxis":[{"type":"value"},{"type":"value"}],"series":[{"name":"Volume","type":"bar","data":[120,130]},{"name":"Price","type":"line","yAxisIndex":1,"data":[90,95]}]}
+```
+
+If you cannot produce a valid ECharts option, fall back to a Markdown numeric table.

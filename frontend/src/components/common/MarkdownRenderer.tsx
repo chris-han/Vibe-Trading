@@ -16,6 +16,11 @@ const LazyVChartBlock = lazy(async () => {
   return { default: module.VChartBlock };
 });
 
+const LazyEChartsBlock = lazy(async () => {
+  const module = await import("./EChartsBlock");
+  return { default: module.EChartsBlock };
+});
+
 type CodeProps = React.ComponentPropsWithoutRef<"code"> & {
   inline?: boolean;
   children?: ReactNode;
@@ -65,6 +70,20 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
     );
   }
 
+  if (!inline && typeof className === "string" && /(?:^|\s)language-echarts(?:\s|$)/.test(className)) {
+    return (
+      <Suspense
+        fallback={
+          <div className="my-4 overflow-hidden rounded-card border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+            Loading chart...
+          </div>
+        }
+      >
+        <LazyEChartsBlock config={source} />
+      </Suspense>
+    );
+  }
+
   return (
     <code className={className} {...props}>
       {children}
@@ -72,7 +91,7 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
   );
 }
 
-/** Strip the <pre> wrapper when the child is a rich block (mermaid / vchart). */
+/** Strip the <pre> wrapper when the child is a rich block (mermaid / vchart / echarts). */
 function MarkdownPre({ children, className, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: ReactNode }) {
   // ReactMarkdown renders <pre><code class="language-*">…</code></pre>.
   // MarkdownCode is called first and returns <Suspense> for vchart/mermaid blocks,
@@ -84,7 +103,7 @@ function MarkdownPre({ children, className, ...props }: React.ComponentPropsWith
     const childClass = String(child.props?.className || "");
     if (
       typeof child.type !== "string" ||
-      /(?:^|\s)language-(?:mermaid|vchart|chart)(?:\s|$)/.test(childClass)
+      /(?:^|\s)language-(?:mermaid|vchart|chart|echarts)(?:\s|$)/.test(childClass)
     ) {
       return <>{children}</>;
     }

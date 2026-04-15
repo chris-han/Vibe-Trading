@@ -59,10 +59,11 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
 
 _OUTPUT_FORMAT_PROMPT = (
     "Output format rules:\n"
-    "- Prefer Markdown, Mermaid, and vchart blocks for rich visual output.\n"
+    "- Prefer Markdown, Mermaid, and structured chart blocks for rich visual output.\n"
     "- Render tables as Markdown pipe-tables.\n"
     "- Use Mermaid for diagrams and flowcharts.\n"
-    "- Use vchart blocks for charts.\n"
+    "- Use echarts blocks for charts in the web UI.\n"
+    "- For Feishu or other constrained channels, follow the channel-specific chart rules instead of the web rule.\n"
     "- If unsure, fall back to a Markdown table rather than emitting a chart fence.\n"
     "- Never use ANSI art or terminal box-drawing characters.\n"
 )

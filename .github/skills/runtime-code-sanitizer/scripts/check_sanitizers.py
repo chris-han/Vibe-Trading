@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Pre-commit checker: verify that the output-format prompt keeps the VChart,
-Mermaid, and Markdown table rules and does not regress to legacy ECharts
-language.
+"""Pre-commit checker: verify that the output-format prompt keeps the ECharts,
+Mermaid, and Markdown table rules for the web UI.
 
 Usage:
   python check_sanitizers.py              # check only (exits non-zero on failure)
@@ -25,16 +24,13 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 REQUIRED_PROMPT_PHRASES: list[tuple[str, str]] = [
-    ("VChart charts", "Use vchart blocks for charts."),
+    ("ECharts charts", "Use echarts blocks for charts in the web UI."),
     ("Markdown tables", "Render tables as Markdown pipe-tables."),
     ("Mermaid diagrams", "Use Mermaid for diagrams and flowcharts."),
 ]
 
 FORBIDDEN_PROMPT_PHRASES = [
-    "ECharts",
-    "echarts",
-    "legacy chart",
-    "_sanitize_echarts_blocks",
+    "Use vchart blocks for charts.",
 ]
 
 # Paths relative to repo root

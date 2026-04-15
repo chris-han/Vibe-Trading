@@ -3,11 +3,13 @@
 Covers the output formats declared in _OUTPUT_FORMAT_PROMPT and produced
 throughout the agent/ codebase:
 
-  1. VChart JSON blocks (```vchart```) – rendered by the frontend VChart JS
-     component; sanitized on the Python side by api_server._sanitize_vchart_spec().
-  2. Mermaid blocks (```mermaid```) – rendered by the frontend Mermaid JS
+  1. ECharts JSON blocks (```echarts```) – rendered by the frontend ECharts JS
+      component for web UI rich content.
+  2. VChart JSON blocks (```vchart```) – still accepted for Feishu/card rendering
+      and legacy content; sanitized on the Python side by api_server._sanitize_vchart_spec().
+  3. Mermaid blocks (```mermaid```) – rendered by the frontend Mermaid JS
      renderer; the service enforces format rules via prompt.
-  3. Markdown pipe-tables – rendered natively by the frontend Markdown renderer.
+  4. Markdown pipe-tables – rendered natively by the frontend Markdown renderer.
 
 Tests are purely unit-level (no LLM calls, no network).
 """
@@ -206,10 +208,10 @@ class TestOutputFormatPrompt:
         assert "mermaid" in p.lower()
         assert "flowcharts" in p.lower() or "diagrams" in p.lower()
 
-    def test_prompt_requires_vchart_for_new_charts(self):
+    def test_prompt_requires_echarts_for_web_charts(self):
         p = _OUTPUT_FORMAT_PROMPT
-        assert "vchart" in p.lower()
-        assert "use vchart blocks for charts." in p.lower()
+        assert "echarts" in p.lower()
+        assert "use echarts blocks for charts in the web ui." in p.lower()
 
     def test_prompt_forbids_ansi_art(self):
         p = _OUTPUT_FORMAT_PROMPT
