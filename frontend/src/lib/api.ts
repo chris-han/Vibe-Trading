@@ -2,6 +2,7 @@ const BASE = "";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
+    credentials: "include",
     headers: { "Content-Type": "application/json", "Accept": "application/json", ...options?.headers },
     ...options,
   });
@@ -34,6 +35,7 @@ async function uploadFile(file: File, sessionId?: string): Promise<UploadResult>
   const uploadUrl = `${BASE}/upload?session_id=${encodeURIComponent(sessionId)}`;
   const res = await fetch(uploadUrl, {
     method: "POST",
+    credentials: "include",
     headers: { "x-session-id": sessionId },
     body: form,
   });
@@ -50,6 +52,9 @@ async function uploadFile(file: File, sessionId?: string): Promise<UploadResult>
 
 export const api = {
   uploadFile,
+  getAuthMe: () => request<AuthMeData>("/auth/me"),
+  logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
+  feishuLoginUrl: () => `${BASE}/auth/feishu/login`,
   listRuns: () => request<RunListItem[]>("/runs"),
   getRun: (id: string) => request<RunData>(`/runs/${id}`),
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
@@ -194,6 +199,19 @@ export interface SessionItem {
   created_at?: string;
   updated_at?: string;
   last_attempt_id?: string;
+}
+
+export interface AuthMeData {
+  authenticated: boolean;
+  workspace_slug?: string | null;
+  user?: {
+    user_id: string;
+    name: string;
+    email?: string | null;
+    avatar_url?: string | null;
+    feishu_open_id: string;
+    workspace_slug: string;
+  } | null;
 }
 
 export interface MessageItem {

@@ -36,14 +36,21 @@ export function EquityChart({ data, height = 300 }: Props) {
           type: "grid",
           col: 1,
           row: 2,
+          colWidth: [
+            { index: 0, size: (maxW: number) => maxW },
+          ],
+          rowHeight: [
+            { index: 0, size: (maxH: number) => Math.floor(maxH * 0.68) },
+            { index: 1, size: (maxH: number) => Math.floor(maxH * 0.22) },
+          ],
           elements: [
             { modelId: "equityRegion", col: 0, row: 0 },
             { modelId: "ddRegion", col: 0, row: 1 },
           ],
         },
         region: [
-          { id: "equityRegion", height: "68%" },
-          { id: "ddRegion", height: "22%" },
+          { id: "equityRegion" },
+          { id: "ddRegion" },
         ],
         data: [
           { id: "equityData", values: equityValues },
@@ -94,6 +101,7 @@ export function EquityChart({ data, height = 300 }: Props) {
           {
             orient: "left",
             regionId: "equityRegion",
+            zero: false,
             label: {
               style: { fill: t.textColor, fontSize: 10 },
               formatMethod: (v: number) => abbreviateNum(v),
@@ -109,6 +117,7 @@ export function EquityChart({ data, height = 300 }: Props) {
           {
             orient: "left",
             regionId: "ddRegion",
+            zero: false,
             label: {
               style: { fill: t.textColor, fontSize: 10 },
               formatMethod: (v: number) => `${v.toFixed(1)}%`,
@@ -128,12 +137,16 @@ export function EquityChart({ data, height = 300 }: Props) {
             },
           },
         ],
-        scrollBar: [
+        dataZoom: [
           {
             orient: "bottom",
-            regionId: ["equityRegion", "ddRegion"],
+            axisIndex: 0,
             start: 0,
             end: 1,
+            brushSelect: false,
+            roamZoom: { enable: true },
+            roamDrag: { enable: true, reverse: true },
+            roamScroll: { enable: true },
           },
         ],
         tooltip: {

@@ -15,12 +15,13 @@ import signal
 import time
 import csv
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, Security, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,8 @@ logging.basicConfig(
 )
 
 from runtime_env import ensure_runtime_env, get_data_root
+from src.auth.store import AuthStore, AuthUser
+from src.auth.workspace import WorkspacePaths, ensure_workspace
 from src.ui_services import build_run_analysis, load_run_context, load_run_report
 
 # UTF-8 on Windows
@@ -53,7 +56,12 @@ ensure_runtime_env()
 # agent/chris/).  Defaults to agent/ when unset.
 # ---------------------------------------------------------------------------
 _AGENT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = _AGENT_DIR.parent
 DATA_ROOT = get_data_root()
+WORKSPACES_DIR = REPO_ROOT / "workspaces"
+AUTH_CONTROL_DIR = _AGENT_DIR / ".auth"
+AUTH_SESSION_COOKIE = "vt_session"
+_TEMPLATE_HERMES_HOME = _AGENT_DIR / ".hermes"
 
 RUNS_DIR = DATA_ROOT / "runs"
 SESSIONS_DIR = DATA_ROOT / "sessions"
@@ -63,24 +71,32 @@ LEGACY_RUNS_DIR = _AGENT_DIR / "runs"
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-def _candidate_runs_dirs() -> List[Path]:
+def _candidate_runs_dirs(
+    runs_dir: Optional[Path] = None,
+    legacy_runs_dir: Optional[Path] = None,
+) -> List[Path]:
     """Return run roots in lookup order.
 
     Keep backward compatibility with runs written under agent/runs even when
     DATA_ROOT points at a nested directory such as agent/chris.
     """
-    roots = [RUNS_DIR]
-    if LEGACY_RUNS_DIR != RUNS_DIR:
-        roots.append(LEGACY_RUNS_DIR)
+    current_runs = runs_dir or RUNS_DIR
+    current_legacy = legacy_runs_dir or LEGACY_RUNS_DIR
+    roots = [current_runs]
+    if RUNS_DIR not in roots:
+        roots.append(RUNS_DIR)
+    if current_legacy not in roots:
+        roots.append(current_legacy)
     return roots
 
 
-def _session_run_roots() -> List[Path]:
+def _session_run_roots(sessions_dir: Optional[Path] = None) -> List[Path]:
     """Yield runs/ subdirectories for all existing sessions (nested hierarchy)."""
-    if not SESSIONS_DIR.exists():
+    current_sessions = sessions_dir or SESSIONS_DIR
+    if not current_sessions.exists():
         return []
     roots: List[Path] = []
-    for session_dir in SESSIONS_DIR.iterdir():
+    for session_dir in current_sessions.iterdir():
         if not session_dir.is_dir():
             continue
         runs_subdir = session_dir / "runs"
@@ -89,27 +105,40 @@ def _session_run_roots() -> List[Path]:
     return roots
 
 
-def _resolve_run_dir(run_id: str) -> Optional[Path]:
+def _resolve_run_dir(
+    run_id: str,
+    *,
+    runs_dir: Optional[Path] = None,
+    sessions_dir: Optional[Path] = None,
+    legacy_runs_dir: Optional[Path] = None,
+) -> Optional[Path]:
     """Resolve a run directory across all known run roots.
 
     Checks the global runs roots first (backward compat), then falls back to
     scanning nested session run directories.
     """
-    for root in _candidate_runs_dirs():
+    for root in _candidate_runs_dirs(runs_dir=runs_dir, legacy_runs_dir=legacy_runs_dir):
         run_dir = root / run_id
         if run_dir.exists():
             return run_dir
-    for root in _session_run_roots():
+    for root in _session_run_roots(sessions_dir=sessions_dir):
         run_dir = root / run_id
         if run_dir.exists():
             return run_dir
     return None
 
 
-def _collect_run_dirs() -> List[Path]:
+def _collect_run_dirs(
+    *,
+    runs_dir: Optional[Path] = None,
+    sessions_dir: Optional[Path] = None,
+    legacy_runs_dir: Optional[Path] = None,
+) -> List[Path]:
     """Collect unique run directories from all run roots."""
     by_id: Dict[str, Path] = {}
-    all_roots = list(_candidate_runs_dirs()) + _session_run_roots()
+    all_roots = list(
+        _candidate_runs_dirs(runs_dir=runs_dir, legacy_runs_dir=legacy_runs_dir)
+    ) + _session_run_roots(sessions_dir=sessions_dir)
     for root in all_roots:
         if not root.exists():
             continue
@@ -120,13 +149,19 @@ def _collect_run_dirs() -> List[Path]:
     return sorted(by_id.values(), key=lambda x: x.name, reverse=True)
 
 
-def _resolve_upload_dir(session_id: Optional[str] = None, run_id: Optional[str] = None) -> Path:
+def _resolve_upload_dir(
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    *,
+    runs_dir: Optional[Path] = None,
+    sessions_dir: Optional[Path] = None,
+) -> Path:
     """Store user uploads under the most specific artifact scope available."""
     if run_id:
-        return RUNS_DIR / run_id / "artifacts" / "uploads"
+        return (runs_dir or RUNS_DIR) / run_id / "artifacts" / "uploads"
 
     if session_id:
-        session_dir = SESSIONS_DIR / session_id
+        session_dir = (sessions_dir or SESSIONS_DIR) / session_id
         # Allow uploads even if the session directory hasn't been written yet
         # (e.g. rapid upload immediately after session creation)
         return session_dir / "uploads"
@@ -370,9 +405,97 @@ app.add_middleware(
 
 _security = HTTPBearer(auto_error=False)
 _API_KEY = os.getenv("API_AUTH_KEY")
+_auth_store: AuthStore | None = None
+_auth_store_path: Path | None = None
+
+
+@dataclass
+class RequestContext:
+    authenticated: bool
+    user: AuthUser | None
+    workspace: WorkspacePaths
+
+
+def _feishu_oauth_enabled() -> bool:
+    return os.getenv("FEISHU_OAUTH_ENABLED", "false").strip().lower() == "true"
+
+
+def _get_auth_store() -> AuthStore:
+    global _auth_store, _auth_store_path
+    db_path = AUTH_CONTROL_DIR / "auth.sqlite3"
+    if _auth_store is None or _auth_store_path != db_path:
+        _auth_store = AuthStore(db_path)
+        _auth_store_path = db_path
+    return _auth_store
+
+
+def _get_public_workspace() -> WorkspacePaths:
+    slug = (os.getenv("DEFAULT_WORKSPACE_SLUG") or "public").strip() or "public"
+    return ensure_workspace(WORKSPACES_DIR, slug, _TEMPLATE_HERMES_HOME)
+
+
+def _b64url_encode(raw: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(raw: str) -> bytes:
+    import base64
+
+    padding = "=" * (-len(raw) % 4)
+    return base64.urlsafe_b64decode(raw + padding)
+
+
+def _sign_auth_session(user: AuthUser) -> str:
+    secret = os.getenv("FEISHU_SESSION_SECRET", "").encode("utf-8")
+    if not secret:
+        raise RuntimeError("FEISHU_SESSION_SECRET is required when Feishu OAuth is enabled")
+    payload = json.dumps(
+        {"user_id": user.user_id, "workspace_slug": user.workspace_slug},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    signature = _b64url_encode(_hmac.new(secret, payload, hashlib.sha256).digest())
+    return f"{_b64url_encode(payload)}.{signature}"
+
+
+def _read_auth_session(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not token or "." not in token:
+        return None
+    secret = os.getenv("FEISHU_SESSION_SECRET", "").encode("utf-8")
+    if not secret:
+        return None
+    payload_b64, signature = token.split(".", 1)
+    try:
+        payload = _b64url_decode(payload_b64)
+    except Exception:
+        return None
+    expected = _b64url_encode(_hmac.new(secret, payload, hashlib.sha256).digest())
+    if not _hmac.compare_digest(signature, expected):
+        return None
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _resolve_request_context(request: Request, *, require_login: bool = False) -> RequestContext:
+    if _feishu_oauth_enabled():
+        session_payload = _read_auth_session(request.cookies.get(AUTH_SESSION_COOKIE))
+        if session_payload:
+            user = _get_auth_store().get_user_by_id(str(session_payload.get("user_id") or ""))
+            if user is not None:
+                workspace = ensure_workspace(WORKSPACES_DIR, user.workspace_slug, _TEMPLATE_HERMES_HOME)
+                return RequestContext(authenticated=True, user=user, workspace=workspace)
+        if require_login:
+            raise HTTPException(status_code=401, detail="Authentication required")
+    return RequestContext(authenticated=False, user=None, workspace=_get_public_workspace())
 
 
 async def require_auth(
+    request: Request,
     cred: HTTPAuthorizationCredentials = Security(_security),
 ) -> None:
     """Validate Bearer token against API_AUTH_KEY environment variable.
@@ -386,6 +509,9 @@ async def require_auth(
     Raises:
         HTTPException: 401 when API_AUTH_KEY is set but the token is missing or wrong.
     """
+    if _feishu_oauth_enabled():
+        _resolve_request_context(request, require_login=True)
+        return
     if not _API_KEY:
         return
     if not cred or cred.credentials != _API_KEY:
@@ -554,7 +680,7 @@ def _build_response_from_run_dir(run_dir: Path, elapsed: float, *, include_analy
 # ============================================================================
 
 @app.get("/runs/{run_id}/code")
-async def get_run_code(run_id: str):
+async def get_run_code(run_id: str, request: Request):
     """Return strategy source files for a run.
 
     Args:
@@ -563,7 +689,12 @@ async def get_run_code(run_id: str):
     Returns:
         Map filename -> source text.
     """
-    resolved_run_dir = _resolve_run_dir(run_id)
+    ctx = _resolve_request_context(request, require_login=False)
+    resolved_run_dir = _resolve_run_dir(
+        run_id,
+        runs_dir=ctx.workspace.runs_dir,
+        sessions_dir=ctx.workspace.sessions_dir,
+    )
     run_dir = resolved_run_dir / "code" if resolved_run_dir else None
     if run_dir is None or not run_dir.exists():
         raise HTTPException(status_code=404, detail=f"Code directory for run {run_id} not found")
@@ -581,9 +712,17 @@ async def get_run_result(run_id: str, request: Request):
     # Browser page-refresh sends Accept: text/html — serve the SPA instead of JSON
     accept = request.headers.get("accept", "")
     if "text/html" in accept and "application/json" not in accept and _FRONTEND_DIST is not None:
-        return FileResponse(_FRONTEND_DIST / "index.html")
+        resp = FileResponse(_FRONTEND_DIST / "index.html")
+        resp.headers["Vary"] = "Accept"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
-    run_dir = _resolve_run_dir(run_id)
+    ctx = _resolve_request_context(request, require_login=False)
+    run_dir = _resolve_run_dir(
+        run_id,
+        runs_dir=ctx.workspace.runs_dir,
+        sessions_dir=ctx.workspace.sessions_dir,
+    )
 
     if run_dir is None:
         raise HTTPException(
@@ -597,10 +736,14 @@ async def get_run_result(run_id: str, request: Request):
 
 
 @app.get("/runs", response_model=List[RunInfo])
-async def list_runs(limit: int = 20):
+async def list_runs(request: Request, limit: int = 20):
     """List recent runs with summary fields."""
     limit = min(max(1, limit), 100)
-    run_dirs = _collect_run_dirs()
+    ctx = _resolve_request_context(request, require_login=False)
+    run_dirs = _collect_run_dirs(
+        runs_dir=ctx.workspace.runs_dir,
+        sessions_dir=ctx.workspace.sessions_dir,
+    )
 
     if not run_dirs:
         return []
@@ -751,19 +894,99 @@ async def api_info():
     }
 
 
+class AuthUserResponse(BaseModel):
+    user_id: str
+    name: str
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+    feishu_open_id: str
+    workspace_slug: str
+
+
+class AuthMeResponse(BaseModel):
+    authenticated: bool
+    user: Optional[AuthUserResponse] = None
+    workspace_slug: Optional[str] = None
+
+
+@app.get("/auth/me", response_model=AuthMeResponse)
+async def auth_me(request: Request):
+    ctx = _resolve_request_context(request, require_login=False)
+    if not ctx.authenticated or ctx.user is None:
+        return AuthMeResponse(authenticated=False, workspace_slug=ctx.workspace.workspace_slug)
+    return AuthMeResponse(
+        authenticated=True,
+        workspace_slug=ctx.workspace.workspace_slug,
+        user=AuthUserResponse(
+            user_id=ctx.user.user_id,
+            name=ctx.user.name,
+            email=ctx.user.email,
+            avatar_url=ctx.user.avatar_url,
+            feishu_open_id=ctx.user.feishu_open_id,
+            workspace_slug=ctx.user.workspace_slug,
+        ),
+    )
+
+
+@app.get("/auth/feishu/login")
+async def auth_feishu_login():
+    if not _feishu_oauth_enabled():
+        raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
+    app_id = os.getenv("FEISHU_OAUTH_APP_ID", "").strip()
+    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    if not app_id or not redirect_uri:
+        raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
+    state = uuid.uuid4().hex
+    url = (
+        f"{_FEISHU_BASE_URL}/open-apis/authen/v1/authorize"
+        f"?app_id={app_id}&redirect_uri={redirect_uri}&response_type=code&state={state}"
+    )
+    return RedirectResponse(url=url, status_code=307)
+
+
+@app.get("/auth/feishu/callback")
+async def auth_feishu_callback(code: str, state: Optional[str] = None):
+    if not _feishu_oauth_enabled():
+        raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
+    token_data = _feishu_exchange_oauth_code(code)
+    profile = _feishu_fetch_user_profile(str(token_data.get("access_token") or ""))
+    user = _get_auth_store().upsert_feishu_user(
+        open_id=str(profile.get("open_id") or ""),
+        union_id=profile.get("union_id"),
+        name=str(profile.get("name") or profile.get("en_name") or profile.get("email") or profile.get("open_id") or "user"),
+        email=profile.get("email"),
+        avatar_url=profile.get("avatar_url"),
+    )
+    ensure_workspace(WORKSPACES_DIR, user.workspace_slug, _TEMPLATE_HERMES_HOME)
+    response = RedirectResponse(url="/", status_code=307)
+    response.set_cookie(
+        AUTH_SESSION_COOKIE,
+        _sign_auth_session(user),
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        path="/",
+    )
+    return response
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(AUTH_SESSION_COOKIE, path="/")
+    return response
+
+
 # ============================================================================
 # Session API
 # ============================================================================
 
 _session_service = None
+_session_service_by_workspace: Dict[str, Any] = {}
 
 
-def _get_session_service():
+def _get_session_service(workspace: Optional[WorkspacePaths] = None):
     """Lazy-init session service when ENABLE_SESSION_RUNTIME=true."""
-    global _session_service
-    if _session_service is not None:
-        return _session_service
-
     if os.getenv("ENABLE_SESSION_RUNTIME", "true").lower() != "true":
         return None
 
@@ -772,7 +995,18 @@ def _get_session_service():
     from src.session.events import EventBus
     from src.session.service import SessionService
 
-    store = SessionStore(base_dir=SESSIONS_DIR)
+    if workspace is not None:
+        key = workspace.workspace_slug
+        if key in _session_service_by_workspace:
+            return _session_service_by_workspace[key]
+        store = SessionStore(base_dir=workspace.sessions_dir)
+        runs_dir = workspace.runs_dir
+    else:
+        global _session_service
+        if _session_service is not None:
+            return _session_service
+        store = SessionStore(base_dir=SESSIONS_DIR)
+        runs_dir = RUNS_DIR
     event_bus = EventBus()
 
     try:
@@ -781,18 +1015,67 @@ def _get_session_service():
     except RuntimeError:
         pass
 
-    _session_service = SessionService(
+    svc = SessionService(
         store=store,
         event_bus=event_bus,
-        runs_dir=RUNS_DIR,
+        runs_dir=runs_dir,
     )
-    return _session_service
+    if workspace is not None:
+        _session_service_by_workspace[workspace.workspace_slug] = svc
+        return svc
+    _session_service = svc
+    return svc
+
+
+def _feishu_exchange_oauth_code(code: str) -> Dict[str, Any]:
+    import requests
+
+    app_id = os.getenv("FEISHU_OAUTH_APP_ID", "").strip()
+    app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
+    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    if not app_id or not app_secret or not redirect_uri:
+        raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
+
+    response = requests.post(
+        f"{_FEISHU_BASE_URL}/open-apis/authen/v2/oauth/token",
+        json={
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": app_id,
+            "client_secret": app_secret,
+            "redirect_uri": redirect_uri,
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data") or payload
+    if not isinstance(data, dict) or not data.get("access_token"):
+        raise HTTPException(status_code=502, detail="Feishu OAuth token exchange failed")
+    return data
+
+
+def _feishu_fetch_user_profile(access_token: str) -> Dict[str, Any]:
+    import requests
+
+    response = requests.get(
+        f"{_FEISHU_BASE_URL}/open-apis/authen/v1/user_info",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data") or payload
+    if not isinstance(data, dict) or not data.get("open_id"):
+        raise HTTPException(status_code=502, detail="Feishu user info fetch failed")
+    return data
 
 
 @app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])
-async def create_session(request: CreateSessionRequest):
+async def create_session(request: CreateSessionRequest, http_request: Request):
     """Create a chat session."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(http_request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     session = svc.create_session(title=request.title, config=request.config)
@@ -807,9 +1090,10 @@ async def create_session(request: CreateSessionRequest):
 
 
 @app.get("/sessions", response_model=List[SessionResponse])
-async def list_sessions(limit: int = Query(50, ge=1, le=200)):
+async def list_sessions(request: Request, limit: int = Query(50, ge=1, le=200)):
     """List sessions."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     sessions = svc.list_sessions(limit=limit)
@@ -827,9 +1111,10 @@ async def list_sessions(limit: int = Query(50, ge=1, le=200)):
 
 
 @app.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
+async def get_session(session_id: str, request: Request):
     """Get one session by id."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     session = svc.get_session(session_id)
@@ -845,9 +1130,10 @@ async def get_session(session_id: str):
     )
 
 @app.post("/sessions/batch-delete", dependencies=[Depends(require_auth)])
-async def batch_delete_sessions(request: BatchDeleteSessionsRequest):
+async def batch_delete_sessions(request: BatchDeleteSessionsRequest, http_request: Request):
     """Delete multiple sessions."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(http_request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     result = svc.delete_sessions(request.session_ids)
@@ -864,9 +1150,10 @@ class UpdateSessionRequest(BaseModel):
 
 
 @app.patch("/sessions/{session_id}", dependencies=[Depends(require_auth)])
-async def update_session(session_id: str, req: UpdateSessionRequest):
+async def update_session(session_id: str, req: UpdateSessionRequest, request: Request):
     """Update session fields (e.g. title)."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     session = svc.store.get_session(session_id)
@@ -881,9 +1168,10 @@ async def update_session(session_id: str, req: UpdateSessionRequest):
 
 
 @app.post("/sessions/{session_id}/messages", dependencies=[Depends(require_auth)])
-async def send_message(session_id: str, request: SendMessageRequest):
+async def send_message(session_id: str, request: SendMessageRequest, http_request: Request):
     """Send a user message and start the agent loop (natural language strategy)."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(http_request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     try:
@@ -894,9 +1182,10 @@ async def send_message(session_id: str, request: SendMessageRequest):
 
 
 @app.post("/sessions/{session_id}/cancel", dependencies=[Depends(require_auth)])
-async def cancel_session(session_id: str):
+async def cancel_session(session_id: str, request: Request):
     """Cancel the in-flight agent loop for this session."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     cancelled = svc.cancel_current(session_id)
@@ -906,9 +1195,10 @@ async def cancel_session(session_id: str):
 
 
 @app.get("/sessions/{session_id}/messages", response_model=List[MessageResponse])
-async def get_messages(session_id: str, limit: int = Query(100, ge=1, le=1000)):
+async def get_messages(session_id: str, request: Request, limit: int = Query(100, ge=1, le=1000)):
     """List messages for a session."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     messages = svc.get_messages(session_id, limit=limit)
@@ -927,9 +1217,10 @@ async def get_messages(session_id: str, limit: int = Query(100, ge=1, le=1000)):
 
 
 @app.get("/sessions/{session_id}/event-log", response_model=List[SessionEventResponse])
-async def get_event_log(session_id: str, limit: int = Query(1000, ge=1, le=20000)):
+async def get_event_log(session_id: str, request: Request, limit: int = Query(1000, ge=1, le=20000)):
     """List canonical session events."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     session = svc.get_session(session_id)
@@ -957,9 +1248,10 @@ async def get_event_log(session_id: str, limit: int = Query(1000, ge=1, le=20000
 
 
 @app.get("/sessions/{session_id}/trajectory", response_model=SessionTrajectoryResponse)
-async def get_session_trajectory(session_id: str):
+async def get_session_trajectory(session_id: str, request: Request):
     """Export a session as an Atropos/Hermes trajectory entry."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     try:
@@ -976,7 +1268,8 @@ async def session_events(
     last_event_id: Optional[str] = Query(None, alias="Last-Event-ID"),
 ):
     """SSE stream for agent events."""
-    svc = _get_session_service()
+    ctx = _resolve_request_context(request, require_login=False)
+    svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
     session = svc.get_session(session_id)
@@ -1037,11 +1330,16 @@ async def upload_file(
         or request.query_params.get("run_id")
         or request.headers.get("x-run-id")
     )
+    ctx = _resolve_request_context(request, require_login=False)
+    active_runs_dir = ctx.workspace.runs_dir if _feishu_oauth_enabled() else RUNS_DIR
+    active_sessions_dir = ctx.workspace.sessions_dir if _feishu_oauth_enabled() else SESSIONS_DIR
 
     try:
         target_dir = _resolve_upload_dir(
             session_id=effective_session_id,
             run_id=effective_run_id,
+            runs_dir=active_runs_dir,
+            sessions_dir=active_sessions_dir,
         )
     except HTTPException as exc:
         if exc.status_code == 400 and "session_id or run_id" in str(exc.detail):
@@ -1054,6 +1352,15 @@ async def upload_file(
                 ),
             )
         raise
+
+    if _feishu_oauth_enabled() and effective_session_id and not (active_sessions_dir / effective_session_id).exists():
+        raise HTTPException(status_code=404, detail=f"Session {effective_session_id} not found")
+    if _feishu_oauth_enabled() and effective_run_id and _resolve_run_dir(
+        effective_run_id,
+        runs_dir=active_runs_dir,
+        sessions_dir=active_sessions_dir,
+    ) is None:
+        raise HTTPException(status_code=404, detail=f"Run {effective_run_id} not found")
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2020,16 +2327,26 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
 # ============================================================================
 
 _swarm_runtime = None
+_swarm_runtime_by_workspace: Dict[str, Any] = {}
 _FRONTEND_DIST: Optional[Path] = None  # set during startup when SPA is mounted
 
 
-def _get_swarm_runtime():
+def _get_swarm_runtime(workspace: Optional[WorkspacePaths] = None):
     """Lazy-init SwarmRuntime singleton."""
+    from src.swarm.store import SwarmStore
+    from src.swarm.runtime import WorkflowRuntime
+    if workspace is not None:
+        key = workspace.workspace_slug
+        if key in _swarm_runtime_by_workspace:
+            return _swarm_runtime_by_workspace[key]
+        swarm_dir = workspace.swarm_dir / "runs"
+        store = SwarmStore(base_dir=swarm_dir)
+        runtime = WorkflowRuntime(store=store)
+        _swarm_runtime_by_workspace[key] = runtime
+        return runtime
     global _swarm_runtime
     if _swarm_runtime is not None:
         return _swarm_runtime
-    from src.swarm.store import SwarmStore
-    from src.swarm.runtime import WorkflowRuntime
     swarm_dir = DATA_ROOT / ".swarm" / "runs"
     store = SwarmStore(base_dir=swarm_dir)
     _swarm_runtime = WorkflowRuntime(store=store)
@@ -2044,9 +2361,10 @@ async def list_swarm_presets():
 
 
 @app.post("/swarm/runs", dependencies=[Depends(require_auth)])
-async def create_swarm_run(request: dict):
+async def create_swarm_run(request: dict, http_request: Request):
     """Start a swarm run: body must include preset_name and user_vars."""
-    runtime = _get_swarm_runtime()
+    ctx = _resolve_request_context(http_request, require_login=True)
+    runtime = _get_swarm_runtime(ctx.workspace)
     preset_name = request.get("preset_name", "")
     user_vars = request.get("user_vars", {})
     try:
@@ -2059,9 +2377,10 @@ async def create_swarm_run(request: dict):
 
 
 @app.get("/swarm/runs")
-async def list_swarm_runs(limit: int = Query(20, ge=1, le=100)):
+async def list_swarm_runs(request: Request, limit: int = Query(20, ge=1, le=100)):
     """List swarm runs (newest first)."""
-    runtime = _get_swarm_runtime()
+    ctx = _resolve_request_context(request, require_login=True)
+    runtime = _get_swarm_runtime(ctx.workspace)
     runs = runtime._store.list_runs(limit=limit)
     return [
         {
@@ -2077,11 +2396,12 @@ async def list_swarm_runs(limit: int = Query(20, ge=1, le=100)):
 
 
 @app.get("/swarm/runs/{run_id}")
-async def get_swarm_run(run_id: str):
+async def get_swarm_run(run_id: str, request: Request):
     """Swarm run detail including task statuses."""
     from src.swarm.task_store import TaskStore
 
-    runtime = _get_swarm_runtime()
+    ctx = _resolve_request_context(request, require_login=True)
+    runtime = _get_swarm_runtime(ctx.workspace)
     run = runtime._store.load_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -2112,7 +2432,8 @@ async def get_swarm_run(run_id: str):
 async def swarm_run_events(run_id: str, request: Request, last_index: int = Query(0, ge=0)):
     """SSE stream for a swarm run."""
     import asyncio
-    runtime = _get_swarm_runtime()
+    ctx = _resolve_request_context(request, require_login=True)
+    runtime = _get_swarm_runtime(ctx.workspace)
 
     async def event_stream():
         idx = last_index
@@ -2133,9 +2454,10 @@ async def swarm_run_events(run_id: str, request: Request, last_index: int = Quer
 
 
 @app.post("/swarm/runs/{run_id}/cancel", dependencies=[Depends(require_auth)])
-async def cancel_swarm_run(run_id: str):
+async def cancel_swarm_run(run_id: str, request: Request):
     """Cancel an active swarm run."""
-    runtime = _get_swarm_runtime()
+    ctx = _resolve_request_context(request, require_login=True)
+    runtime = _get_swarm_runtime(ctx.workspace)
     ok = runtime.cancel_run(run_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"No active run {run_id}")

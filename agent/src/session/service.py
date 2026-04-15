@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import json
 import logging
 import os
@@ -666,9 +667,8 @@ class SessionService:
         latest_useful_tool_output: str | None = None
 
         state_store = RunStateStore()
-        session_runs_dir = self.store.base_dir / sid / "runs"
-        session_runs_dir.mkdir(parents=True, exist_ok=True)
-        run_dir = state_store.create_run_dir(session_runs_dir)
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = state_store.create_run_dir(self.runs_dir)
         state_store.save_request(run_dir, attempt.prompt, {"session_id": sid})
 
         if is_backtest_prompt(attempt.prompt):
@@ -901,7 +901,7 @@ class SessionService:
         history = self._convert_messages_to_history(messages) if messages else []
 
         from src.vibe_trading_helper import reset_session_runs_dir, set_session_runs_dir
-        _runs_token = set_session_runs_dir(session_runs_dir)
+        _runs_token = set_session_runs_dir(self.runs_dir)
         # Configure hermes built-in file/terminal tools to write into the run's
         # artifact directory instead of the process cwd.
         try:
@@ -916,12 +916,15 @@ class SessionService:
         (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
         try:
             loop = asyncio.get_event_loop()
+            run_context = contextvars.copy_context()
             raw = await loop.run_in_executor(
                 _AGENT_EXECUTOR,
-                lambda: agent.run_conversation(
-                    user_message=attempt.prompt,
-                    conversation_history=history,
-                    task_id=sid,
+                lambda: run_context.run(
+                    lambda: agent.run_conversation(
+                        user_message=attempt.prompt,
+                        conversation_history=history,
+                        task_id=sid,
+                    )
                 ),
             )
             final_text = (raw.get("final_response") or "").strip()

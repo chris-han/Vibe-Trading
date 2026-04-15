@@ -199,6 +199,81 @@ class TestHermesSessionEvents:
             assert "tool" in tool_calls[0]
             assert "args" in tool_calls[0]
 
+    def test_run_with_agent_creates_run_under_workspace_runs_root(self, tmp_path):
+        """_run_with_agent() must create placeholder runs under service.runs_dir, not sessions/<id>/runs."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="ping")
+        svc.store.create_attempt(attempt)
+
+        expected_runs_root = tmp_path / "runs"
+        created_run_dir = expected_runs_root / "r-root"
+        created_run_dir.mkdir(parents=True, exist_ok=True)
+
+        def _agent_factory(*args, **kwargs):
+            inst = MagicMock()
+            inst.run_conversation = lambda **kw: {"final_response": "ok", "status": "success"}
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                MockStore.return_value.create_run_dir.return_value = created_run_dir
+                MockStore.return_value.mark_success.return_value = None
+                await svc._run_with_agent(attempt)
+
+                create_arg = MockStore.return_value.create_run_dir.call_args.args[0]
+                assert create_arg == expected_runs_root
+                assert create_arg != svc.store.base_dir / session.session_id / "runs"
+
+        _run(_t())
+
+    def test_run_with_agent_propagates_workspace_runs_root_into_executor_tools(self, tmp_path):
+        """setup_backtest_run invoked inside Hermes executor must use service.runs_dir."""
+        from src.session.models import Attempt
+        from src.vibe_trading_helper import _setup_backtest_run
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="ping")
+        svc.store.create_attempt(attempt)
+
+        placeholder_run_dir = tmp_path / "runs" / "placeholder"
+        placeholder_run_dir.mkdir(parents=True, exist_ok=True)
+
+        def _agent_factory(*args, **kwargs):
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                payload = json.loads(_setup_backtest_run({"config_json": {"symbol": "BTC-USDT"}}))
+                return {
+                    "final_response": "ok",
+                    "status": "success",
+                    "run_dir": payload["run_dir"],
+                    "run_id": Path(payload["run_dir"]).name,
+                }
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                MockStore.return_value.create_run_dir.return_value = placeholder_run_dir
+                MockStore.return_value.mark_success.return_value = None
+
+                result = await svc._run_with_agent(attempt)
+
+                actual_run_dir = Path(result["run_dir"])
+                assert actual_run_dir.parent == svc.runs_dir
+                assert actual_run_dir.parent != svc.store.base_dir / session.session_id / "runs"
+
+        _run(_t())
+
     def test_run_with_agent_emits_tool_result_event(self, tmp_path):
         """_run_with_agent() emits tool_result with 'tool' and 'is_error' keys."""
         from src.session.models import Attempt

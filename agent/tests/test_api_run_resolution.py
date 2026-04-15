@@ -39,3 +39,18 @@ def test_collect_run_dirs_prefers_primary_root_on_duplicates(tmp_path: Path, mon
 
     assert by_name["shared_run"] == preferred
     assert by_name["legacy_only"] == unique_legacy
+
+
+def test_workspace_run_lookup_falls_back_to_global_runs_root(tmp_path: Path, monkeypatch):
+    workspace_runs = tmp_path / "workspaces" / "chris_han" / "agent" / "runs"
+    global_runs = tmp_path / "chris" / "runs"
+
+    expected = global_runs / "20260415_203540_20_cbe68a"
+    expected.mkdir(parents=True)
+
+    monkeypatch.setattr(api_server, "RUNS_DIR", global_runs)
+    monkeypatch.setattr(api_server, "LEGACY_RUNS_DIR", tmp_path / "agent" / "runs")
+
+    resolved = api_server._resolve_run_dir(expected.name, runs_dir=workspace_runs)
+
+    assert resolved == expected

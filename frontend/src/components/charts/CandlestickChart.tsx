@@ -204,12 +204,19 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       background: "transparent",
       layout: {
         type: "grid", col: 1, row: 2,
+        colWidth: [
+          { index: 0, size: (maxW: number) => maxW },
+        ],
+        rowHeight: [
+          { index: 0, size: (maxH: number) => Math.floor(maxH * 0.65) },
+          { index: 1, size: (maxH: number) => Math.floor(maxH * 0.25) },
+        ],
         elements: [
           { modelId: "mainRegion", col: 0, row: 0 },
           { modelId: "subRegion", col: 0, row: 1 },
         ],
       },
-      region: [{ id: "mainRegion", height: "65%" }, { id: "subRegion", height: "25%" }],
+      region: [{ id: "mainRegion" }, { id: "subRegion" }],
       data: dataSources,
       series: [
         {
@@ -223,11 +230,22 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       ],
       axes: [
         { orient: "bottom", regionId: "mainRegion", label: { style: { fill: t.textColor, fontSize: 10 } }, domainLine: { style: { stroke: t.axisColor } } },
-        { orient: "left", regionId: "mainRegion", label: { style: { fill: t.textColor, fontSize: 10 }, formatMethod: (v: number) => abbreviateNum(v) }, grid: { style: { stroke: t.gridColor } } },
+        { orient: "left", regionId: "mainRegion", zero: false, label: { style: { fill: t.textColor, fontSize: 10 }, formatMethod: (v: number) => abbreviateNum(v) }, grid: { style: { stroke: t.gridColor } } },
         { orient: "bottom", regionId: "subRegion", label: { visible: false }, domainLine: { style: { stroke: t.axisColor } } },
         { orient: "left", regionId: "subRegion", label: { style: { fill: t.textColor, fontSize: 10 } }, grid: { style: { stroke: t.gridColor } }, ...subAxisExtra },
       ],
-      scrollBar: [{ orient: "bottom", regionId: ["mainRegion", "subRegion"], start: scrollStart, end: 1 }],
+      dataZoom: [
+        {
+          orient: "bottom",
+          axisIndex: 0,
+          start: scrollStart,
+          end: 1,
+          brushSelect: false,
+          roamZoom: { enable: true },
+          roamDrag: { enable: true, reverse: true },
+          roamScroll: { enable: true },
+        },
+      ],
       tooltip: { mark: { visible: false }, dimension: { visible: true } },
       animation: false,
     };

@@ -1,9 +1,22 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { ArrowRight, Bot, BarChart3, Zap } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { api, type AuthMeData } from "@/lib/api";
 
 export function Home() {
   const { t } = useI18n();
+  const [auth, setAuth] = useState<AuthMeData | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getAuthMe().then((data) => {
+      if (!cancelled) setAuth(data);
+    }).catch(() => {
+      if (!cancelled) setAuth({ authenticated: false });
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const FEATURES = [
     { icon: Bot, title: t.feat1, desc: t.feat1d },
@@ -20,12 +33,26 @@ export function Home() {
         </h1>
         <p className="text-lg text-muted-foreground leading-relaxed">{t.heroDesc}</p>
         {/* Primary CTA - Wise Green with 16px radius */}
-        <Link
-          to="/agent"
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-button bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors hover:scale-105 active:scale-95"
-        >
-          {t.startResearch} <ArrowRight className="h-4 w-4" />
-        </Link>
+        {auth?.authenticated ? (
+          <Link
+            to="/agent"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-button bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors hover:scale-105 active:scale-95"
+          >
+            {t.startResearch} <ArrowRight className="h-4 w-4" />
+          </Link>
+        ) : (
+          <a
+            href={api.feishuLoginUrl()}
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-button bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors hover:scale-105 active:scale-95"
+          >
+            Sign in with Feishu <ArrowRight className="h-4 w-4" />
+          </a>
+        )}
+        {auth?.authenticated && auth.user && (
+          <p className="text-sm text-muted-foreground">
+            Workspace: <span className="font-medium text-foreground">{auth.user.workspace_slug}</span>
+          </p>
+        )}
       </div>
 
       {/* Feature cards with generous border radius and warm styling */}

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Per-session runs base directory context variable
 # ---------------------------------------------------------------------------
 # Set this before launching an agent so that setup_backtest_run creates its
-# run directory under the session folder instead of the global runs/ root.
+# run directory under the active workspace runs/ root.
 # ---------------------------------------------------------------------------
 _session_runs_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "session_runs_dir", default=None
@@ -23,7 +23,7 @@ _session_runs_dir_var: contextvars.ContextVar[Path | None] = contextvars.Context
 
 
 def set_session_runs_dir(path: Path) -> contextvars.Token:
-    """Set the session-scoped runs directory for the current context."""
+    """Set the active runs directory for the current context."""
     return _session_runs_dir_var.set(path)
 
 

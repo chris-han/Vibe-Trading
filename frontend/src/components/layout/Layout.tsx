@@ -1,10 +1,10 @@
 ﻿import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
-import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, FileJson, Download } from "lucide-react";
+import { BarChart3, Bot, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, ChevronDown, FileJson, Download, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useDarkMode } from "@/hooks/useDarkMode";
-import { api } from "@/lib/api";
+import { api, type AuthMeData } from "@/lib/api";
 import { useAgentStore } from "@/stores/agent";
 import { useSessionsStore } from "@/stores/sessions";
 import { ConnectionBanner } from "@/components/layout/ConnectionBanner";
@@ -28,6 +28,8 @@ export function Layout() {
   const sseStatus = useAgentStore(s => s.sseStatus);
   const sseRetryAttempt = useAgentStore(s => s.sseRetryAttempt);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("qa-sidebar") === "collapsed");
+  const [auth, setAuth] = useState<AuthMeData | null>(null);
+  const [userCardExpanded, setUserCardExpanded] = useState(false);
 
   const activeSessionId = searchParams.get("session");
 
@@ -39,6 +41,15 @@ export function Layout() {
   // the active session changes (covers new session creation from Agent).
   const isAgentPage = pathname.startsWith("/agent");
   useEffect(() => { loadSessions(); }, [loadSessions, isAgentPage, activeSessionId]);
+  useEffect(() => {
+    let cancelled = false;
+    api.getAuthMe().then((data) => {
+      if (!cancelled) setAuth(data);
+    }).catch(() => {
+      if (!cancelled) setAuth({ authenticated: false });
+    });
+    return () => { cancelled = true; };
+  }, [pathname]);
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
@@ -59,6 +70,17 @@ export function Layout() {
       updateSessionTitle(sid, renameValue.trim());
     } catch { /* ignore */ }
     setRenameTarget(null);
+  };
+
+  const logout = async () => {
+    try {
+      await api.logout();
+      setAuth({ authenticated: false });
+      removeSessions(sessions.map((s) => s.session_id));
+      window.location.href = "/";
+    } catch {
+      /* ignore */
+    }
   };
 
   return (
@@ -250,9 +272,88 @@ export function Layout() {
         {collapsed && <div className="flex-1" />}
 
         {/* Footer */}
-        <div className={cn("border-t border-border", collapsed ? "p-2 flex flex-col items-center gap-2" : "p-4 space-y-1")}>
+        <div className={cn("border-t border-border", collapsed ? "p-2 flex flex-col items-center gap-2" : "p-4 space-y-2")}>
+          {!collapsed && (
+            <div className="rounded-card border border-border/80 bg-background px-3 py-3 text-xs shadow-sm shadow-black/5">
+              {auth?.authenticated && auth.user ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setUserCardExpanded((value) => !value)}
+                    aria-expanded={userCardExpanded}
+                    className="flex w-full items-center gap-3 rounded-button px-1 py-1 text-left transition-colors hover:bg-muted/50 cursor-pointer"
+                  >
+                    {auth.user.avatar_url ? (
+                      <img
+                        src={auth.user.avatar_url}
+                        alt={`${auth.user.name} avatar`}
+                        className="h-10 w-10 shrink-0 rounded-full border border-border/70 object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/18 text-sm font-semibold text-primary-foreground">
+                        {auth.user.name.trim().charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold tracking-[-0.01em] text-foreground">{auth.user.name}</div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {auth.user.email || auth.user.workspace_slug}
+                      </div>
+                    </div>
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                        userCardExpanded && "rotate-180"
+                      )}
+                    />
+                  </button>
+                  <div
+                    className={cn(
+                      "overflow-hidden transition-[max-height,opacity,margin] duration-200 ease-out",
+                      userCardExpanded ? "mt-3 max-h-40 opacity-100" : "max-h-0 opacity-0"
+                    )}
+                  >
+                    <div className="space-y-2.5 border-t border-border/70 pt-3">
+                      <div className="flex items-center justify-between rounded-button bg-muted/55 px-2.5 py-2">
+                        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                          Workspace
+                        </span>
+                        <span className="max-w-[9rem] truncate text-[11px] font-medium text-foreground">
+                          {auth.user.workspace_slug}
+                        </span>
+                      </div>
+                      <button
+                        onClick={logout}
+                        className="flex w-full items-center justify-between rounded-button border border-border bg-card px-2.5 py-2 text-[11px] font-medium text-foreground transition-colors hover:bg-muted cursor-pointer"
+                      >
+                        <span>Sign out</span>
+                        <LogOut className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <a
+                  href={api.feishuLoginUrl()}
+                  className="flex items-center justify-center rounded-button bg-primary px-3 py-2 text-[11px] font-semibold text-primary-foreground transition-colors hover:opacity-90 cursor-pointer"
+                >
+                  Sign in with Feishu
+                </a>
+              )}
+            </div>
+          )}
           {collapsed ? (
             <>
+              {!auth?.authenticated && (
+                <a
+                  href={api.feishuLoginUrl()}
+                  className="p-1.5 text-muted-foreground hover:text-foreground rounded transition-colors text-[10px]"
+                  title="Sign in with Feishu"
+                >
+                  登
+                </a>
+              )}
               <button onClick={toggle} className="p-1.5 text-muted-foreground hover:text-foreground rounded transition-colors" title={dark ? t.lightMode : t.darkMode}>
                 {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
               </button>
