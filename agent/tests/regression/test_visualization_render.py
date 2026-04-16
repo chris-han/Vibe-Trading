@@ -6,7 +6,7 @@ throughout the agent/ codebase:
   1. ECharts JSON blocks (```echarts```) – rendered by the frontend ECharts JS
       component for web UI rich content.
   2. VChart JSON blocks (```vchart```) – still accepted for Feishu/card rendering
-      and legacy content; sanitized on the Python side by api_server._sanitize_vchart_spec().
+      and legacy content; sanitized on the Python side by the Feishu visualization adapter.
   3. Mermaid blocks (```mermaid```) – rendered by the frontend Mermaid JS
      renderer; the service enforces format rules via prompt.
   4. Markdown pipe-tables – rendered natively by the frontend Markdown renderer.
@@ -25,8 +25,11 @@ AGENT_ROOT = Path(__file__).resolve().parents[2]
 if str(AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(AGENT_ROOT))
 
-from api_server import _feishu_split_card_elements, _sanitize_vchart_spec  # noqa: E402
+from src.adapters.factory import get_feishu_visualization_adapter  # noqa: E402
 from src.session.service import _OUTPUT_FORMAT_PROMPT  # noqa: E402
+
+
+_FEISHU_ADAPTER = get_feishu_visualization_adapter()
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +65,7 @@ def _has_pipe_table(text: str) -> bool:
 class TestVChartSanitizer:
     def _roundtrip(self, obj: dict) -> dict:
         text = "```vchart\n" + json.dumps(obj) + "\n```"
-        out = _feishu_split_card_elements(text)
+        out = _FEISHU_ADAPTER.split_card_elements(text)
         charts = [item for item in out if item.get("tag") == "chart"]
         assert len(charts) == 1
         return charts[0]["chart_spec"]
@@ -106,7 +109,7 @@ class TestVChartSanitizer:
 
     def test_invalid_json_block_is_left_as_markdown(self):
         text = "```vchart\n{this is not valid json\n```"
-        out = _feishu_split_card_elements(text)
+        out = _FEISHU_ADAPTER.split_card_elements(text)
         markdown = [item for item in out if item.get("tag") == "markdown"]
         assert markdown
 

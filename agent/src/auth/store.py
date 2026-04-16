@@ -146,6 +146,22 @@ class AuthStore:
             ).fetchone()
         return self._row_to_user(row) if row else None
 
+    def get_user_by_feishu_open_id(self, open_id: str) -> AuthUser | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM auth_users WHERE feishu_open_id = ?",
+                (open_id,),
+            ).fetchone()
+        return self._row_to_user(row) if row else None
+
+    def get_user_by_feishu_union_id(self, union_id: str) -> AuthUser | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM auth_users WHERE feishu_union_id = ?",
+                (union_id,),
+            ).fetchone()
+        return self._row_to_user(row) if row else None
+
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> AuthUser:
         return AuthUser(

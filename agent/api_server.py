@@ -7,13 +7,14 @@ V5: ReAct Agent + async /run + CORS env + SSE tool events.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import hmac as _hmac
 import json
+import logging
 import os
 import signal
 import time
-import csv
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,24 +22,24 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, Security, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from rich.console import Console
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import logging
+from runtime_env import ensure_runtime_env, get_data_root
+from src.adapters.factory import get_feishu_visualization_adapter
+from src.auth.store import AuthStore, AuthUser
+from src.auth.workspace import WorkspacePaths, ensure_workspace
+from src.ui_services import build_run_analysis, load_run_context, load_run_report
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-
-from runtime_env import ensure_runtime_env, get_data_root
-from src.auth.store import AuthStore, AuthUser
-from src.auth.workspace import WorkspacePaths, ensure_workspace
-from src.ui_services import build_run_analysis, load_run_context, load_run_report
 
 # UTF-8 on Windows
 import sys as _sys
@@ -52,7 +53,7 @@ ensure_runtime_env()
 # ---------------------------------------------------------------------------
 # Data root: all runtime-generated files (sessions, runs, uploads, swarm) live
 # under a single configurable root derived from TERMINAL_CWD.  A relative
-# value is resolved against the agent/ directory (e.g. 'chris' →
+# value is resolved against the agent/ directory (e.g. 'chris' ->
 # agent/chris/).  Defaults to agent/ when unset.
 # ---------------------------------------------------------------------------
 _AGENT_DIR = Path(__file__).resolve().parent
@@ -80,11 +81,14 @@ def _candidate_runs_dirs(
     Keep backward compatibility with runs written under agent/runs even when
     DATA_ROOT points at a nested directory such as agent/chris.
     """
-    current_runs = runs_dir or RUNS_DIR
+    if runs_dir is not None:
+        roots = [runs_dir]
+        if legacy_runs_dir is not None and legacy_runs_dir not in roots:
+            roots.append(legacy_runs_dir)
+        return roots
+
     current_legacy = legacy_runs_dir or LEGACY_RUNS_DIR
-    roots = [current_runs]
-    if RUNS_DIR not in roots:
-        roots.append(RUNS_DIR)
+    roots = [RUNS_DIR]
     if current_legacy not in roots:
         roots.append(current_legacy)
     return roots
@@ -162,14 +166,11 @@ def _resolve_upload_dir(
 
     if session_id:
         session_dir = (sessions_dir or SESSIONS_DIR) / session_id
-        # Allow uploads even if the session directory hasn't been written yet
-        # (e.g. rapid upload immediately after session creation)
         return session_dir / "uploads"
 
     raise HTTPException(status_code=400, detail="session_id or run_id is required for uploads")
 
 
-# Rich console for colored logs
 console = Console()
 
 _SPA_EXCLUDED_PREFIXES = (
@@ -208,12 +209,9 @@ class SPAStaticFiles(StaticFiles):
             return await super().get_response("index.html", scope)
 
 
-# ============================================================================
-# Pydantic Models
-# ============================================================================
-
 class Artifact(BaseModel):
     """Artifact file metadata."""
+
     name: str = Field(..., description="File name")
     path: str = Field(..., description="File path")
     type: str = Field(..., description="File type: csv, json, txt, etc.")
@@ -223,6 +221,7 @@ class Artifact(BaseModel):
 
 class BacktestMetrics(BaseModel):
     """Backtest summary metrics."""
+
     model_config = {"extra": "allow"}
 
     final_value: float = Field(..., description="Ending portfolio value")
@@ -232,7 +231,6 @@ class BacktestMetrics(BaseModel):
     sharpe: float = Field(..., description="Sharpe ratio")
     win_rate: float = Field(..., description="Win rate")
     trade_count: int = Field(..., description="Number of trades")
-
 
 
 class RAGSelection(BaseModel):
@@ -1401,13 +1399,13 @@ _FEISHU_BASE_URL = (
     else "https://open.feishu.cn"
 )
 _FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
-_FEISHU_STREAM_ELEMENT_ID = "vt_stream_body"
 _FEISHU_STREAM_UPDATE_INTERVAL_SECONDS = max(
     0.2,
     float(os.getenv("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", "0.35")),
 )
 _FEISHU_TOKEN_CACHE: Dict[str, Any] = {"token": "", "expires_at": 0.0}
 _feishu_logger = logging.getLogger("feishu.webhook")
+_FEISHU_VISUALIZATION_ADAPTER = get_feishu_visualization_adapter()
 
 # ---------------------------------------------------------------------------
 # Markdown helpers — reuse hermes-agent's battle-tested implementation.
@@ -1441,62 +1439,6 @@ except Exception:
             ensure_ascii=False,
         )
 
-
-
-_VCHART_FENCE_RE = _re.compile(r'```(?:vchart|chart)\s*\n(.*?)\n\s*```', _re.DOTALL)
-
-
-def _sanitize_vchart_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
-    """Coerce common LLM-generated VChart spec mistakes into valid shapes.
-
-    Feishu Card v2 validates chart specs against the VChart JSON schema.
-    The most common failure is ``title`` being a plain string instead of an
-    object.  For example the LLM may emit ``"title": "My Chart"`` but the
-    schema requires ``"title": {"text": "My Chart", "visible": true}``.
-    """
-    spec = dict(spec)
-    if "title" in spec:
-        t = spec["title"]
-        if isinstance(t, str):
-            spec["title"] = {"text": t, "visible": bool(t)}
-        elif isinstance(t, dict):
-            # Ensure required "text" key exists; some LLMs emit {"value": "..."}
-            if "text" not in t and "value" in t:
-                t = dict(t)
-                t["text"] = t.pop("value")
-                spec["title"] = t
-    return spec
-
-
-def _feishu_split_card_elements(text: str, *, aspect_ratio: str = "4:3") -> List[Dict[str, Any]]:
-    """Split markdown text into alternating markdown and chart card elements.
-
-    Each ```vchart ... ``` block becomes a {"tag": "chart", "chart_spec": ...}
-    element.  Surrounding prose becomes {"tag": "markdown"} elements.  Empty
-    prose segments are dropped so the caller never receives blank markdown
-    elements.
-    """
-    elements: List[Dict[str, Any]] = []
-    last_end = 0
-    for m in _VCHART_FENCE_RE.finditer(text):
-        prose = text[last_end:m.start()].strip()
-        if prose:
-            elements.append({"tag": "markdown", "content": prose})
-        try:
-            chart_spec = _sanitize_vchart_spec(json.loads(m.group(1).strip()))
-            elements.append({"tag": "chart", "aspect_ratio": aspect_ratio, "chart_spec": chart_spec})
-        except Exception:
-            _feishu_logger.warning("[Feishu] vchart block JSON parse failed — rendering as code block")
-            elements.append({"tag": "markdown", "content": m.group(0)})
-        last_end = m.end()
-    trailing = text[last_end:].strip()
-    if trailing:
-        elements.append({"tag": "markdown", "content": trailing})
-    if not elements:
-        elements.append({"tag": "markdown", "content": " "})
-    return elements
-
-
 async def _feishu_patch_card_body(
     card_ctx: Dict[str, Any],
     title: str,
@@ -1518,107 +1460,22 @@ async def _feishu_patch_card_body(
         _feishu_logger.warning("[Feishu] Cannot patch card body: card_id missing from card_ctx")
         return
 
-    card: Dict[str, Any] = {
-        "schema": "2.0",
-        "config": {"width_mode": "fill"},
-        "header": {
-            "title": {"tag": "plain_text", "content": title},
-            "template": template,
-        },
-        "body": {"elements": elements},
-    }
     await _feishu_openapi_request(
         "PUT",
         f"/open-apis/cardkit/v1/cards/{quote(card_id, safe='')}",
         {
             "card": {
                 "type": "card_json",
-                "data": json.dumps(card, ensure_ascii=False),
+                "data": _FEISHU_VISUALIZATION_ADAPTER.build_card_payload_from_elements(
+                    title,
+                    elements,
+                    template=template,
+                ),
             },
             "uuid": uuid.uuid4().hex,
             "sequence": _feishu_take_card_sequence(card_ctx),
         },
     )
-
-
-def _feishu_build_card_v2(
-    title: str,
-    markdown_body: str,
-    *,
-    template: str = "blue",
-    actions: Optional[List[Dict[str, Any]]] = None,
-) -> str:
-    """Build a Card JSON 2.0 payload string.
-
-    Uses ``schema: 2.0`` with ``body.elements`` layout as required by the
-    Feishu Card JSON v2 spec (https://open.feishu.cn/document/feishu-cards/card-json-v2-structure).
-    Supported by Feishu clients >= 7.20.
-    """
-    elements: List[Dict[str, Any]] = _feishu_split_card_elements(markdown_body)
-    if actions:
-        elements.append({"tag": "action", "actions": actions})
-    card: Dict[str, Any] = {
-        "schema": "2.0",
-        "config": {"width_mode": "fill"},
-        "header": {
-            "title": {"tag": "plain_text", "content": title},
-            "template": template,
-        },
-        "body": {"elements": elements},
-    }
-    return json.dumps(card, ensure_ascii=False)
-
-
-def _feishu_build_streaming_card_v2(title: str, markdown_body: str) -> str:
-    """Build a Card JSON 2.0 payload with streaming mode enabled."""
-    card: Dict[str, Any] = {
-        "schema": "2.0",
-        "config": {
-            "width_mode": "fill",
-            "update_multi": True,
-            "streaming_mode": True,
-            "summary": {"content": "[Generating...]"},
-            "streaming_config": {
-                "print_frequency_ms": {"default": 70, "android": 70, "ios": 70, "pc": 70},
-                "print_step": {"default": 1, "android": 1, "ios": 1, "pc": 1},
-                "print_strategy": "fast",
-            },
-        },
-        "header": {
-            "title": {"tag": "plain_text", "content": title},
-            "template": "blue",
-        },
-        "body": {
-            "elements": [
-                {
-                    "tag": "markdown",
-                    "content": markdown_body,
-                    "element_id": _FEISHU_STREAM_ELEMENT_ID,
-                }
-            ]
-        },
-    }
-    return json.dumps(card, ensure_ascii=False)
-
-
-def _feishu_render_stream_body(text: str, *, status: Optional[str] = None, error: Optional[str] = None) -> str:
-    """Render the current Feishu markdown body for a streaming card."""
-    rendered_text = str(text or "").strip()
-    rendered_status = str(status or "").strip()
-    rendered_error = str(error or "").strip()
-
-    parts: List[str] = []
-    if rendered_text:
-        parts.append(rendered_text)
-    elif rendered_status:
-        parts.append(f"_{rendered_status}_")
-    else:
-        parts.append("_Thinking..._")
-
-    if rendered_error:
-        parts.extend(["", "---", "", f"**Error:** {rendered_error}"])
-
-    return "\n".join(parts)
 
 
 def _feishu_lookup_attempt_reply(svc: Any, session_id: str, attempt_id: str) -> str:
@@ -1737,7 +1594,7 @@ async def _feishu_create_streaming_card_message(chat_id: str, title: str, initia
         "/open-apis/cardkit/v1/cards",
         {
             "type": "card_json",
-            "data": _feishu_build_streaming_card_v2(title, initial_body),
+            "data": _FEISHU_VISUALIZATION_ADAPTER.build_streaming_card_payload(title, initial_body),
         },
     )
     card_id = str(create_data.get("card_id") or "")
@@ -1756,7 +1613,7 @@ async def _feishu_create_streaming_card_message(chat_id: str, title: str, initia
     return {
         "card_id": card_id,
         "message_id": str(message_data.get("message_id") or ""),
-        "element_id": _FEISHU_STREAM_ELEMENT_ID,
+        "element_id": _FEISHU_VISUALIZATION_ADAPTER.stream_element_id,
         "sequence": 1,
     }
 
@@ -1828,7 +1685,10 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
     last_push_at = 0.0
 
     try:
-        initial_body = _feishu_render_stream_body(streamed_text, status=latest_status or "Thinking...")
+        initial_body = _FEISHU_VISUALIZATION_ADAPTER.render_stream_body(
+            streamed_text,
+            status=latest_status or "Thinking...",
+        )
         card_ctx = await _feishu_create_streaming_card_message(chat_id, "semantier", initial_body)
         last_pushed_body = initial_body
         last_push_at = time.monotonic()
@@ -1848,7 +1708,7 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
             nonlocal last_pushed_body, last_push_at
             if not card_ctx:
                 return
-            candidate = _feishu_render_stream_body(streamed_text, status=latest_status)
+            candidate = _FEISHU_VISUALIZATION_ADAPTER.render_stream_body(streamed_text, status=latest_status)
             now = time.monotonic()
             if candidate == last_pushed_body or (now - last_push_at) < _FEISHU_STREAM_UPDATE_INTERVAL_SECONDS:
                 return
@@ -1899,16 +1759,19 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
 
         if card_ctx:
             try:
-                has_charts = bool(_VCHART_FENCE_RE.search(final_text))
+                has_charts = _FEISHU_VISUALIZATION_ADAPTER.has_chart_elements(final_text)
                 if has_charts:
                     # Push prose-only text to the streaming element so vchart
                     # fences never appear as code blocks in the live stream view.
-                    prose_text = _VCHART_FENCE_RE.sub("", final_text).strip()
-                    prose_body = _feishu_render_stream_body(prose_text or " ", error=final_error)
+                    prose_text = _FEISHU_VISUALIZATION_ADAPTER.strip_chart_fences(final_text)
+                    prose_body = _FEISHU_VISUALIZATION_ADAPTER.render_stream_body(
+                        prose_text or " ",
+                        error=final_error,
+                    )
                     if prose_body != last_pushed_body:
                         await _feishu_stream_card_text(card_ctx, prose_body)
                 else:
-                    final_body = _feishu_render_stream_body(final_text, error=final_error)
+                    final_body = _FEISHU_VISUALIZATION_ADAPTER.render_stream_body(final_text, error=final_error)
                     if final_body != last_pushed_body:
                         await _feishu_stream_card_text(card_ctx, final_body)
 
@@ -1923,7 +1786,7 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                 # After streaming is closed, replace the card body with proper
                 # chart elements via the IM message update endpoint.
                 if has_charts:
-                    final_elements = _feishu_split_card_elements(final_text)
+                    final_elements = _FEISHU_VISUALIZATION_ADAPTER.split_card_elements(final_text)
                     if final_error:
                         final_elements.append({"tag": "markdown", "content": f"\n\n---\n\n**Error:** {final_error}"})
                     await _feishu_patch_card_body(card_ctx, "semantier", final_elements)
@@ -1960,6 +1823,7 @@ def _feishu_ws_event_handler_factory(main_loop: asyncio.AbstractEventLoop) -> An
             event = getattr(data, "event", None) or {}
             message = getattr(event, "message", None) or {}
             sender = getattr(event, "sender", None) or {}
+            sender_id = getattr(sender, "sender_id", None) or {}
             if getattr(sender, "sender_type", "") == "bot":
                 return
             chat_id = getattr(message, "chat_id", "") or ""
@@ -1980,7 +1844,14 @@ def _feishu_ws_event_handler_factory(main_loop: asyncio.AbstractEventLoop) -> An
                 _feishu_logger.warning("[Feishu WS] Session service not available, dropping message %s", message_id)
                 return
             future = asyncio.run_coroutine_threadsafe(
-                _feishu_route_message(svc, chat_id, text), main_loop
+                _feishu_route_message(
+                    svc,
+                    chat_id,
+                    text,
+                    sender_open_id=str(getattr(sender_id, "open_id", "") or ""),
+                    sender_union_id=str(getattr(sender_id, "union_id", "") or ""),
+                ),
+                main_loop,
             )
             future.add_done_callback(
                 lambda f: _feishu_logger.warning("[Feishu WS] Route error: %s", f.exception())
@@ -2121,6 +1992,42 @@ def _save_feishu_session_map(mapping: Dict[str, str]) -> None:
         _feishu_logger.warning("Failed to save Feishu session map", exc_info=True)
 
 
+def _feishu_session_map_key(chat_id: str, user: Optional[AuthUser] = None) -> str:
+    if user is None:
+        return chat_id
+    return f"{user.user_id}:{chat_id}"
+
+
+def _resolve_feishu_auth_user(*, open_id: str = "", union_id: str = "") -> Optional[AuthUser]:
+    if not _feishu_oauth_enabled():
+        return None
+    store = _get_auth_store()
+    if open_id:
+        user = store.get_user_by_feishu_open_id(open_id)
+        if user is not None:
+            return user
+    if union_id:
+        return store.get_user_by_feishu_union_id(union_id)
+    return None
+
+
+def _feishu_login_required_message() -> str:
+    import urllib.parse
+
+    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    login_url = "/auth/feishu/login"
+    if redirect_uri:
+        parsed = urllib.parse.urlsplit(redirect_uri)
+        if parsed.scheme and parsed.netloc:
+            login_url = urllib.parse.urlunsplit(
+                (parsed.scheme, parsed.netloc, "/auth/feishu/login", "", "")
+            )
+    return (
+        "Your Feishu account is not linked yet. "
+        f"Sign in first: {login_url}"
+    )
+
+
 def _feishu_verify_signature(headers: Any, body_bytes: bytes) -> bool:
     """Verify Feishu webhook signature: SHA256(timestamp + nonce + encrypt_key + body)."""
     timestamp = str(headers.get("x-lark-request-timestamp", "") or "")
@@ -2221,21 +2128,57 @@ async def _feishu_send_reply(chat_id: str, text: str) -> None:
         _feishu_logger.warning("Failed to send Feishu reply to %s", chat_id, exc_info=True)
 
 
-async def _feishu_route_message(svc: Any, chat_id: str, text: str) -> None:
+async def _feishu_route_message(
+    svc: Any,
+    chat_id: str,
+    text: str,
+    *,
+    sender_open_id: str = "",
+    sender_union_id: str = "",
+) -> None:
     """Find or create a session for this Feishu chat and dispatch the message."""
+    resolved_user = _resolve_feishu_auth_user(open_id=sender_open_id, union_id=sender_union_id)
+    resolved_workspace: Optional[WorkspacePaths] = None
+    if _feishu_oauth_enabled():
+        if resolved_user is None:
+            _feishu_logger.info(
+                "Ignoring Feishu message from unlinked sender open_id=%s union_id=%s chat=%s",
+                sender_open_id,
+                sender_union_id,
+                chat_id,
+            )
+            await _feishu_send_reply(chat_id, _feishu_login_required_message())
+            return
+        resolved_workspace = ensure_workspace(
+            WORKSPACES_DIR,
+            resolved_user.workspace_slug,
+            _TEMPLATE_HERMES_HOME,
+        )
+        svc = _get_session_service(resolved_workspace)
+
     mapping = _load_feishu_session_map()
-    session_id = mapping.get(chat_id)
+    session_key = _feishu_session_map_key(chat_id, resolved_user)
+    session_id = mapping.get(session_key)
 
     # Validate the cached session still exists
     if session_id and not svc.get_session(session_id):
         session_id = None
 
     if not session_id:
-        session = svc.create_session(title=f"Feishu:{chat_id[:30]}", config={"channel": "feishu"})
+        title_prefix = f"Feishu:{resolved_user.name}" if resolved_user is not None else "Feishu"
+        session = svc.create_session(title=f"{title_prefix}:{chat_id[:30]}", config={"channel": "feishu"})
         session_id = session.session_id
-        mapping[chat_id] = session_id
+        mapping[session_key] = session_id
         _save_feishu_session_map(mapping)
-        _feishu_logger.info("Created new session %s for Feishu chat %s", session_id, chat_id)
+        if resolved_workspace is not None:
+            _feishu_logger.info(
+                "Created new session %s for Feishu chat %s in workspace %s",
+                session_id,
+                chat_id,
+                resolved_workspace.workspace_slug,
+            )
+        else:
+            _feishu_logger.info("Created new session %s for Feishu chat %s", session_id, chat_id)
 
     try:
         result = await svc.send_message(session_id=session_id, content=text)
@@ -2287,6 +2230,7 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
         event = payload.get("event") or {}
         message = event.get("message") or {}
         sender = event.get("sender") or {}
+        sender_id = sender.get("sender_id") or {}
 
         # Ignore bot-originated messages to prevent feedback loops
         if sender.get("sender_type") == "bot":
@@ -2311,7 +2255,14 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
 
         svc = _get_session_service()
         if svc:
-            background_tasks.add_task(_feishu_route_message, svc, chat_id, text)
+            background_tasks.add_task(
+                _feishu_route_message,
+                svc,
+                chat_id,
+                text,
+                sender_open_id=str(sender_id.get("open_id") or ""),
+                sender_union_id=str(sender_id.get("union_id") or ""),
+            )
             _feishu_logger.info(
                 "Queued Feishu message from chat %s (message_id=%s): %.80s",
                 chat_id, message_id, text,

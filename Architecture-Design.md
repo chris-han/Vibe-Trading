@@ -1966,6 +1966,428 @@ Each skill contains:
 - `SKILL.md` - Documentation with API contracts
 - `example_signal_engine.py` - Reference implementation
 
+### 6.5a Building a Custom Application on the Hermes Harness
+
+Reference: the upstream Hermes architecture guide describes the harness as one agent core serving multiple entry points, with plugins, tools, skills, gateway adapters, and persistence layered around it.
+
+- Hermes architecture reference: [Hermes Developer Guide: Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture)
+
+For Vibe-Trading, the recommended extension model is:
+
+- A custom application is the full product/runtime you are building on top of Hermes.
+- Hermes provides the agent harness: agent loop, prompt system, provider resolution, built-in toolsets, session persistence, and gateway runtime.
+- Vibe-Trading adds domain-specific behavior through plugins, tools, skills, adapters, domain services, and entry points that together make up the custom application.
+- A Hermes plugin is one integration surface inside that application: it is how Hermes discovers project-owned capabilities, not a synonym for the whole application.
+- Deterministic channel conversion layers should be called adapters, not tools, to avoid ontology conflict with agent-callable tools.
+
+#### 6.5a.1 Layering Model
+
+```mermaid
+flowchart LR
+    U[User or Platform Event]
+
+    subgraph LIB[Hermes Library / Harness]
+        direction TB
+        H1[AIAgent / Agent Loop]
+        H2[Prompt Builder]
+        H3[Built-in Toolsets]
+        H4[Tool Registry]
+        H5[Session Persistence]
+        H6[Gateway Runtime]
+    end
+
+    subgraph APP[Custom Application Code]
+        direction TB
+
+        subgraph ENTRY[Entry Points]
+            direction TB
+            E1[Web UI / API Surface]
+            E2[Feishu Gateway Handler]
+            E3[CLI / App Commands]
+        end
+
+        subgraph ORCH[Application Orchestration]
+            direction TB
+            O1[Session Service]
+            O2[Domain Services]
+            O3[Canonical Domain Model]
+        end
+
+        subgraph EXT[Application Extensions]
+            direction TB
+            X1[Hermes Plugin Registration Surface]
+            X2[Domain Tools]
+            X3[Skills]
+            X4[Adapter Factory]
+            X5[Channel Adapters]
+        end
+    end
+
+    U --> E1
+    U --> E2
+    U --> E3
+
+    E1 --> O1
+    E2 --> O1
+    E3 --> O1
+
+    O1 --> H1
+    O1 --> H5
+    O1 --> X3
+    O1 --> X4
+
+    X1 --> H4
+    H1 --> H2
+    H1 --> H4
+    H4 --> H3
+    H4 --> X2
+
+    X2 --> O2
+    O2 --> O3
+    X5 --> O3
+    X4 --> X5
+    E1 --> X5
+    E2 --> X5
+    E3 --> X5
+    H6 --> E2
+
+    style LIB fill:#f7f7f7,stroke:#666,stroke-width:1px,stroke-dasharray: 6 4
+    style APP fill:#fbfbfb,stroke:#1f2937,stroke-width:1px,stroke-dasharray: 6 4
+    style ENTRY fill:#ffffff,stroke:#94a3b8,stroke-width:1px
+    style ORCH fill:#ffffff,stroke:#94a3b8,stroke-width:1px
+    style EXT fill:#ffffff,stroke:#94a3b8,stroke-width:1px
+```
+
+In this model, the custom application is the full layer built around the Hermes harness:
+
+- entry points
+- domain services
+- skills
+- adapters
+- one or more Hermes plugins used for runtime registration
+
+The plugin is therefore a component of the custom application, not the application itself.
+
+##### 6.5a.1a Feishu Channel Request Sequence
+
+The Feishu path is the clearest example of why these layers are separate: one incoming message crosses gateway, auth, session orchestration, skill selection, tool execution, domain shaping, and channel rendering, but each layer owns a different contract.
+
+```mermaid
+sequenceDiagram
+    participant F as Feishu Channel
+    participant G as Entry Point<br/>agent/api_server.py::_feishu_route_message
+    participant A as Auth + Workspace<br/>agent/src/auth/store.py<br/>agent/src/auth/workspace.py
+    participant S as Session Service<br/>agent/src/session/service.py
+    participant K as Channel Skill Contract<br/>agent/src/skills/output-format-feishu/SKILL.md
+    participant H as Hermes Harness<br/>AIAgent + plugin tools
+    participant D as Domain Services<br/>agent/src/ui_services.py<br/>agent/src/backtest/*
+    participant X as Adapter Factory<br/>agent/src/adapters/factory.py
+    participant V as Feishu Visualization Adapter<br/>agent/src/adapters/feishu_visualization_adapter.py
+    participant C as Feishu Card Payload
+
+    F->>G: webhook / websocket message<br/>contract: agent/api_server.py request schema
+    G->>A: resolve sender -> AuthUser + WorkspacePaths<br/>contract: agent/src/auth/store.py + agent/src/auth/workspace.py
+    A-->>G: authenticated workspace context
+    G->>S: route message into workspace session<br/>contract: agent/src/session/models.py + agent/src/session/store.py
+    S->>K: load channel formatting guidance for feishu<br/>contract: agent/src/skills/output-format-feishu/SKILL.md
+    S->>H: run agent with session history, tools, and channel context<br/>contract: agent/src/plugins/vibe_trading/schemas.py + tool schemas
+    H->>D: execute finance/domain logic when needed<br/>contract: agent/src/vibe_trading_helper.py, agent/src/tools/*, agent/src/ui_services.py
+    D-->>S: canonical markdown/report/chart content<br/>contract: canonical app model from domain services
+    S-->>G: assistant output tagged for channel=feishu<br/>contract: agent/src/session/service.py::_load_output_format_skill(channel)
+    G->>X: select visualization adapter for feishu<br/>contract: agent/src/adapters/factory.py
+    X-->>G: FeishuVisualizationAdapter
+    G->>V: translate canonical content into Feishu card elements/payload<br/>contract: agent/src/adapters/feishu_visualization_adapter.py
+    V-->>C: Card 2.0 JSON payload
+    G-->>F: send/update streaming or final card<br/>contract: Feishu Card 2.0 payload generated by adapter
+```
+
+##### 6.5a.1b Separation of Concerns in the Feishu Path
+
+| Component | Responsibility | Contract file it owns | What it must not own |
+|-----------|----------------|------------------------|----------------------|
+| Entry point | Accept Feishu traffic, verify/route the request, send replies | `agent/api_server.py` | Business logic, tool semantics, chart translation rules |
+| Auth + workspace | Map sender identity to authenticated user and isolated workspace | `agent/src/auth/store.py`, `agent/src/auth/workspace.py` | Prompt rules, rendering, tool execution |
+| Session service | Build session context, load channel skill, run the agent, persist attempts/events | `agent/src/session/service.py`, `agent/src/session/models.py`, `agent/src/session/store.py` | Feishu Card JSON details |
+| Skill | Tell the model what Feishu can render and how to format content conceptually | `agent/src/skills/output-format-feishu/SKILL.md` | Runtime payload generation, auth, transport |
+| Hermes/plugin tools | Execute model-invoked capabilities and return structured results | `agent/src/plugins/vibe_trading/schemas.py`, `agent/src/plugins/vibe_trading/tools.py`, `agent/src/tools/*` | Channel-specific card formatting |
+| Domain services | Produce canonical report, run, and chart data from application state | `agent/src/ui_services.py`, `agent/src/backtest/*`, `agent/src/vibe_trading_helper.py` | Feishu transport concerns |
+| Adapter factory | Select the correct adapter from channel metadata | `agent/src/adapters/factory.py` | Actual business data generation or transport |
+| Feishu adapter | Deterministically convert canonical content into Feishu Card 2.0 elements/payloads | `agent/src/adapters/feishu_visualization_adapter.py` | Session/auth orchestration, model tool execution |
+
+This split keeps the contracts narrow:
+
+- The skill contract is for model behavior.
+- The tool contract is for executable capabilities.
+- The domain contract is for canonical application data.
+- The adapter contract is for deterministic channel translation.
+- The gateway contract is for transport and delivery.
+
+##### 6.5a.1c Why the Adapter Boundary Is Not Over-Engineering
+
+Separating rendering into an adapter instead of a tool is a response to concrete complexity already present in this repo, not an abstract pattern exercise.
+
+Reasons this boundary is justified:
+
+- Feishu rendering is deterministic. Converting markdown and chart blocks into Card 2.0 JSON does not require model judgment, so it should not be exposed as an agent-callable tool.
+- Web and Feishu have different payload contracts. Web uses ECharts/Markdown rendering conventions while Feishu requires Card 2.0 `markdown` and `chart` elements. A dedicated adapter keeps that divergence out of `api_server.py` and out of tool handlers.
+- The same domain output can target multiple channels. One canonical report can feed web, Feishu, or a future channel. The adapter boundary prevents domain services from hardcoding Feishu-specific syntax.
+- Regression testing becomes precise. We can test factory selection and adapter payload generation directly without spinning up the whole agent loop, which is exactly the kind of invariant architectural refactors should lock in.
+- It reduces tool confusion. If rendering were a tool, the model would need to decide when to call it, with what low-level payload shape, and how to recover from channel-specific formatting errors. That is unnecessary failure surface for something the application already knows how to do.
+
+In other words, the adapter is not "another layer for the sake of layers". It is the smallest boundary that prevents three kinds of leakage:
+
+- Feishu transport rules leaking into session orchestration
+- renderer syntax leaking into domain services
+- deterministic formatting work leaking into model-invoked tools
+
+That is why the architecture uses skill + tool + adapter rather than trying to force all three jobs into one component.
+
+#### 6.5a.2 Extension Vocabulary
+
+| Component | Purpose | Model calls it directly? | Typical location in this repo |
+|-----------|---------|--------------------------|-------------------------------|
+| Custom application | The complete product/runtime built on Hermes, including entry points, domain services, skills, adapters, and plugin registration surfaces | No | This repo as a whole; in a generated skeleton, the whole scaffolded project |
+| Plugin | Registers project capabilities into Hermes | No | `agent/src/plugins/vibe_trading/`, `agent/pyproject.toml` |
+| Tool | Executes work with schema + handler | Yes | `agent/src/tools/`, `agent/src/vibe_trading_helper.py` |
+| Skill | Instructs the model how to reason and use tools | No | `agent/src/skills/*/SKILL.md` |
+| Adapter | Deterministically translates between internal schema and platform-specific payloads | No | Dedicated adapter classes under an application adapter package |
+| Entry point | Accepts traffic from a channel and binds it to sessions | No | `api_server.py`, frontend, Feishu gateway handlers |
+| Domain service | Owns application state transitions and orchestration | No | `agent/src/session/service.py`, `agent/src/swarm/`, `agent/src/ui_services.py` |
+
+#### 6.5a.2a Custom Application vs Hermes Plugin
+
+These terms are related, but they are not interchangeable.
+
+| Term | Scope | What it includes | What it does not mean |
+|------|-------|------------------|------------------------|
+| Custom application | Whole product/runtime | Entry points, domain services, skills, adapters, persistence choices, and usually a plugin registration package | Not just the Hermes discovery hook |
+| Hermes plugin | One application component | Tool registration surface exposed through `hermes_agent.plugins` | Not the whole app architecture, gateway layer, or domain model |
+
+Practical rule:
+
+- If you are describing the whole system you are building on top of Hermes, say custom application.
+- If you are describing the package Hermes loads to discover tools or hooks, say plugin.
+- `scaffold-app` should be read as scaffold a custom application skeleton, which includes a Hermes plugin surface as one part of that skeleton.
+
+#### 6.5a.3 Pattern Definitions
+
+**Plugin pattern**
+
+- Use a plugin when Hermes must discover project-owned capabilities at runtime.
+- A plugin should register tools, hooks, or commands through the Hermes plugin context.
+- In Vibe-Trading, the plugin is the Hermes-facing registration surface inside the custom application, not the business-logic home.
+
+**Tool pattern**
+
+- Use a tool when the model needs an executable capability with a schema and observable result.
+- A tool should perform side effects or retrieve data, and return structured output.
+- Tools should stay narrow, deterministic where possible, and reusable across multiple skills.
+
+**Skill pattern**
+
+- Use a skill when the model needs operating rules, domain heuristics, workflow checklists, or formatting policy.
+- A skill should explain when to call tools, what order to use them in, and what constraints apply.
+- Skills are prompt assets, not runtime executors.
+
+**Adapter pattern**
+
+- Use an adapter when output or input must be translated deterministically between two schemas or platforms.
+- Adapters are runtime code owned by the application, not agent-exposed tools.
+- Adapters should consume a canonical application schema and emit a channel-specific representation.
+- Adapters should be implemented with a factory pattern so channel selection is centralized and deterministic.
+- Each adapter should live in its own dedicated class file; adapter logic must not be embedded in `api_server.py` or other entry-point files.
+- Example: canonical chart spec -> web ECharts payload or Feishu VChart/table payload.
+
+#### 6.5a.3a Adapter Factory Pattern
+
+```mermaid
+classDiagram
+    class VisualizationAdapter {
+        <<interface>>
+        +channel() str
+        +supports(spec) bool
+        +adapt(spec, capabilities) AdaptedPayload
+    }
+
+    class WebVisualizationAdapter {
+        +channel() str
+        +supports(spec) bool
+        +adapt(spec, capabilities) AdaptedPayload
+    }
+
+    class FeishuVisualizationAdapter {
+        +channel() str
+        +supports(spec) bool
+        +adapt(spec, capabilities) AdaptedPayload
+    }
+
+    class VisualizationAdapterFactory {
+        +get_adapter(channel) VisualizationAdapter
+    }
+
+    VisualizationAdapter <|.. WebVisualizationAdapter
+    VisualizationAdapter <|.. FeishuVisualizationAdapter
+    VisualizationAdapterFactory --> VisualizationAdapter
+```
+
+Factory rules:
+
+- The entry point resolves the channel and capability profile.
+- The factory returns exactly one adapter implementation for that channel.
+- Entry points may call the factory, but must not contain channel-specific adaptation logic.
+- If no adapter supports the requested visualization, fall back through an explicit policy such as Markdown table rendering.
+
+#### 6.5a.4 Decision Rule: Plugin vs Tool vs Skill vs Adapter
+
+```mermaid
+flowchart TD
+    Q[What are you adding?]
+    Q --> Q1{Does Hermes need to discover it<br/>as project capability?}
+    Q1 -->|Yes| P[Plugin]
+    Q1 -->|No| Q2{Does the model need to invoke it<br/>to do work?}
+    Q2 -->|Yes| T[Tool]
+    Q2 -->|No| Q3{Is it prompt guidance<br/>for reasoning or formatting?}
+    Q3 -->|Yes| S[Skill]
+    Q3 -->|No| A[Adapter or Domain Service]
+```
+
+#### 6.5a.4a Decision Matrix: Domain Tool vs Channel Action vs Adapter
+
+| Need | Put it in | Why |
+|------|-----------|-----|
+| Execute business/domain work that is useful across web, Feishu, CLI, or API | Domain tool | The model may need to invoke it, but the result should stay channel-agnostic |
+| Perform an imperative side effect on one channel, such as sending a Feishu approval card or updating a web UI panel | Channel-specific action tool or platform action surface | This is a transport/platform action, not a generic domain capability |
+| Convert canonical application output into a channel payload such as Feishu Card JSON or web-renderable blocks | Adapter | This is deterministic translation and should not depend on model judgment |
+| Tell the model what a channel can render and how to shape content conceptually | Skill | This is prompt-time guidance, not execution |
+
+Practical rule:
+
+- If the model must decide whether to do work, it is usually a tool.
+- If the app already knows it must translate one output shape into another, it is an adapter.
+- If the app must perform a platform side effect on a specific channel, it is a channel action surface, not a renderer.
+- If the model only needs operating rules, it is a skill.
+
+#### 6.5a.5 Recommended Build Pattern for Vibe-Trading
+
+```mermaid
+graph LR
+    C[Canonical Domain Model]
+    SKW[Web Skill]
+    SKF[Feishu Skill]
+    FAC[Adapter Factory]
+    AW[Web Adapter]
+    AF[Feishu Adapter]
+    W[Web UI Renderer]
+    FC[Feishu Card Renderer]
+
+    C --> FAC
+    FAC --> AW --> W
+    FAC --> AF --> FC
+    SKW -. advertises web capabilities .-> W
+    SKF -. advertises feishu capabilities .-> FC
+```
+
+Recommended rules:
+
+- Keep one canonical application model for domain outputs such as runs, reports, and chart specs.
+- Use channel-specific skills to advertise what each channel can render.
+- Use deterministic adapters, selected through a factory, to translate canonical outputs into channel payloads.
+- Do not make the model invent renderer-specific syntax when a backend adapter can derive it reliably.
+- Keep adapter classes in dedicated files under an adapter package rather than embedding translation logic in `api_server.py`.
+
+#### 6.5a.6 Concrete Mapping in This Repo
+
+| Concern | Current implementation |
+|---------|------------------------|
+| Hermes plugin | `agent/src/plugins/vibe_trading/__init__.py` discovered from `project.entry-points."hermes_agent.plugins"` |
+| Plugin schemas | `agent/src/plugins/vibe_trading/schemas.py` |
+| Plugin handlers | `agent/src/plugins/vibe_trading/tools.py` |
+| Shared tool logic | `agent/src/vibe_trading_helper.py` plus `agent/src/tools/*` |
+| Skills | `agent/src/skills/*/SKILL.md` |
+| Channel skill selection | `agent/src/session/service.py::_load_output_format_skill(channel)` |
+| Adapter package | `agent/src/adapters/` |
+| Adapter factory | `agent/src/adapters/factory.py` |
+| Feishu rendering adapter | `agent/src/adapters/feishu_visualization_adapter.py` |
+| Web rendering adapter | `agent/src/adapters/web_visualization_adapter.py` |
+| Entry-point usage | `agent/api_server.py` invokes the adapter factory and does not own visualization adapter implementations |
+
+#### 6.5a.7 Output Formatting Pattern
+
+For output formatting, the preferred pattern is skill + adapter, not skill + tool.
+
+- The skill tells the model what a channel can render.
+- The adapter performs deterministic conversion into that channel's actual payload.
+- The model should not have to guess low-level renderer syntax if the application already knows it.
+- The adapter should be selected by a factory and implemented as a dedicated class, one file per channel.
+
+For Vibe-Trading specifically:
+
+- `output-format-web` should describe Web UI rendering capabilities.
+- `output-format-feishu` should describe Feishu rendering capabilities.
+- A web adapter class should normalize canonical visual specs into web-renderable output.
+- A Feishu adapter class should normalize canonical visual specs into Feishu Card 2.0 chart or table elements.
+- `api_server.py` should orchestrate request flow and delivery only; visualization adaptation should be delegated to adapter instances created by the factory.
+
+#### 6.5a.8 Metadata Carrier Pattern
+
+The harness needs one application-controlled metadata carrier that tells downstream components what rendering contract applies.
+
+Recommended carrier order:
+
+1. `Session.config.channel` or equivalent request-scoped channel identifier.
+2. A structured capability profile derived from that channel.
+3. Skill selection and adapter-factory selection driven from that one profile.
+
+Example capability profile:
+
+```json
+{
+  "channel": "feishu",
+  "tables": true,
+  "mermaid": false,
+  "chart_family": "vchart_v1",
+  "supported_chart_types": ["line", "area", "bar", "pie", "scatter", "radar"],
+  "fallback": "markdown_table"
+}
+```
+
+This avoids scattering rendering rules across prompt text, gateway code, and page components with no single source of truth.
+
+#### 6.5a.9 Application-Build Checklist
+
+When building a custom application on Hermes, follow this sequence:
+
+1. Define the domain model first.
+2. Decide which capabilities must be agent-callable tools.
+3. Register those tools through a plugin.
+4. Write skills for workflow, domain policy, and channel formatting guidance.
+5. Implement adapters for deterministic schema and platform translation.
+6. Bind entry points to session context and capability metadata.
+7. Add regression tests that lock in isolation, rendering, and adapter behavior.
+
+For a starter skeleton, the CLI provides:
+
+- `vibe-trading scaffold-app <name> --dest <path>`
+
+That command generates a minimal custom-application skeleton with:
+
+- Hermes plugin registration surface
+- channel output skills
+- visualization adapter package
+- sample shared runtime module
+
+That wording is intentional: `scaffold-app` scaffolds the custom application, not only the plugin. The plugin is included because Hermes needs a registration surface, but the generated project also includes the surrounding runtime structure where application logic, skills, and adapters live.
+
+#### 6.5a.10 Anti-Patterns
+
+- Do not use a skill to perform deterministic transformation that belongs in runtime code.
+- Do not expose every internal transformation as an agent-callable tool.
+- Do not let renderer-specific payload formats become the application's canonical domain schema.
+- Do not duplicate the same capability rules independently in prompt text, frontend, and gateway without a shared capability profile.
+- Do not collapse the term custom application into plugin; the plugin is one part of the app, not the whole boundary.
+- Do not treat adapters as plugins; plugins register capabilities, adapters translate data.
+- Do not embed adapter implementations inside `api_server.py`; keep them in dedicated class files and call them through a factory.
+
 ### 6.6 Swarm Multi-Agent (`swarm/`)
 
 29 multi-agent preset teams:
@@ -2092,7 +2514,7 @@ DATA_ROOT/
 **Key rules:**
 - Session-mode run directories are created under `sessions/<sid>/runs/` — deleting a session removes all its runs atomically.
 - The global `runs/` root is retained only for backward compatibility with pre-migration runs and for non-session (swarm/CLI) contexts.
-- The API layer (`_resolve_run_dir`, `_collect_run_dirs`) searches both roots in order.
+- The API layer (`_resolve_run_dir`, `_collect_run_dirs`) may search both roots only for non-workspace contexts. When a request is already bound to an authenticated workspace, lookup must stay inside that workspace's explicit `runs_dir` and `sessions_dir`.
 
 **Runtime artifact directories table:**
 
@@ -2104,6 +2526,32 @@ DATA_ROOT/
 | `uploads/` | Legacy fallback uploads | `DATA_ROOT` via `TERMINAL_CWD` |
 | `.swarm/runs/<run_id>/` | Swarm run state | `DATA_ROOT` via `TERMINAL_CWD` |
 | `.tasks/` | Task manager state | `TASKS_DIR` via `TERMINAL_CWD` |
+
+#### 6.9.3a Authenticated Workspace Isolation
+
+Feishu login migration changed the isolation boundary from a single process-level sandbox to a per-user workspace model.
+
+**Authoritative identity chain:**
+
+1. Feishu OAuth callback creates or updates an `AuthUser` row keyed by `feishu_open_id` / `feishu_union_id`.
+2. The auth layer provisions `workspaces/<workspace_slug>/agent/` via `ensure_workspace(...)`.
+3. Browser requests resolve `RequestContext` from the signed `vt_session` cookie.
+4. Feishu gateway requests resolve the same `AuthUser` from inbound sender identity (`open_id` first, `union_id` fallback).
+5. Session, run, upload, and swarm APIs use the resolved workspace paths rather than process-global roots.
+
+**Design rule:** once a request is bound to `WorkspacePaths`, every artifact lookup must remain inside that workspace unless the caller explicitly opts into a compatibility root. Implicit fallback from a workspace-scoped lookup into `DATA_ROOT/runs` or `agent/runs` is forbidden.
+
+**Why this rule exists:** authenticated users can share one FastAPI process and one Feishu bot. Without a hard workspace boundary, APIs such as `/runs` or `/runs/{id}` can accidentally mix historical shared data into a logged-in user's result set.
+
+**Current implementation points:**
+
+| Component | Responsibility |
+|-----------|----------------|
+| `agent/src/auth/store.py` | Maps Feishu identities to stable `user_id` + `workspace_slug` |
+| `agent/src/auth/workspace.py` | Provisions per-user `WorkspacePaths` under `workspaces/<slug>/agent/` |
+| `agent/api_server.py::_resolve_request_context` | Resolves browser requests into authenticated workspace context |
+| `agent/api_server.py::_feishu_route_message` | Resolves Feishu sender identity into the same workspace context |
+| `agent/api_server.py::_candidate_runs_dirs` | Enforces that explicit workspace run lookups do not silently include shared global roots |
 
 #### 6.9.4 Design-Time vs Runtime Directories
 
@@ -2314,6 +2762,26 @@ def _setup_backtest_run(args: dict, **_) -> str:
 `get_data_root()` reads `TERMINAL_CWD` at call time, so the fallback honours the user-scoped sandbox (e.g. `agent/chris/runs/`) rather than hardcoding `agent/runs/`.
 
 **Why this matters:** the previous fallback was `_AGENT_ROOT / "runs"` which resolves to `agent/runs/` regardless of `TERMINAL_CWD`. This created a second stray runs folder alongside the session-scoped hierarchy whenever a tool call ran in a new thread that didn't inherit the context var.
+
+#### 6.9.12 Regression Enforcement for Isolated Environments
+
+The isolated-environment design is enforced by regression tests. This is not documentation-only guidance.
+
+**Primary regression file:** `agent/tests/regression/test_feishu_login_workspace.py`
+
+| Test | Invariant enforced |
+|------|--------------------|
+| `test_feishu_callback_bootstraps_workspace_and_sets_session_cookie` | Feishu login creates a stable per-user workspace and authenticated cookie context |
+| `test_sessions_are_isolated_per_authenticated_workspace` | Session CRUD is isolated by workspace |
+| `test_workspace_session_ids_cannot_be_used_across_workspaces` | Cross-workspace session IDs are rejected |
+| `test_runs_are_isolated_per_authenticated_workspace` | `/runs` and `/runs/{id}` stay inside the authenticated workspace and do not pick up shared legacy run roots |
+| `test_swarm_runtime_is_resolved_per_authenticated_workspace` | Swarm runtime selection is workspace-scoped |
+| `test_feishu_webhook_routes_messages_into_logged_in_user_workspace` | Feishu gateway traffic resolves sender identity into the correct user workspace |
+| `test_feishu_gateway_requires_linked_login_before_routing` | Unlinked Feishu senders are rejected instead of falling into the public/shared workspace |
+
+**Streaming card coverage:** `agent/tests/regression/test_feishu_streaming_cards.py` remains the companion suite for Feishu reply rendering and card update flow.
+
+**Specific bug now covered:** a prior implementation of `_candidate_runs_dirs(...)` always appended `DATA_ROOT/runs` and `agent/runs` even when a workspace-specific `runs_dir` was explicitly passed. That behavior caused authenticated `/runs` requests to surface non-isolated legacy data. The regression above locks in the corrected rule: explicit workspace roots must not silently widen into shared legacy roots.
 
 ---
 

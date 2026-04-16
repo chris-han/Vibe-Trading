@@ -25,6 +25,10 @@
       1776133179275003371,
       13527
     ],
+    "quant/macd-backtest-lessons/SKILL.md": [
+      1776293274869986724,
+      6248
+    ],
     "quant/macro-factor-correlation/SKILL.md": [
       1776246151512454061,
       12492
@@ -129,6 +133,19 @@
       "category": "quant",
       "frontmatter_name": "backtest-risk-audit",
       "description": "Comprehensive risk audit framework for strategy backtests...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "macd-backtest-lessons",
+      "category": "quant",
+      "frontmatter_name": "macd-backtest-lessons",
+      "description": "MACD strategy backtesting lessons — parameter selection, ...",
       "platforms": [],
       "conditions": {
         "fallback_for_toolsets": [],

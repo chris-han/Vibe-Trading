@@ -2,16 +2,20 @@ import asyncio
 import json
 
 import api_server
+from src.adapters.factory import get_feishu_visualization_adapter
+
+
+_FEISHU_ADAPTER = get_feishu_visualization_adapter()
 
 
 def test_build_streaming_card_v2_uses_card_json_v2_schema():
-    payload = json.loads(api_server._feishu_build_streaming_card_v2("Vibe-Trading", "hello"))
+    payload = json.loads(_FEISHU_ADAPTER.build_streaming_card_payload("Vibe-Trading", "hello"))
 
     assert payload["schema"] == "2.0"
     assert payload["config"]["streaming_mode"] is True
     assert payload["config"]["update_multi"] is True
     assert payload["body"]["elements"][0]["tag"] == "markdown"
-    assert payload["body"]["elements"][0]["element_id"] == api_server._FEISHU_STREAM_ELEMENT_ID
+    assert payload["body"]["elements"][0]["element_id"] == _FEISHU_ADAPTER.stream_element_id
 
 
 def test_feishu_await_and_reply_streams_card_and_disables_mode(monkeypatch):
@@ -48,7 +52,7 @@ def test_feishu_await_and_reply_streams_card_and_disables_mode(monkeypatch):
         return {
             "card_id": "card_123",
             "message_id": "om_123",
-            "element_id": api_server._FEISHU_STREAM_ELEMENT_ID,
+            "element_id": _FEISHU_ADAPTER.stream_element_id,
             "sequence": 1,
         }
 
