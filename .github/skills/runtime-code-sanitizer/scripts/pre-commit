@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# pre-commit hook: enforce sanitizer + prompt-guard coverage for runtime-generated code
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CHECKER="$REPO_ROOT/.github/skills/runtime-code-sanitizer/scripts/check_sanitizers.py"
+REPO_GUARD="$REPO_ROOT/.github/scripts/check_repo_guards.py"
+
+# Only run when service.py or the checker itself is in the staged changeset
+# (avoid slowing down every commit that only touches frontend/docs).
+RELEVANT=$(git diff --cached --name-only | grep -E \
+  'agent/src/session/service\.py|check_sanitizers\.py' || true)
+
+REPO_GUARD_RELEVANT=$(git diff --cached --name-only | grep -E \
+  'agent/src/session/service\.py|agent/src/swarm/worker\.py|agent/cli\.py|agent/src/skills/|agent/\.hermes/skills/|check_repo_guards\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit' || true)
+
+if [ -z "$RELEVANT" ] && [ -z "$REPO_GUARD_RELEVANT" ]; then
+  exit 0
+fi
+
+echo "🔍 runtime-code-sanitizer: checking staged changes..."
+
+# Prefer the project venv; fall back to system python3
+PYTHON="${REPO_ROOT}/agent/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+  PYTHON="$(command -v python3 || command -v python)"
+fi
+
+if ! "$PYTHON" "$CHECKER"; then
+  echo ""
+  echo "❌ Commit blocked: fix the sanitizer issues above, then re-commit."
+  echo "   To skip this check (NOT recommended): git commit --no-verify"
+  exit 1
+fi
+
+if [ -n "$REPO_GUARD_RELEVANT" ]; then
+  echo "🔍 repo-guard: checking staged changes..."
+  if ! "$PYTHON" "$REPO_GUARD"; then
+    echo ""
+    echo "❌ Commit blocked: fix the repo guard issues above, then re-commit."
+    echo "   To skip this check (NOT recommended): git commit --no-verify"
+    exit 1
+  fi
+fi

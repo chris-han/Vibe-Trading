@@ -1,7 +1,6 @@
 ---
 name: earnings-revision
 description: Earnings estimate revisions, guidance analysis, and post-earnings drift (PEAD) — track analyst consensus changes, earnings surprise patterns, and management guidance shifts for US/HK equities.
-category: analysis
 ---
 # Earnings Revision & Guidance Analysis
 

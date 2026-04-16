@@ -40,50 +40,56 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
   const [overlays, setOverlays] = useState<Set<Overlay>>(new Set(["ma5", "ma20"]));
   const [showMenu, setShowMenu] = useState(false);
   const { dark } = useDarkMode();
+  const activeChipClass = dark
+    ? "bg-primary/15 text-primary font-semibold"
+    : "bg-primary text-primary-foreground font-semibold shadow-sm";
+  const inactiveChipClass = dark
+    ? "text-muted-foreground/50 hover:text-muted-foreground"
+    : "text-muted-foreground/70 hover:text-foreground";
 
   const toggleOverlay = useCallback((id: Overlay) => {
-    setOverlays(prev => {
+    setOverlays((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
 
-  // Memoize base data arrays — only recompute when raw data changes
   const baseData = useMemo(() => {
     const dates = data.map(d => d.time);
-    const closes = data.map(d => d.close);
-    const highs = data.map(d => d.high);
-    const lows = data.map(d => d.low);
+    const closes = data.map((d) => d.close);
+    const highs = data.map((d) => d.high);
+    const lows = data.map((d) => d.low);
     const opens = data.map(d => d.open);
     const candle = data.map(d => [d.open, d.close, d.low, d.high]);
     return { dates, closes, highs, lows, opens, candle };
   }, [data]);
 
-  // Memoize indicator calculations — only recompute when data changes (not on overlay toggle)
-  const indicatorCache = useMemo(() => ({
-    ma5: calcMA(baseData.closes, 5),
-    ma10: calcMA(baseData.closes, 10),
-    ma20: calcMA(baseData.closes, 20),
-    ma60: calcMA(baseData.closes, 60),
-    ema12: calcEMA(baseData.closes, 12),
-    ema26: calcEMA(baseData.closes, 26),
-    boll: calcBOLL(baseData.closes, 20, 2),
-    macd: calcMACD(baseData.closes),
-    rsi: calcRSI(baseData.closes),
-    kdj: calcKDJ(baseData.highs, baseData.lows, baseData.closes),
-  }), [baseData]);
+  const indicatorCache = useMemo(
+    () => ({
+      ma5: calcMA(baseData.closes, 5),
+      ma10: calcMA(baseData.closes, 10),
+      ma20: calcMA(baseData.closes, 20),
+      ma60: calcMA(baseData.closes, 60),
+      ema12: calcEMA(baseData.closes, 12),
+      ema26: calcEMA(baseData.closes, 26),
+      boll: calcBOLL(baseData.closes, 20, 2),
+      macd: calcMACD(baseData.closes),
+      rsi: calcRSI(baseData.closes),
+      kdj: calcKDJ(baseData.highs, baseData.lows, baseData.closes),
+    }),
+    [baseData]
+  );
 
-  // Memoize backend indicator series with Map lookup (O(1) instead of O(n) find)
   const extraIndicators = useMemo(() => {
     if (!indicators) return [];
     return Object.entries(indicators).map(([name, points]) => {
-      const lookup = new Map(points.map(p => [p.time, p.value]));
-      return { name: name.toUpperCase(), values: baseData.dates.map(d => lookup.get(d) ?? null) };
+      const lookup = new Map(points.map((p) => [p.time, p.value]));
+      return { name: name.toUpperCase(), values: baseData.dates.map((d) => lookup.get(d) ?? null) };
     });
   }, [indicators, baseData.dates]);
 
-  // Init chart instance — only on mount/unmount and dark mode change
   useEffect(() => {
     if (!containerRef.current || data.length === 0) return;
     const chart = echarts.init(containerRef.current);
@@ -94,9 +100,8 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(containerRef.current);
     return () => { ro.disconnect(); chart.dispose(); chartRef.current = null; };
-  }, [data.length === 0, dark]); // only re-init when going empty↔non-empty or theme changes
+  }, [data.length === 0, dark]);
 
-  // Update chart options — setOption on existing instance, no dispose
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || data.length === 0) return;
@@ -104,8 +109,6 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
     const t = getChartTheme();
     const { dates, closes, opens, candle } = baseData;
 
-    // Overlay series
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const overlaySeries: any[] = [];
     const legendNames: string[] = ["K"];
     let colorIdx = 0;
@@ -137,25 +140,28 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       legendNames.push("BOLL");
     }
 
-    // Trade markers
     const marks = (markers || []).map(m => ({
       coord: [m.time, m.price],
       value: m.side === "BUY" ? "B" : "S",
       name: [`${m.side} @ ${m.price}`, m.qty ? `Qty: ${m.qty}` : "", m.reason || ""].filter(Boolean).join("\n"),
       itemStyle: { color: m.side === "BUY" ? t.upColor : t.downColor },
-      label: { color: "#fff", fontSize: 10, fontWeight: "bold" as const },
+      label: {
+        color: dark ? "#ffffff" : "#111827",
+        fontSize: 10,
+        fontWeight: "bold" as const,
+        textBorderWidth: 0,
+        backgroundColor: dark ? "rgba(15, 23, 42, 0.92)" : "rgba(255, 255, 255, 0.96)",
+        borderRadius: 999,
+        padding: [1, 5],
+      },
     }));
 
-    // Volume
     const vol = data.map((d, i) => ({
       value: d.volume,
       itemStyle: { color: closes[i] >= opens[i] ? t.volumeUp : t.volumeDown },
     }));
 
-    // Sub-chart
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let subSeries: any[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let subYAxis: any = { scale: true, gridIndex: 1, splitLine: { lineStyle: { color: t.gridColor } }, axisLabel: { color: t.textColor, fontSize: 10 } };
 
     if (sub === "vol") {
@@ -184,7 +190,6 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       legendNames.push("%K", "%D", "%J");
     }
 
-    // Backend custom indicators (Map-based O(1) lookup)
     const extraSeries = extraIndicators.map((ind, i) => {
       legendNames.push(ind.name);
       return { name: ind.name, type: "line" as const, data: ind.values, xAxisIndex: 0, yAxisIndex: 0, symbol: "none", lineStyle: { width: 1, color: OVERLAY_COLORS[(colorIdx + i) % OVERLAY_COLORS.length], type: "dashed" as const } };
@@ -199,7 +204,6 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
         trigger: "axis", axisPointer: { type: "cross" },
         backgroundColor: t.tooltipBg, borderColor: t.tooltipBorder,
         textStyle: { color: t.tooltipText, fontSize: 11 },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         formatter: (params: any) => {
           if (!Array.isArray(params) || !params.length) return "";
           let html = `<b>${params[0].axisValue}</b>`;
@@ -261,30 +265,32 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
   return (
     <div>
       <div className="flex items-center gap-2 mb-1 flex-wrap">
-        {/* Time range */}
         <div className="flex gap-0.5">
           {(["1M", "3M", "6M", "1Y", "ALL"] as const).map((r) => (
-            <button key={r} onClick={() => setRange(r)} className={cn("px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors", range === r ? "bg-primary/15 text-primary font-medium" : "text-muted-foreground/50 hover:text-muted-foreground")}>{r}</button>
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={cn(
+                "px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-mono transition-colors",
+                range === r ? activeChipClass : inactiveChipClass
+              )}
+            >
+              {r}
+            </button>
           ))}
         </div>
-
         <div className="w-px h-3 bg-border/40" />
-
-        {/* Indicator dropdown */}
         <div className="relative">
-          <button
-            onClick={() => setShowMenu(!showMenu)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          >
+          <button onClick={() => setShowMenu(!showMenu)} className="flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-sm)] text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
             Indicators ({overlays.size}) <ChevronDown className="h-3 w-3" />
           </button>
           {showMenu && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-card border rounded-lg shadow-lg p-2 min-w-[160px]" onMouseLeave={() => setShowMenu(false)}>
-              {["MA", "Channel"].map(group => (
+            <div className="absolute top-full left-0 mt-1 z-50 bg-card border rounded-[var(--radius-lg)] shadow-lg p-2 min-w-[160px]" onMouseLeave={() => setShowMenu(false)}>
+              {["MA", "Channel"].map((group) => (
                 <div key={group}>
                   <p className="text-[9px] text-muted-foreground/50 uppercase tracking-wider px-1 pt-1">{group}</p>
-                  {OVERLAY_OPTIONS.filter(o => o.group === group).map(o => (
-                    <label key={o.id} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-muted/30 cursor-pointer">
+                  {OVERLAY_OPTIONS.filter((o) => o.group === group).map((o) => (
+                    <label key={o.id} className="flex items-center gap-2 px-1 py-0.5 rounded-[var(--radius-sm)] hover:bg-muted/30 cursor-pointer">
                       <input type="checkbox" checked={overlays.has(o.id)} onChange={() => toggleOverlay(o.id)} className="h-3 w-3 rounded accent-primary" />
                       <span className="text-xs">{o.label}</span>
                     </label>
@@ -292,20 +298,24 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
                 </div>
               ))}
               <div className="border-t mt-1 pt-1">
-                <button onClick={() => { setOverlays(new Set()); setShowMenu(false); }} className="text-[10px] text-muted-foreground hover:text-foreground px-1 py-0.5 w-full text-left rounded hover:bg-muted/30">
-                  Bare K (clear all)
-                </button>
+                <button onClick={() => { setOverlays(new Set()); setShowMenu(false); }} className="text-[10px] text-muted-foreground hover:text-foreground px-1 py-0.5 w-full text-left rounded-[var(--radius-sm)] hover:bg-muted/30">Bare K (clear all)</button>
               </div>
             </div>
           )}
         </div>
-
         <div className="w-px h-3 bg-border/40" />
-
-        {/* Sub-chart selector */}
         <div className="flex gap-0.5">
           {(["vol", "macd", "rsi", "kdj"] as const).map((id) => (
-            <button key={id} onClick={() => setSub(id)} className={cn("px-1.5 py-0.5 rounded text-[10px] font-mono uppercase transition-colors", sub === id ? "bg-primary/15 text-primary font-medium" : "text-muted-foreground/50 hover:text-muted-foreground")}>{id}</button>
+            <button
+              key={id}
+              onClick={() => setSub(id)}
+              className={cn(
+                "px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-mono uppercase transition-colors",
+                sub === id ? activeChipClass : inactiveChipClass
+              )}
+            >
+              {id}
+            </button>
           ))}
         </div>
       </div>

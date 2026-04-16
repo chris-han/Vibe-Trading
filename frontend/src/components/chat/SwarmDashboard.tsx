@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef } from "react";
-import { CheckCircle2, XCircle, Loader2, Clock, Timer } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { CheckCircle2, XCircle, Loader2, Clock, Timer, ChevronDown, ChevronRight, Wrench } from "lucide-react";
+import { MarkdownRenderer } from "@/components/common/MarkdownRenderer";
 
 export interface SwarmAgent {
   id: string;
@@ -11,6 +10,8 @@ export interface SwarmAgent {
   startedAt: number;
   elapsed: number;
   lastText: string;
+  /** Full accumulated streaming reasoning text for this agent */
+  reasoningText: string;
   summary: string;
 }
 
@@ -27,21 +28,27 @@ export interface SwarmDashboardProps {
 }
 
 const AGENT_COLORS = [
-  "text-cyan-400", "text-violet-400", "text-emerald-400",
-  "text-amber-400", "text-blue-400", "text-rose-400",
-  "text-teal-400", "text-pink-400",
+  "text-primary", "text-foreground", "text-success",
+  "text-warning", "text-info", "text-destructive",
+  "text-foreground/70", "text-success/80",
 ];
 const AGENT_BG = [
-  "bg-cyan-500/10", "bg-violet-500/10", "bg-emerald-500/10",
-  "bg-amber-500/10", "bg-blue-500/10", "bg-rose-500/10",
-  "bg-teal-500/10", "bg-pink-500/10",
+  "bg-primary/10", "bg-muted", "bg-success/10",
+  "bg-warning/10", "bg-info/10", "bg-destructive/10",
+  "bg-muted/50", "bg-primary/5",
+];
+const AGENT_BORDER = [
+  "border-primary/30", "border-border", "border-success/30",
+  "border-warning/30", "border-info/30", "border-destructive/30",
+  "border-border/50", "border-primary/20",
 ];
 
 function agentColor(idx: number) { return AGENT_COLORS[idx % AGENT_COLORS.length]; }
 function agentBg(idx: number) { return AGENT_BG[idx % AGENT_BG.length]; }
+function agentBorder(idx: number) { return AGENT_BORDER[idx % AGENT_BORDER.length]; }
 
 function formatTime(seconds: number) {
-  if (seconds <= 0) return "\u2014";
+  if (seconds <= 0) return "—";
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -50,22 +57,126 @@ function formatTime(seconds: number) {
 
 function StatusIcon({ status }: { status: SwarmAgent["status"] }) {
   switch (status) {
-    case "running": return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
-    case "done": return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
-    case "failed": return <XCircle className="h-3.5 w-3.5 text-red-500" />;
-    case "retry": return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />;
-    default: return <Clock className="h-3.5 w-3.5 text-muted-foreground/40" />;
+    case "running": return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />;
+    case "done": return <CheckCircle2 className="h-3.5 w-3.5 text-success shrink-0" />;
+    case "failed": return <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />;
+    case "retry": return <Loader2 className="h-3.5 w-3.5 animate-spin text-warning shrink-0" />;
+    default: return <Clock className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />;
   }
 }
 
-function StatusLabel({ status }: { status: SwarmAgent["status"] }) {
-  switch (status) {
-    case "running": return <span className="text-primary font-medium">running</span>;
-    case "done": return <span className="text-emerald-500 font-medium">done</span>;
-    case "failed": return <span className="text-red-500 font-medium">failed</span>;
-    case "retry": return <span className="text-amber-500 font-medium">retry</span>;
-    default: return <span className="text-muted-foreground/50">waiting</span>;
-  }
+/** Single agent card with expandable streaming reasoning */
+function AgentCard({
+  agent,
+  idx,
+  now,
+}: {
+  agent: SwarmAgent;
+  idx: number;
+  now: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const reasoningRef = useRef<HTMLDivElement>(null);
+  const isActive = agent.status === "running" || agent.status === "retry";
+  const hasReasoning = agent.reasoningText.length > 0;
+
+  // Auto-expand when agent starts running
+  useEffect(() => {
+    if (isActive) setExpanded(true);
+  }, [isActive]);
+
+  // Auto-close when done (delay so user can see final state)
+  useEffect(() => {
+    if (agent.status === "done" || agent.status === "failed") {
+      const t = setTimeout(() => setExpanded(false), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [agent.status]);
+
+  // Auto-scroll reasoning to bottom while streaming
+  useEffect(() => {
+    if (expanded && reasoningRef.current) {
+      reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
+    }
+  }, [agent.reasoningText, expanded]);
+
+  const elapsed = isActive && agent.startedAt
+    ? (now - agent.startedAt) / 1000
+    : agent.elapsed / 1000;
+
+  // Tool label: strip the trailing ✓/✗ for cleaner display
+  const toolLabel = agent.tool.replace(/\s[✓✗]$/, "");
+  const toolOk = agent.tool.endsWith("✓");
+  const toolFail = agent.tool.endsWith("✗");
+
+  return (
+    <div className={`rounded-card border ${agentBorder(idx)} overflow-hidden`}>
+      {/* Agent header row */}
+      <button
+        type="button"
+        onClick={() => hasReasoning && setExpanded(v => !v)}
+        className={`w-full px-4 py-2.5 flex items-center gap-3 text-sm transition-colors ${
+          hasReasoning ? "cursor-pointer hover:bg-muted/40" : "cursor-default"
+        } ${agentBg(idx)}`}
+      >
+        {/* Chevron toggle */}
+        <span className="shrink-0 w-3.5">
+          {hasReasoning
+            ? (expanded
+              ? <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              : <ChevronRight className="h-3 w-3 text-muted-foreground" />)
+            : null
+          }
+        </span>
+
+        {/* Agent name */}
+        <span className={`font-mono text-xs font-semibold w-36 shrink-0 truncate text-left ${agentColor(idx)}`}>
+          {agent.id}
+        </span>
+
+        {/* Status icon */}
+        <StatusIcon status={agent.status} />
+
+        {/* Tool badge */}
+        {toolLabel ? (
+          <span className={`inline-flex items-center gap-1 text-xs font-mono px-1.5 py-0.5 rounded bg-muted/60 min-w-0 truncate max-w-[140px] ${
+            toolFail ? "text-destructive" : toolOk ? "text-success/80" : "text-muted-foreground"
+          }`}>
+            <Wrench className="h-2.5 w-2.5 shrink-0" />
+            <span className="truncate">{toolLabel}</span>
+          </span>
+        ) : (
+          <span className="w-[140px]" />
+        )}
+
+        {/* Iter count */}
+        {agent.iters > 0 && (
+          <span className="text-xs text-muted-foreground/60 tabular-nums shrink-0">
+            {agent.iters} iter{agent.iters !== 1 ? "s" : ""}
+          </span>
+        )}
+
+        {/* Elapsed time */}
+        <span className="ml-auto text-xs text-muted-foreground/60 tabular-nums shrink-0 flex items-center gap-1">
+          <Timer className="h-3 w-3" />
+          {formatTime(elapsed)}
+        </span>
+      </button>
+
+      {/* Streaming reasoning area */}
+      {expanded && hasReasoning && (
+        <div
+          ref={reasoningRef}
+          className="max-h-48 overflow-y-auto px-4 py-3 border-t border-border/40 bg-background/50 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words"
+        >
+          {agent.reasoningText}
+          {isActive && (
+            <span className="inline-block w-1.5 h-3 bg-primary/70 animate-pulse ml-0.5 align-middle" />
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function SwarmDashboard(props: SwarmDashboardProps) {
@@ -82,111 +193,86 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
   const doneCount = Object.values(agents).filter(a => a.status === "done" || a.status === "failed").length;
   const totalCount = Math.max(agentOrder.length, 1);
   const pct = Math.round((doneCount / totalCount) * 100);
+  const runningAgents = Object.values(agents).filter(a => a.status === "running" || a.status === "retry");
 
   const borderColor = finished
-    ? (finalStatus === "completed" ? "border-emerald-500/50" : "border-red-500/50")
+    ? (finalStatus === "completed" ? "border-success/50" : "border-destructive/50")
     : "border-primary/30";
   const headerBg = finished
-    ? (finalStatus === "completed" ? "bg-emerald-500/5" : "bg-red-500/5")
-    : "bg-primary/5";
+    ? (finalStatus === "completed" ? "bg-success/10" : "bg-destructive/5")
+    : "bg-primary/10";
 
   return (
-    <div className="space-y-3 w-full">
-      {/* Dashboard panel */}
-      <div className={`rounded-xl border ${borderColor} overflow-hidden`}>
-        {/* Header */}
+    <div className="space-y-2 w-full">
+      {/* Dashboard header */}
+      <div className={`rounded-card border ${borderColor} overflow-hidden`}>
         <div className={`px-4 py-2.5 ${headerBg} flex items-center justify-between`}>
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm">{preset}</span>
+          <div className="flex items-center gap-2 min-w-0">
+            {!finished && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />}
+            <span className="font-semibold text-sm text-foreground truncate">{preset}</span>
             {finished ? (
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${
                 finalStatus === "completed"
-                  ? "bg-emerald-500/20 text-emerald-500"
-                  : "bg-red-500/20 text-red-500"
+                  ? "bg-success/20 text-success"
+                  : "bg-destructive/10 text-destructive"
               }`}>
                 {finalStatus.toUpperCase()}
               </span>
             ) : (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary font-medium">
-                RUNNING
+              <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary font-medium shrink-0">
+                {runningAgents.length > 0
+                  ? `${runningAgents.map(a => a.id).join(", ")} running`
+                  : "RUNNING"}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
             <Timer className="h-3 w-3" />
             {formatTime(elapsedTotal)}
           </div>
         </div>
 
-        {/* Agent rows */}
-        <div className="divide-y divide-border/50">
-          {agentOrder.map((agentId, idx) => {
-            const agent = agents[agentId];
-            if (!agent) return null;
-            const elapsed = agent.status === "running" && agent.startedAt
-              ? (now - agent.startedAt) / 1000
-              : agent.elapsed / 1000;
-
-            return (
-              <div key={agentId} className="px-4 py-2 flex items-center gap-3 text-sm">
-                {/* Agent name */}
-                <div className={`w-40 shrink-0 font-mono text-xs truncate ${agentColor(idx)}`}>
-                  {agent.id}
-                </div>
-                {/* Status */}
-                <div className="w-20 shrink-0 flex items-center gap-1.5">
-                  <StatusIcon status={agent.status} />
-                  <StatusLabel status={agent.status} />
-                </div>
-                {/* Tool */}
-                <div className="w-28 shrink-0 text-xs text-muted-foreground font-mono truncate">
-                  {agent.tool || "\u2014"}
-                </div>
-                {/* Time */}
-                <div className="w-16 shrink-0 text-xs text-muted-foreground text-right tabular-nums">
-                  {formatTime(elapsed)}
-                </div>
-                {/* Iters */}
-                <div className="w-10 shrink-0 text-xs text-muted-foreground text-right tabular-nums">
-                  {agent.iters > 0 ? agent.iters : "\u2014"}
-                </div>
-                {/* Last output */}
-                <div className="flex-1 min-w-0 text-xs text-muted-foreground/60 truncate">
-                  {agent.lastText}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
         {/* Progress bar */}
-        <div className="px-4 py-2 border-t border-border/50 flex items-center gap-3">
+        <div className="px-4 py-2 border-t border-border/30 flex items-center gap-3">
           <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 finished
-                  ? (finalStatus === "completed" ? "bg-emerald-500" : "bg-red-500")
+                  ? (finalStatus === "completed" ? "bg-success" : "bg-destructive")
                   : "bg-primary"
               }`}
               style={{ width: `${pct}%` }}
             />
           </div>
-          <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">{pct}%</span>
+          <span className="text-xs text-muted-foreground tabular-nums w-14 text-right shrink-0">
+            {doneCount}/{totalCount} agents
+          </span>
         </div>
       </div>
 
-      {/* Completed agent summaries */}
-      {completedSummaries.length > 0 && (
-        <div className="space-y-2">
+      {/* Agent cards */}
+      {agentOrder.length > 0 && (
+        <div className="space-y-1.5">
+          {agentOrder.map((agentId, idx) => {
+            const agent = agents[agentId];
+            if (!agent) return null;
+            return <AgentCard key={agentId} agent={agent} idx={idx} now={now} />;
+          })}
+        </div>
+      )}
+
+      {/* Completed agent summaries (collapsed previews) */}
+      {completedSummaries.length > 0 && !finished && (
+        <div className="space-y-1.5">
           {completedSummaries.map(({ agentId, summary }, idx) => {
             const agentIdx = agentOrder.indexOf(agentId);
             const colorIdx = agentIdx >= 0 ? agentIdx : idx;
             const lines = summary.split("\n");
-            const preview = lines.slice(0, 8).join("\n") + (lines.length > 8 ? "\n..." : "");
+            const preview = lines.slice(0, 6).join("\n") + (lines.length > 6 ? "\n…" : "");
             return (
-              <div key={agentId + idx} className={`rounded-lg ${agentBg(colorIdx)} px-4 py-3`}>
+              <div key={agentId + idx} className={`rounded-card ${agentBg(colorIdx)} px-4 py-3 border ${agentBorder(colorIdx)}`}>
                 <div className={`text-xs font-semibold mb-1.5 ${agentColor(colorIdx)}`}>
-                  {agentId}
+                  {agentId} · summary
                 </div>
                 <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
                   {preview}
@@ -199,13 +285,14 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
 
       {/* Final report */}
       {finalReport && (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
-          <div className="text-xs font-semibold text-emerald-500 mb-3">Final Report</div>
+        <div className="rounded-card border border-success/30 bg-success/5 px-5 py-4">
+          <div className="text-xs font-semibold text-success mb-3">Final Report</div>
           <div className="prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalReport}</ReactMarkdown>
+            <MarkdownRenderer>{finalReport}</MarkdownRenderer>
           </div>
         </div>
       )}
     </div>
   );
 }
+

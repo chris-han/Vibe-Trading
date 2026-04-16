@@ -5,6 +5,7 @@ Usage:
     vibe-trading                           Interactive mode (default)
     vibe-trading -p "Backtest AAPL MACD"   Single run
     vibe-trading serve --port 8899         Start API server
+    vibe-trading scaffold-app my-app       Scaffold a custom Hermes application skeleton
     vibe-trading chat                      Interactive mode
     vibe-trading list                      List runs
     vibe-trading show <run_id>             Show run details
@@ -22,6 +23,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, Dict, List, Optional
 
 import warnings
@@ -35,21 +37,45 @@ for _s in ("stdout", "stderr"):
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, IntPrompt, Prompt
+from rich.prompt import Prompt
 from rich.syntax import Syntax
 from rich.table import Table
 
+from runtime_env import ensure_runtime_env, get_data_root, get_hermes_agent_kwargs, prepare_hermes_project_context
+
+ensure_runtime_env()
+
 console = Console()
 AGENT_DIR = Path(__file__).resolve().parent
-RUNS_DIR = AGENT_DIR / "runs"
+DATA_ROOT = get_data_root()
+RUNS_DIR = DATA_ROOT / "runs"
 SWARM_DIR = AGENT_DIR / ".swarm" / "runs"
-SESSIONS_DIR = AGENT_DIR / "sessions"
-UPLOADS_DIR = AGENT_DIR / "uploads"
+SESSIONS_DIR = DATA_ROOT / "sessions"
+UPLOADS_DIR = DATA_ROOT / "uploads"
 
 EXIT_SUCCESS = 0
 EXIT_RUN_FAILED = 1
 EXIT_USAGE_ERROR = 2
 RICH_TAG_PATTERN = re.compile(r"\[/?[^\]]+\]")
+BACKTEST_WORKFLOW_PROMPT = (
+    "Backtest workflow rules:\n"
+    "- For a new backtest, call setup_backtest_run(config_json=..., signal_engine_py=...) before backtest(run_dir=...).\n"
+    "- Never ask the user to manually create config.json or code/signal_engine.py when the setup tool can write them.\n"
+)
+DOCUMENT_WORKFLOW_PROMPT = (
+    "Document workflow rules:\n"
+    "- If the prompt includes an exact uploaded PDF path, call read_document(file_path=...) to extract the text.\n"
+    "- Never invent a PDF filename; only call read_document when the exact local path is known.\n"
+    "- If no local path is available, use read_url or browser tools to fetch the report from the source site.\n"
+    "- Prefer targeted page ranges first for long documents.\n"
+    "- OCR is optional and controlled by HERMES_ENABLE_PDF_OCR.\n"
+)
+MARKET_DATA_WORKFLOW_PROMPT = (
+    "Market data workflow rules:\n"
+    "- execute_code is forbidden in this runtime. Use write_file plus bash with the runtime-provided cwd instead.\n"
+    "- For finance or research tasks, call load_skill first to get approved data access methods and symbol conventions.\n"
+    "- Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.\n"
+)
 
 _VERSION = "0.1.0"
 
@@ -60,6 +86,7 @@ _agent_color_map: dict[str, str] = {}
 
 def serve_main(argv: list[str] | None = None) -> int:
     """Delegate server startup to api_server."""
+    prepare_hermes_project_context(chdir=True)
     from api_server import serve_main as api_serve_main
 
     return api_serve_main(argv)
@@ -226,73 +253,101 @@ def _run_agent(
     no_rich: bool = False,
     stream_output: bool = True,
 ) -> dict:
-    """Build AgentLoop and execute, return result dict."""
-    from src.tools import build_registry
-    from src.providers.chat import ChatLLM
-    from src.agent.loop import AgentLoop
+    """Execute prompt via Hermes AIAgent, return result dict."""
+    import os
+    import sys
+    prepare_hermes_project_context(chdir=True)
+    _HERMES = Path(__file__).resolve().parent.parent / "hermes-agent"
+    if str(_HERMES) not in sys.path:
+        sys.path.insert(0, str(_HERMES))
+    from run_agent import AIAgent
 
-    def on_event(event_type: str, data: Dict[str, Any]) -> None:
+    def _on_tool_progress(event_type: str, tool_name: str, preview: str, args: dict, **kwargs) -> None:
         if not stream_output:
             return
-        if no_rich and event_type == "thinking_done":
-            print()
-            return
-        if no_rich and event_type == "tool_call":
-            tool = data.get("tool", "")
-            args = data.get("arguments", {})
-            args_preview = _format_tool_call_args(tool, args)
-            print(f"  - {tool}{_strip_rich_tags(args_preview)}", end="")
-            return
-        if no_rich and event_type == "tool_result":
-            tool = data.get("tool", "")
-            status = data.get("status", "ok")
-            elapsed_ms = data.get("elapsed_ms", 0)
-            elapsed_s = elapsed_ms / 1000
-            preview = _format_tool_result_preview(tool, status, data.get("preview", ""))
-            suffix = f"  {preview}" if preview else ""
-            mark = "OK" if status == "ok" else "FAIL"
-            print(f"  {mark} {elapsed_s:.1f}s{_strip_rich_tags(suffix)}")
-            return
-        if no_rich and event_type == "compact":
-            tokens = data.get("tokens_before", "?")
-            print(f"\n  context compressed ({tokens} tokens -> summary)\n")
-            return
-        if event_type == "text_delta":
+        duration = kwargs.get("duration", 0)
+        is_error = kwargs.get("is_error", False)
+        if event_type == "tool.started":
+            args_preview = _format_tool_call_args(tool_name, args or {})
             if no_rich:
-                print(data.get("delta", ""), end="")
+                print(f"  - {tool_name}{_strip_rich_tags(args_preview)}", end="")
             else:
-                console.print(data.get("delta", ""), end="", style="dim")
-        elif event_type == "thinking_done":
-            console.print()
-        elif event_type == "tool_call":
-            tool = data.get("tool", "")
-            args = data.get("arguments", {})
-            args_preview = _format_tool_call_args(tool, args)
-            console.print(f"  [cyan]\u25b6 {tool}[/cyan]{args_preview}", end="")
-        elif event_type == "tool_result":
-            tool = data.get("tool", "")
-            status = data.get("status", "ok")
-            elapsed_ms = data.get("elapsed_ms", 0)
-            elapsed_s = elapsed_ms / 1000
-            ok = status == "ok"
-            mark = "[green]\u2713[/green]" if ok else "[red]\u2717[/red]"
-            preview = _format_tool_result_preview(tool, status, data.get("preview", ""))
-            suffix = f"  {preview}" if preview else ""
-            console.print(f"  {mark} [dim]{elapsed_s:.1f}s[/dim]{suffix}")
-        elif event_type == "compact":
-            tokens = data.get("tokens_before", "?")
-            console.print(f"\n  [yellow]\u27f3 context compressed[/yellow] [dim]({tokens} tokens \u2192 summary)[/dim]\n")
+                console.print(f"  [cyan]\u25b6 {tool_name}[/cyan]{args_preview}", end="")
+        elif event_type == "tool.completed":
+            elapsed_s = duration or 0
+            status = "error" if is_error else "ok"
+            result_preview = _format_tool_result_preview(tool_name, status, preview or "")
+            suffix = f"  {result_preview}" if result_preview else ""
+            if no_rich:
+                mark = "FAIL" if is_error else "OK"
+                print(f"  {mark} {elapsed_s:.1f}s{_strip_rich_tags(suffix)}")
+            else:
+                mark = "[red]\u2717[/red]" if is_error else "[green]\u2713[/green]"
+                console.print(f"  {mark} [dim]{elapsed_s:.1f}s[/dim]{suffix}")
 
-    agent = AgentLoop(
-        registry=build_registry(),
-        llm=ChatLLM(),
-        event_callback=on_event,
-        max_iterations=max_iter,
-    )
+    def _on_delta(chunk: str) -> None:
+        if not stream_output:
+            return
+        if no_rich:
+            print(chunk, end="")
+        else:
+            console.print(chunk, end="", style="dim")
+
+    def _on_tool_generation(tool_name: str) -> None:
+        if tool_name == "execute_code":
+            import logging
+            logging.getLogger(__name__).error(
+                "permission_denied execute_code attempted by model; "
+                "toolset is disabled for Vibe-Trading CLI runtime"
+            )
+
+    extra = {}
     if run_dir_override:
-        agent.memory.run_dir = run_dir_override
+        extra["ephemeral_system_prompt"] = (
+            f"Run directory: {run_dir_override}\n"
+            f"{BACKTEST_WORKFLOW_PROMPT}"
+            f"{DOCUMENT_WORKFLOW_PROMPT}"
+            f"{MARKET_DATA_WORKFLOW_PROMPT}"
+        )
+    else:
+        extra["ephemeral_system_prompt"] = (
+            BACKTEST_WORKFLOW_PROMPT + DOCUMENT_WORKFLOW_PROMPT + MARKET_DATA_WORKFLOW_PROMPT
+        )
 
-    return agent.run(user_message=prompt, history=history)
+    agent_kwargs = get_hermes_agent_kwargs()
+
+    agent = AIAgent(
+        model=os.getenv("HERMES_MODEL", ""),
+        max_iterations=max_iter,
+        quiet_mode=True,
+        enabled_toolsets=[
+            "terminal",
+            "file",
+            "browser",
+            "skills",
+            "todo",
+            "memory",
+            "session_search",
+            "delegation",
+            "cronjob",
+            "research",
+            "vibe_trading",
+        ],
+        disabled_toolsets=["code_execution"],
+        tool_progress_callback=_on_tool_progress,
+        tool_gen_callback=_on_tool_generation,
+        stream_delta_callback=_on_delta,
+        skip_context_files=True,
+        **agent_kwargs,
+        **extra,
+    )
+
+    raw = agent.run_conversation(
+        user_message=prompt,
+        conversation_history=history or [],
+    )
+    content = (raw.get("final_response") or "").strip()
+    return {"status": "success", "content": content, "run_id": None, "run_dir": run_dir_override}
 
 
 def _print_result(result: dict, elapsed: float, *, no_rich: bool = False) -> None:
@@ -335,12 +390,6 @@ def _print_result(result: dict, elapsed: float, *, no_rich: bool = False) -> Non
 def cmd_run(prompt: str, max_iter: int, *, json_mode: bool = False, no_rich: bool = False) -> int:
     """Single run."""
     if not json_mode:
-        from src.preflight import run_preflight
-        results = run_preflight(console)
-        if any(r.critical and r.status != "ready" for r in results):
-            return EXIT_RUN_FAILED
-
-    if not json_mode:
         preview = prompt[:120]
         suffix = "..." if len(prompt) > 120 else ""
         if no_rich:
@@ -364,7 +413,7 @@ def cmd_run(prompt: str, max_iter: int, *, json_mode: bool = False, no_rich: boo
         return _result_exit_code(result)
     _print_result(result, time.perf_counter() - start, no_rich=no_rich)
     if result.get("run_id"):
-        tip = f"--show {result['run_id']}  |  --continue {result['run_id']} \"...\"  |  --code {result['run_id']}  |  --pine {result['run_id']}"
+        tip = f"--show {result['run_id']}  |  --continue {result['run_id']} \"...\"  |  --code {result['run_id']}"
         if no_rich:
             print(tip)
         else:
@@ -372,10 +421,25 @@ def cmd_run(prompt: str, max_iter: int, *, json_mode: bool = False, no_rich: boo
     return _result_exit_code(result)
 
 
+def _read_trace(run_dir: Path) -> list:
+    """Read trace.jsonl entries directly."""
+    trace_path = run_dir / "trace.jsonl"
+    if not trace_path.exists():
+        return []
+    entries = []
+    for line in trace_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return entries
+
+
 def _build_history_from_trace(run_dir: Path) -> List[Dict[str, str]]:
     """Build conversation history from trace.jsonl."""
-    from src.agent.trace import TraceWriter
-    entries = TraceWriter.read(run_dir)
+    entries = _read_trace(run_dir)
     history: List[Dict[str, str]] = []
     for e in entries:
         if e.get("type") == "start" and e.get("prompt"):
@@ -472,7 +536,6 @@ def _print_help() -> None:
         ("/list", "List recent runs"),
         ("/show <run_id>", "Show run details"),
         ("/code <run_id>", "Show generated code"),
-        ("/pine <run_id>", "Show Pine Script for TradingView"),
         ("/trace <run_id>", "Replay run trace"),
         ("/continue <run_id> <prompt>", "Continue an existing run"),
         ("/swarm", "List swarm team presets"),
@@ -532,11 +595,6 @@ def _handle_slash_command(input_str: str, *, max_iter: int) -> None:
             cmd_code(arg)
         else:
             console.print("[red]Usage: /code <run_id>[/red]")
-    elif cmd == "/pine":
-        if arg:
-            cmd_pine(arg)
-        else:
-            console.print("[red]Usage: /pine <run_id>[/red]")
     elif cmd == "/trace":
         if arg:
             cmd_trace(arg)
@@ -600,12 +658,6 @@ def _handle_swarm_command(arg: str) -> None:
 def cmd_interactive(max_iter: int) -> None:
     """Interactive mode with welcome screen, slash commands, and agent conversation."""
     _print_welcome()
-
-    from src.preflight import run_preflight
-    results = run_preflight(console)
-    if any(r.critical and r.status != "ready" for r in results):
-        return
-
     history: List[Dict[str, str]] = []
 
     while True:
@@ -826,7 +878,7 @@ class _SwarmDashboard:
 def cmd_swarm_run_live(preset: str, vars_json: Optional[str] = None) -> None:
     """Run a swarm preset with Rich Live dashboard."""
     from rich.live import Live
-    from src.swarm.runtime import SwarmRuntime
+    from src.swarm.runtime import WorkflowRuntime
     from src.swarm.store import SwarmStore
     from src.swarm.models import RunStatus
 
@@ -839,7 +891,7 @@ def cmd_swarm_run_live(preset: str, vars_json: Optional[str] = None) -> None:
             return
 
     store = SwarmStore(base_dir=SWARM_DIR)
-    runtime = SwarmRuntime(store=store)
+    runtime = WorkflowRuntime(store=store)
     _agent_color_map.clear()
 
     console.print(f"\n[dim]Starting swarm:[/dim] [cyan]{preset}[/cyan]")
@@ -970,8 +1022,7 @@ def cmd_show(run_id: str) -> None:
         lines.append("\n[bold]Metrics:[/bold]")
         lines.extend(f"  {k}: {v}" for k, v in metrics.items())
 
-    from src.agent.trace import TraceWriter
-    entries = TraceWriter.read(run_dir)
+    entries = _read_trace(run_dir)
     answers = [e["content"] for e in entries if e.get("type") == "answer" and e.get("content")]
     if answers:
         summary = answers[-1][:200]
@@ -998,45 +1049,38 @@ def cmd_code(run_id: str) -> None:
             console.print()
 
 
-def cmd_pine(run_id: str) -> None:
-    """Show Pine Script for a run."""
-    pine_path = RUNS_DIR / run_id / "artifacts" / "strategy.pine"
-    if not pine_path.exists():
-        console.print(f"[red]{run_id}/artifacts/strategy.pine not found[/red]")
-        console.print("[dim]Ask the agent: \"export this strategy to Pine Script\"[/dim]")
-        return
-    code = pine_path.read_text(encoding="utf-8")
-    console.print(Syntax(code, "javascript", theme="monokai", line_numbers=True), width=120)
-    console.print()
-    console.print("[dim]Copy and paste into TradingView Pine Editor → Add to Chart[/dim]")
-
-
 def cmd_skills() -> None:
-    """List available skills."""
-    from src.agent.skills import SkillsLoader
-    loader = SkillsLoader()
+    """List available skills from the finance skills directory."""
+    import re as _re
+    skills_dir = AGENT_DIR / "src" / "skills"
+    rows = []
+    for skill_path in sorted(skills_dir.iterdir()):
+        skill_md = skill_path / "SKILL.md"
+        if not skill_path.is_dir() or not skill_md.exists():
+            continue
+        text = skill_md.read_text(encoding="utf-8", errors="ignore")
+        m = _re.search(r"^description:\s*(.+)$", text, _re.MULTILINE)
+        desc = m.group(1).strip().strip('"') if m else ""
+        rows.append((skill_path.name, desc))
 
-    table = Table(title="Skills", show_lines=False)
+    table = Table(title=f"Finance Skills ({len(rows)})", show_lines=False)
     table.add_column("Name", style="cyan")
     table.add_column("Description")
-
-    for s in loader.skills:
-        table.add_row(s.name, s.description)
-
+    for name, desc in rows:
+        table.add_row(name, desc)
     console.print(table)
 
 
 def cmd_trace(run_id: str) -> None:
     """Replay trace.jsonl to show full execution."""
     from datetime import datetime
-    from src.agent.trace import TraceWriter
 
     run_dir = RUNS_DIR / run_id
     if not run_dir.exists():
         console.print(f"[red]{run_id} not found[/red]")
         return
 
-    entries = TraceWriter.read(run_dir)
+    entries = _read_trace(run_dir)
     if not entries:
         console.print(f"[red]{run_id}/trace.jsonl is empty or missing[/red]")
         return
@@ -1214,11 +1258,11 @@ def cmd_swarm_show(run_id: str) -> None:
 
 def cmd_swarm_cancel(run_id: str) -> None:
     """Cancel a swarm run."""
-    from src.swarm.runtime import SwarmRuntime
+    from src.swarm.runtime import WorkflowRuntime
     from src.swarm.store import SwarmStore
 
     store = SwarmStore(base_dir=SWARM_DIR)
-    runtime = SwarmRuntime(store=store)
+    runtime = WorkflowRuntime(store=store)
 
     if runtime.cancel_run(run_id):
         console.print(f"[yellow]Cancel signal sent: {run_id}[/yellow]")
@@ -1347,7 +1391,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true", help="List runs")
     parser.add_argument("--show", metavar="RUN_ID", help="Show run details")
     parser.add_argument("--code", metavar="RUN_ID", help="Show generated code")
-    parser.add_argument("--pine", metavar="RUN_ID", help="Show Pine Script for TradingView")
     parser.add_argument("--trace", metavar="RUN_ID", help="Replay a run trace")
     parser.add_argument("--skills", action="store_true", help="List skills")
     parser.add_argument("--max-iter", type=int, default=50, help="Maximum agent iterations")
@@ -1387,6 +1430,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("init", help="Interactive setup: create ~/.vibe-trading/.env")
 
+    scaffold_parser = subparsers.add_parser("scaffold-app", help="Scaffold a custom Hermes application skeleton")
+    scaffold_parser.add_argument("name", help="Application name")
+    scaffold_parser.add_argument("--dest", default=".", help="Directory where the scaffolded app folder will be created")
+
     return parser
 
 
@@ -1416,247 +1463,423 @@ def _handle_prompt_command(
     return cmd_run(resolved_prompt, max_iter, json_mode=json_mode, no_rich=no_rich)
 
 
-_INIT_ENV_PATH = AGENT_DIR / ".env"
-
-_PROVIDER_CHOICES: list[dict[str, str | None]] = [
-    {
-        "label": "OpenRouter (recommended - multiple models)",
-        "provider": "openrouter",
-        "key_env": "OPENROUTER_API_KEY",
-        "base_env": "OPENROUTER_BASE_URL",
-        "base_url": "https://openrouter.ai/api/v1",
-        "model": "deepseek/deepseek-v3.2",
-        "key_prefix": "sk-or-",
-        "key_placeholder": "sk-or-v1-...",
-    },
-    {
-        "label": "DeepSeek",
-        "provider": "deepseek",
-        "key_env": "DEEPSEEK_API_KEY",
-        "base_env": "DEEPSEEK_BASE_URL",
-        "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "key_prefix": "sk-",
-        "key_placeholder": "sk-...",
-    },
-    {
-        "label": "OpenAI",
-        "provider": "openai",
-        "key_env": "OPENAI_API_KEY",
-        "base_env": "OPENAI_BASE_URL",
-        "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4o",
-        "key_prefix": "sk-",
-        "key_placeholder": "sk-...",
-    },
-    {
-        "label": "Gemini",
-        "provider": "gemini",
-        "key_env": "GEMINI_API_KEY",
-        "base_env": "GEMINI_BASE_URL",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-2.5-flash",
-        "key_prefix": None,
-        "key_placeholder": "api-key...",
-    },
-    {
-        "label": "Groq",
-        "provider": "groq",
-        "key_env": "GROQ_API_KEY",
-        "base_env": "GROQ_BASE_URL",
-        "base_url": "https://api.groq.com/openai/v1",
-        "model": "llama-3.3-70b-versatile",
-        "key_prefix": "gsk_",
-        "key_placeholder": "gsk_...",
-    },
-    {
-        "label": "DashScope / Qwen",
-        "provider": "dashscope",
-        "key_env": "DASHSCOPE_API_KEY",
-        "base_env": "DASHSCOPE_BASE_URL",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-plus",
-        "key_prefix": "sk-",
-        "key_placeholder": "sk-...",
-    },
-    {
-        "label": "Zhipu",
-        "provider": "zhipu",
-        "key_env": "ZHIPU_API_KEY",
-        "base_env": "ZHIPU_BASE_URL",
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4-plus",
-        "key_prefix": None,
-        "key_placeholder": "api-key...",
-    },
-    {
-        "label": "Moonshot / Kimi",
-        "provider": "moonshot",
-        "key_env": "MOONSHOT_API_KEY",
-        "base_env": "MOONSHOT_BASE_URL",
-        "base_url": "https://api.moonshot.ai/v1",
-        "model": "kimi-k2.5",
-        "key_prefix": "sk-",
-        "key_placeholder": "sk-...",
-    },
-    {
-        "label": "MiniMax",
-        "provider": "minimax",
-        "key_env": "MINIMAX_API_KEY",
-        "base_env": "MINIMAX_BASE_URL",
-        "base_url": "https://api.minimax.io/v1",
-        "model": "MiniMax-Text-01",
-        "key_prefix": None,
-        "key_placeholder": "api-key...",
-    },
-    {
-        "label": "Xiaomi MIMO",
-        "provider": "mimo",
-        "key_env": "MIMO_API_KEY",
-        "base_env": "MIMO_BASE_URL",
-        "base_url": "https://api.xiaomimimo.com/v1",
-        "model": "MiMo-72B-A27B",
-        "key_prefix": None,
-        "key_placeholder": "api-key...",
-    },
-    {
-        "label": "Ollama (local, free)",
-        "provider": "ollama",
-        "key_env": None,
-        "base_env": "OLLAMA_BASE_URL",
-        "base_url": "http://localhost:11434/v1",
-        "model": "qwen2.5:32b",
-        "key_prefix": None,
-        "key_placeholder": None,
-    },
-]
+_INIT_ENV_DIR = Path.home() / ".vibe-trading"
+_INIT_ENV_PATH = _INIT_ENV_DIR / ".env"
 
 
-def _validate_api_key(api_key: str, expected_prefix: str | None) -> bool:
-    """Basic API-key format validation used during interactive setup."""
-    if expected_prefix is None:
-        return True
-    return api_key.startswith(expected_prefix)
+def _normalize_scaffold_names(name: str) -> tuple[str, str]:
+    """Return filesystem and Python-safe names for a scaffolded app."""
+    raw = (name or "").strip()
+    if not raw:
+        raise ValueError("Application name cannot be empty")
+
+    project_slug = re.sub(r"[^a-zA-Z0-9]+", "-", raw).strip("-").lower()
+    module_name = re.sub(r"[^a-zA-Z0-9]+", "_", raw).strip("_").lower()
+
+    if not project_slug:
+        raise ValueError("Application name must contain letters or numbers")
+    if project_slug[0].isdigit():
+        project_slug = f"app-{project_slug}"
+    if not module_name:
+        module_name = "app"
+    if module_name[0].isdigit():
+        module_name = f"app_{module_name}"
+
+    return project_slug, module_name
 
 
-def _render_env_content(config: dict[str, str]) -> str:
-    """Render .env content with stable ordering."""
-    ordered_keys = [
-        "LANGCHAIN_TEMPERATURE",
-        "LANGCHAIN_PROVIDER",
-        "OPENROUTER_API_KEY",
-        "OPENROUTER_BASE_URL",
-        "DEEPSEEK_API_KEY",
-        "DEEPSEEK_BASE_URL",
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "GEMINI_API_KEY",
-        "GEMINI_BASE_URL",
-        "GROQ_API_KEY",
-        "GROQ_BASE_URL",
-        "DASHSCOPE_API_KEY",
-        "DASHSCOPE_BASE_URL",
-        "ZHIPU_API_KEY",
-        "ZHIPU_BASE_URL",
-        "MOONSHOT_API_KEY",
-        "MOONSHOT_BASE_URL",
-        "MINIMAX_API_KEY",
-        "MINIMAX_BASE_URL",
-        "MIMO_API_KEY",
-        "MIMO_BASE_URL",
-        "OLLAMA_BASE_URL",
-        "LANGCHAIN_MODEL_NAME",
-        "TUSHARE_TOKEN",
-        "TIMEOUT_SECONDS",
-        "MAX_RETRIES",
-    ]
-    lines: list[str] = []
-    for key in ordered_keys:
-        value = config.get(key)
-        if value:
-            lines.append(f"{key}={value}")
-    return "\n".join(lines) + "\n"
+def _scaffold_app_files(project_slug: str, module_name: str) -> Dict[Path, str]:
+    """Build the file map for a custom Hermes application scaffold."""
+    plugin_entry = module_name.replace("_", "-")
+    plugin_dir = Path("src") / "plugins" / module_name
+
+    return {
+        Path("README.md"): dedent(
+            f"""
+            # {project_slug}
+
+            Custom Hermes-based application scaffold generated by `vibe-trading scaffold-app`.
+
+            ## Structure
+
+            - `src/app_runtime.py`: shared channel-agnostic runtime logic
+            - `src/plugins/{module_name}/`: Hermes plugin registration surface
+            - `src/adapters/`: deterministic channel render adapters
+            - `src/skills/`: channel prompt contracts
+            - `tests/`: regression tests that lock in scaffold architecture rules
+
+            The Hermes plugin registration surface is one component of the application scaffold, not the whole app boundary.
+
+            ## Next steps
+
+            1. Replace the sample tool schema and handler.
+            2. Put real domain logic in `src/app_runtime.py` or a domain package.
+            3. Update the output-format skills for your actual channels.
+            4. Implement real adapter translation logic.
+            5. Update the generated regression tests to match your final channel contract.
+            6. Keep plugin-boundary and channel-consistency tests passing as the app evolves.
+            """
+        ).strip() + "\n",
+        Path("pyproject.toml"): dedent(
+            f"""
+            [project]
+            name = "{project_slug}"
+            version = "0.1.0"
+            description = "Custom Hermes application scaffold"
+            requires-python = ">=3.11"
+            dependencies = []
+
+            [project.optional-dependencies]
+            dev = ["pytest>=8.0"]
+
+            [project.entry-points."hermes_agent.plugins"]
+            {plugin_entry} = "src.plugins.{module_name}"
+
+            [tool.setuptools.packages.find]
+            where = ["."]
+            include = ["src*"]
+            """
+        ).strip() + "\n",
+        Path("src") / "__init__.py": '"""Application package root."""\n',
+        Path("src") / "app_runtime.py": dedent(
+            f'''
+            """Shared runtime logic for {project_slug}."""
+
+            from __future__ import annotations
+
+            import json
+
+            TOOLSET_NAME = "{plugin_entry}"
+
+            DESCRIBE_APPLICATION = {{
+                "type": "function",
+                "function": {{
+                    "name": "describe_application",
+                    "description": "Return channel-agnostic application metadata.",
+                    "parameters": {{
+                        "type": "object",
+                        "properties": {{
+                            "name": {{"type": "string", "description": "Optional caller name."}}
+                        }},
+                        "required": [],
+                    }},
+                }},
+            }}
+
+
+            def describe_application(args: dict, **_) -> str:
+                caller = str((args or {{}}).get("name") or "builder")
+                payload = {{
+                    "status": "ok",
+                    "application": "{project_slug}",
+                    "message": f"hello {{caller}}",
+                    "capabilities": ["domain-tools", "skills", "adapters"],
+                }}
+                return json.dumps(payload, ensure_ascii=False)
+            '''
+        ).strip() + "\n",
+        Path("src") / "adapters" / "__init__.py": dedent(
+            '''
+            """Deterministic channel adapters."""
+
+            from .factory import get_visualization_adapter
+
+            __all__ = ["get_visualization_adapter"]
+            '''
+        ).strip() + "\n",
+        Path("src") / "adapters" / "base.py": dedent(
+            '''
+            """Base adapter types."""
+
+            from __future__ import annotations
+
+            from abc import ABC, abstractmethod
+
+
+            class BaseVisualizationAdapter(ABC):
+                @property
+                @abstractmethod
+                def channel(self) -> str:
+                    """Return the channel identifier handled by this adapter."""
+            '''
+        ).strip() + "\n",
+        Path("src") / "adapters" / "factory.py": dedent(
+            '''
+            """Adapter factory for channel rendering."""
+
+            from __future__ import annotations
+
+            from .base import BaseVisualizationAdapter
+            from .feishu_visualization_adapter import FeishuVisualizationAdapter
+            from .web_visualization_adapter import WebVisualizationAdapter
+
+
+            def get_visualization_adapter(channel: str) -> BaseVisualizationAdapter:
+                normalized = (channel or "web").strip().lower()
+                if normalized in {"", "web", "webui"}:
+                    return WebVisualizationAdapter()
+                if normalized == "feishu":
+                    return FeishuVisualizationAdapter()
+                raise ValueError(f"Unsupported visualization adapter channel: {channel}")
+            '''
+        ).strip() + "\n",
+        Path("src") / "adapters" / "web_visualization_adapter.py": dedent(
+            '''
+            """Web visualization adapter."""
+
+            from __future__ import annotations
+
+            from .base import BaseVisualizationAdapter
+
+
+            class WebVisualizationAdapter(BaseVisualizationAdapter):
+                @property
+                def channel(self) -> str:
+                    return "web"
+            '''
+        ).strip() + "\n",
+        Path("src") / "adapters" / "feishu_visualization_adapter.py": dedent(
+            '''
+            """Feishu visualization adapter placeholder."""
+
+            from __future__ import annotations
+
+            from .base import BaseVisualizationAdapter
+
+
+            class FeishuVisualizationAdapter(BaseVisualizationAdapter):
+                @property
+                def channel(self) -> str:
+                    return "feishu"
+            '''
+        ).strip() + "\n",
+        plugin_dir / "__init__.py": dedent(
+            f'''
+            """Hermes plugin entry point for {project_slug}."""
+
+            from __future__ import annotations
+
+
+            _TOOL_SPECS = (
+                ("describe_application", "🧩", "DESCRIBE_APPLICATION", "describe_application"),
+            )
+
+
+            def register(ctx) -> None:
+                from . import schemas, tools
+
+                for name, emoji, schema_name, handler_name in _TOOL_SPECS:
+                    schema = getattr(schemas, schema_name)
+                    handler = getattr(tools, handler_name)
+                    ctx.register_tool(
+                        name=name,
+                        toolset=schemas.TOOLSET_NAME,
+                        schema=schema,
+                        handler=handler,
+                        description=schema.get("description", ""),
+                        emoji=emoji,
+                    )
+            '''
+        ).strip() + "\n",
+        plugin_dir / "schemas.py": dedent(
+            '''
+            """Tool schemas for the custom application plugin."""
+
+            from __future__ import annotations
+
+            from src.app_runtime import DESCRIBE_APPLICATION, TOOLSET_NAME
+            '''
+        ).strip() + "\n",
+        plugin_dir / "tools.py": dedent(
+            '''
+            """Tool handlers for the custom application plugin."""
+
+            from __future__ import annotations
+
+            from src.app_runtime import describe_application
+            '''
+        ).strip() + "\n",
+        Path("src") / "skills" / "output-format-web" / "SKILL.md": dedent(
+            """
+            ---
+            name: output-format-web
+            description: Output formatting rules for the web channel.
+            category: tool
+            ---
+
+            # Output Format Rules (Web)
+
+            - Describe what the web UI can render.
+            - Keep this file focused on model guidance, not runtime code.
+            - Use adapters for deterministic payload translation.
+            """
+        ).strip() + "\n",
+        Path("src") / "skills" / "output-format-feishu" / "SKILL.md": dedent(
+            """
+            ---
+            name: output-format-feishu
+            description: Output formatting rules for the Feishu channel.
+            category: tool
+            ---
+
+            # Output Format Rules (Feishu)
+
+            - Describe what Feishu can render.
+            - Keep this file focused on model guidance, not transport code.
+            - Use adapters for deterministic Card payload translation.
+            """
+        ).strip() + "\n",
+        Path("tests") / "test_visualization_contracts.py": dedent(
+            '''
+            from __future__ import annotations
+
+            from pathlib import Path
+
+            from src.adapters.factory import get_visualization_adapter
+            from src.adapters.feishu_visualization_adapter import FeishuVisualizationAdapter
+            from src.adapters.web_visualization_adapter import WebVisualizationAdapter
+
+
+            def test_channel_skill_set_matches_adapter_set():
+                skills_root = Path(__file__).resolve().parents[1] / "src" / "skills"
+                skill_channels = {
+                    skill_dir.name.removeprefix("output-format-")
+                    for skill_dir in skills_root.iterdir()
+                    if skill_dir.is_dir() and skill_dir.name.startswith("output-format-")
+                }
+
+                adapter_channels = {
+                    WebVisualizationAdapter().channel,
+                    FeishuVisualizationAdapter().channel,
+                }
+
+                assert skill_channels == adapter_channels
+
+
+            def test_adapter_factory_returns_channel_specific_adapters():
+                assert isinstance(get_visualization_adapter("web"), WebVisualizationAdapter)
+                assert isinstance(get_visualization_adapter("webui"), WebVisualizationAdapter)
+                assert isinstance(get_visualization_adapter("feishu"), FeishuVisualizationAdapter)
+            '''
+        ).strip() + "\n",
+        Path("tests") / "test_plugin_boundary.py": dedent(
+            f'''
+            from __future__ import annotations
+
+            import inspect
+
+            from src.plugins.{module_name} import register
+            from src.plugins.{module_name} import tools as plugin_tools
+
+
+            class DummyContext:
+                def __init__(self) -> None:
+                    self.calls = []
+
+                def register_tool(self, **kwargs) -> None:
+                    self.calls.append(kwargs)
+
+
+            def test_plugin_registers_tools_through_hermes_surface():
+                ctx = DummyContext()
+
+                register(ctx)
+
+                assert len(ctx.calls) == 1
+                assert ctx.calls[0]["name"] == "describe_application"
+                assert ctx.calls[0]["toolset"] == "{plugin_entry}"
+
+
+            def test_tool_handlers_do_not_embed_channel_payload_details():
+                source = inspect.getsource(plugin_tools)
+
+                assert "Card 2.0" not in source
+                assert "VChart" not in source
+                assert "ECharts" not in source
+            '''
+        ).strip() + "\n",
+    }
+
+
+def cmd_scaffold_app(name: str, dest: str = ".") -> int:
+    """Scaffold a custom Hermes application skeleton."""
+    try:
+        project_slug, module_name = _normalize_scaffold_names(name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return EXIT_USAGE_ERROR
+
+    destination_root = Path(dest).expanduser().resolve()
+    project_root = destination_root / project_slug
+    if project_root.exists() and any(project_root.iterdir()):
+        console.print(f"[red]Target already exists and is not empty:[/red] {project_root}")
+        return EXIT_USAGE_ERROR
+
+    created_paths: List[Path] = []
+    for relative_path, content in _scaffold_app_files(project_slug, module_name).items():
+        absolute_path = project_root / relative_path
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        absolute_path.write_text(content, encoding="utf-8")
+        created_paths.append(absolute_path)
+
+    table = Table(title=f"Scaffolded Custom Application: {project_slug}", show_lines=False)
+    table.add_column("File", style="cyan")
+    for created_path in created_paths:
+        table.add_row(str(created_path.relative_to(project_root)))
+    console.print(table)
+    console.print(f"[green]Created custom application scaffold:[/green] {project_root}")
+    return EXIT_SUCCESS
 
 
 def cmd_init() -> int:
-    """Interactive setup: create agent/.env."""
-    console.print("[bold cyan]Welcome to Vibe-Trading setup![/bold cyan]\n")
+    """Interactive setup: create ~/.vibe-trading/.env."""
+    console.print("[bold cyan]Vibe-Trading Init[/bold cyan]\n")
 
     if _INIT_ENV_PATH.exists():
         console.print(f"[yellow]Config already exists:[/yellow] {_INIT_ENV_PATH}")
-        if not Confirm.ask("Overwrite it?", default=False):
+        overwrite = input("Overwrite? [y/N] ").strip().lower()
+        if overwrite != "y":
             console.print("[dim]Aborted.[/dim]")
             return 0
 
-    console.print("Select your LLM provider:")
-    for idx, option in enumerate(_PROVIDER_CHOICES, start=1):
-        console.print(f"  {idx}. {option['label']}")
+    console.print("[dim]Press Enter to accept defaults shown in brackets.[/dim]\n")
 
-    choice = IntPrompt.ask(
-        "Provider",
-        choices=[str(i) for i in range(1, len(_PROVIDER_CHOICES) + 1)],
-        default=1,
-        show_choices=False,
-    )
-    selected = _PROVIDER_CHOICES[choice - 1]
+    provider = input("LLM provider [openrouter]: ").strip() or "openrouter"
+    api_key = input("API key [sk-or-v1-...]: ").strip() or "sk-or-v1-your-key-here"
 
-    provider = str(selected["provider"])
-    key_env = selected["key_env"]
-    base_env = str(selected["base_env"])
-    default_base_url = str(selected["base_url"])
-    default_model = str(selected["model"])
-    key_prefix = selected["key_prefix"]
-    key_placeholder = selected["key_placeholder"]
-
-    env_values: dict[str, str] = {
-        "LANGCHAIN_TEMPERATURE": "0.0",
-        "LANGCHAIN_PROVIDER": provider,
-        "LANGCHAIN_MODEL_NAME": default_model,
-        "TIMEOUT_SECONDS": "120",
-        "MAX_RETRIES": "2",
+    default_base = {
+        "openrouter": "https://openrouter.ai/api/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "openai": "https://api.openai.com/v1",
     }
+    base_url = input(f"API base URL [{default_base.get(provider, '')}]: ").strip() or default_base.get(provider, "")
 
-    if key_env is not None:
-        while True:
-            api_key = Prompt.ask(
-                f"Enter your {provider.capitalize()} API key",
-                default=str(key_placeholder),
-                password=True,
-                show_default=False,
-            ).strip()
-            if _validate_api_key(api_key, str(key_prefix) if key_prefix is not None else None):
-                env_values[str(key_env)] = api_key
-                break
-            console.print(
-                f"[red]That key doesn't look right.[/red] Expected it to start with [bold]{key_prefix}[/bold]."
-            )
-    else:
-        console.print("[dim]Ollama does not require an API key.[/dim]")
+    default_model = {
+        "openrouter": "deepseek/deepseek-v3.2",
+        "deepseek": "deepseek-chat",
+        "openai": "gpt-4o",
+    }
+    model = input(f"Model name [{default_model.get(provider, '')}]: ").strip() or default_model.get(provider, "")
 
-    env_values[base_env] = Prompt.ask(
-        "Base URL",
-        default=default_base_url,
-        show_default=True,
-    ).strip()
+    tushare = input("Tushare token (A-shares, optional) []: ").strip()
 
-    env_values["LANGCHAIN_MODEL_NAME"] = Prompt.ask(
-        "Select default model",
-        default=default_model,
-        show_default=True,
-    ).strip()
+    env_content = (
+        f"LANGCHAIN_PROVIDER={provider}\n"
+        f"OPENAI_API_KEY={api_key}\n"
+        f"OPENAI_BASE_URL={base_url}\n"
+        f"LANGCHAIN_MODEL_NAME={model}\n"
+        f"LANGCHAIN_TEMPERATURE=0.0\n"
+        f"TIMEOUT_SECONDS=2400\n"
+        f"MAX_RETRIES=5\n"
+    )
+    if tushare:
+        env_content += f"TUSHARE_TOKEN={tushare}\n"
 
-    tushare_token = Prompt.ask(
-        "(Optional) Enter Tushare token for China A-share data",
-        default="",
-        show_default=False,
-    ).strip()
-    if tushare_token:
-        env_values["TUSHARE_TOKEN"] = tushare_token
+    _INIT_ENV_DIR.mkdir(parents=True, exist_ok=True)
+    _INIT_ENV_PATH.write_text(env_content, encoding="utf-8")
 
-    _INIT_ENV_PATH.write_text(_render_env_content(env_values), encoding="utf-8")
-
-    console.print(f"\n[green]✅ Created {_INIT_ENV_PATH} — you're ready to go![/green]")
-    console.print("[dim]Run:[/dim] [bold]vibe-trading[/bold]")
+    console.print(f"\n[green]Config saved to {_INIT_ENV_PATH}[/green]")
+    console.print("[dim]Run [bold]vibe-trading[/bold] to start.[/dim]")
     return 0
 
 
@@ -1671,6 +1894,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return cmd_init()
+    if args.command == "scaffold-app":
+        return cmd_scaffold_app(args.name, args.dest)
     if args.command == "serve":
         return serve_main(raw_argv[1:])
     if args.command == "run":
@@ -1694,8 +1919,6 @@ def main(argv: list[str] | None = None) -> int:
         return _coerce_exit_code(cmd_show(args.show))
     if args.code:
         return _coerce_exit_code(cmd_code(args.code))
-    if args.pine:
-        return _coerce_exit_code(cmd_pine(args.pine))
     if args.trace:
         return _coerce_exit_code(cmd_trace(args.trace))
     if args.skills:

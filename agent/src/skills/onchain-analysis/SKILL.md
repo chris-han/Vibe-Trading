@@ -1,7 +1,6 @@
 ---
 name: onchain-analysis
 description: On-chain data analysis — active addresses / whale tracking / TVL / DEX liquidity, interpretation and signal generation using on-chain valuation metrics such as MVRV / NVT / SOPR.
-category: crypto
 ---
 
 # On-Chain Data Analysis

@@ -6,9 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.agent.tools import BaseTool
+from .base import BaseTool
 
-TASKS_DIR = Path(__file__).resolve().parents[2] / ".tasks"
+_AGENT_DIR = Path(__file__).resolve().parents[2]
+_raw_cwd = __import__("os").getenv("TERMINAL_CWD", "")
+if _raw_cwd and not Path(_raw_cwd).is_absolute():
+    TASKS_DIR = (_AGENT_DIR / _raw_cwd / ".tasks").resolve()
+elif _raw_cwd:
+    TASKS_DIR = Path(_raw_cwd) / ".tasks"
+else:
+    TASKS_DIR = _AGENT_DIR / ".tasks"
 
 
 class TaskManager:
@@ -16,7 +23,7 @@ class TaskManager:
 
     def __init__(self) -> None:
         self.dir = TASKS_DIR
-        self.dir.mkdir(exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         self._next_id = self._max_id() + 1
 
     def _max_id(self) -> int:

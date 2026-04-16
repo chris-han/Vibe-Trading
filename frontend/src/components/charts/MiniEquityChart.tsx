@@ -17,7 +17,7 @@ export function MiniEquityChart({ data, height = 80 }: Props) {
     const t = getChartTheme();
     const chart = echarts.init(ref.current);
 
-    const values = data.map(d => Number(d.equity));
+    const values = data.map((d) => Number(d.equity));
     const positive = values[values.length - 1] >= values[0];
     const color = positive ? t.upColor : t.downColor;
 
@@ -40,7 +40,7 @@ export function MiniEquityChart({ data, height = 80 }: Props) {
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current);
     return () => { ro.disconnect(); chart.dispose(); };
-  }, [data, dark]);
+  }, [data, dark, height]);
 
   if (data.length < 2) return null;
   return <div ref={ref} style={{ height }} className="rounded-lg overflow-hidden" />;

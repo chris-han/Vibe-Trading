@@ -1,7 +1,6 @@
 ---
 name: asset-allocation
 description: Asset allocation theory and optimizer usage — MPT / Black-Litterman / risk budgeting / all-weather strategy, including guides for 4 optimizers and rebalancing rules.
-category: asset-class
 ---
 
 # Asset Allocation and Portfolio Optimization

@@ -8,9 +8,6 @@ from typing import Dict, List, Optional, Union
 import pandas as pd
 import yfinance as yf
 
-from backtest.loaders.base import validate_date_range
-from backtest.loaders.registry import register
-
 _OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 _COLUMN_RENAMES = {
     "Open": "open",
@@ -87,6 +84,7 @@ def _download_history(
         interval=interval,
         auto_adjust=False,
         progress=False,
+        threads=True,
     )
 
 
@@ -189,17 +187,8 @@ def _normalize_frame(frame: pd.DataFrame, requested_interval: str) -> pd.DataFra
     return normalized
 
 
-@register
 class DataLoader:
     """Fetch HK/US equity bars from Yahoo Finance via yfinance."""
-
-    name = "yfinance"
-    markets = {"us_equity", "hk_equity"}
-    requires_auth = False
-
-    def is_available(self) -> bool:
-        """Always available (free public data, no auth)."""
-        return True
 
     def __init__(self) -> None:
         """Initialize the loader.
@@ -231,7 +220,6 @@ class DataLoader:
         del fields
         if not codes:
             return {}
-        validate_date_range(start_date, end_date)
 
         requested_interval = str(interval or "1D").strip()
         yf_interval = _to_yfinance_interval(requested_interval)

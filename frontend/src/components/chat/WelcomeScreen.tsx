@@ -23,7 +23,7 @@ const CATEGORIES: Category[] = [
       {
         title: "Cross-Market Portfolio",
         desc: "A-shares + crypto + US equities with risk-parity optimizer",
-        prompt: "Backtest a risk-parity portfolio of 000001.SZ, BTC-USDT, and AAPL for full-year 2024, compare against equal-weight baseline",
+        prompt: "Backtest a risk-parity portfolio of MSFT, BTC-USDT, and AAPL for full-year 2024, compare against equal-weight baseline",
       },
       {
         title: "BTC 5-Min MACD Strategy",
@@ -62,12 +62,12 @@ const CATEGORIES: Category[] = [
       {
         title: "Investment Committee Review",
         desc: "Multi-agent debate: long vs short, risk review, PM decision",
-        prompt: "[Swarm Team Mode] Use the investment_committee preset to evaluate whether to go long or short on NVDA given current market conditions",
+        prompt: "[Swarm Team Mode] Use the investment_committee preset to evaluate whether to go long or short on NVDA given current market conditions. Variables: target=NVDA, market=US",
       },
       {
         title: "Quant Strategy Desk",
         desc: "Screening → factor research → backtest → risk audit pipeline",
-        prompt: "[Swarm Team Mode] Use the quant_strategy_desk preset to find and backtest the best momentum strategy on CSI 300 constituents",
+        prompt: "[Swarm Team Mode] Use the quant_strategy_desk preset to find and backtest the best momentum strategy on CSI 300 constituents. Variables: market=A-shares, goal=momentum strategy on CSI 300 constituents",
       },
     ],
   },
@@ -114,11 +114,11 @@ export function WelcomeScreen({ onExample }: Props) {
     <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center">
       {/* Header */}
       <div className="space-y-3">
-        <div className="h-16 w-16 mx-auto rounded-2xl bg-gradient-to-br from-primary/80 to-info/80 flex items-center justify-center shadow-lg">
-          <Bot className="h-8 w-8 text-white" />
+        <div className="h-16 w-16 mx-auto rounded-button bg-primary flex items-center justify-center shadow-sm">
+          <img src="/logo-wireframe.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
         </div>
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Vibe-Trading</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">semantier</h2>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
             vibe trading with your professional financial agent team
           </p>
@@ -133,7 +133,7 @@ export function WelcomeScreen({ onExample }: Props) {
         {CAPABILITY_CHIPS.map((chip) => (
           <span
             key={chip}
-            className="px-2.5 py-1 text-xs rounded-full border border-border/60 text-muted-foreground bg-muted/30"
+            className="px-2.5 py-1 text-xs rounded-full border border-border text-muted-foreground bg-muted/50"
           >
             {chip}
           </span>
@@ -155,7 +155,7 @@ export function WelcomeScreen({ onExample }: Props) {
                   <button
                     key={ex.title}
                     onClick={() => onExample(ex.prompt)}
-                    className={`block w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${cat.color}`}
+                    className={`block w-full text-left px-3 py-2.5 rounded-button border transition-colors bg-card hover:shadow-sm ${cat.color}`}
                   >
                     <span className="text-sm font-medium text-foreground leading-snug">
                       {ex.title}
@@ -173,5 +173,4 @@ export function WelcomeScreen({ onExample }: Props) {
     </div>
   );
 }
-
 

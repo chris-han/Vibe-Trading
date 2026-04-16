@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.agent.tools import BaseTool
+from .base import BaseTool
 
 WORKDIR = Path(__file__).resolve().parents[2]
 

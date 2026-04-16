@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Vibe-Trading MCP Server — expose 17 finance research tools to any MCP client.
+"""Vibe-Trading MCP Server — expose 16 finance research tools to any MCP client.
 
 Works with OpenClaw, Claude Desktop, Cursor, and any MCP-compatible client.
-Zero API key required for HK/US/crypto markets (yfinance, OKX, AKShare are free).
+Zero API key required for HK/US/crypto markets (yfinance + OKX are free).
 
 Usage:
     python mcp_server.py                    # stdio transport (default)
@@ -38,6 +38,12 @@ AGENT_DIR = Path(__file__).resolve().parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
+from runtime_env import ensure_runtime_env, get_data_root
+
+ensure_runtime_env()
+
+DATA_ROOT = get_data_root()
+
 from fastmcp import FastMCP
 
 mcp = FastMCP("Vibe-Trading")
@@ -52,18 +58,69 @@ _registry = None
 
 
 def _get_skills_loader():
+    """Return a simple namespace with skills list read from the finance skills dir."""
+    import re as _re
+
+    class _Skill:
+        def __init__(self, name, description):
+            self.name = name
+            self.description = description
+
+    class _Loader:
+        def __init__(self):
+            skills_dir = AGENT_DIR / "src" / "skills"
+            self.skills = []
+            if not skills_dir.exists():
+                return
+            for p in sorted(skills_dir.iterdir()):
+                if not p.is_dir():
+                    continue
+                md = p / "SKILL.md"
+                if not md.exists():
+                    continue
+                text = md.read_text(encoding="utf-8", errors="ignore")
+                m = _re.search(r"^description:\s*(.+)$", text, _re.MULTILINE)
+                desc = m.group(1).strip().strip('"') if m else ""
+                # get_content returns the full SKILL.md body
+                body = text
+                self.skills.append(_Skill(p.name, desc))
+                self.skills[-1]._body = body
+
+        def get_content(self, name):
+            for s in self.skills:
+                if s.name == name:
+                    return getattr(s, '_body', '')
+            return f"Error: skill '{name}' not found"
+
     global _skills_loader
     if _skills_loader is None:
-        from src.agent.skills import SkillsLoader
-        _skills_loader = SkillsLoader()
+        _skills_loader = _Loader()
     return _skills_loader
 
 
 def _get_registry():
+    """No-op — tools now import directly; kept for legacy callers."""
     global _registry
     if _registry is None:
-        from src.tools import build_registry
-        _registry = build_registry()
+        class _DirectRegistry:
+            """Thin shim that dispatches to finance tool functions directly."""
+            def execute(self, name, args):
+                if name == "factor_analysis":
+                    from src.tools.factor_analysis_tool import run_factor_analysis
+                    return run_factor_analysis(**args)
+                if name == "options_pricing":
+                    from src.tools.options_pricing_tool import OptionsPricingTool
+                    return OptionsPricingTool().run(args)
+                if name == "pattern_recognition":
+                    from src.tools.pattern_tool import run_pattern
+                    return run_pattern(args.get("run_dir", ""))
+                if name == "read_document":
+                    from src.tools.doc_reader_tool import read_document
+                    return read_document(args.get("file_path", ""))
+                if name in ("write_file", "read_file"):
+                    raise NotImplementedError(f"{name} is handled by Hermes directly")
+                raise ValueError(f"Unknown tool: {name}")
+        _registry = _DirectRegistry()
     return _registry
 
 
@@ -75,7 +132,7 @@ def _get_registry():
 def list_skills() -> str:
     """List all available finance skills with names and descriptions.
 
-    Returns a JSON array of {name, description} for all 68 skills.
+    Returns a JSON array of {name, description} for all 56 skills.
     Use load_skill(name) to get the full documentation for any skill.
     """
     loader = _get_skills_loader()
@@ -106,6 +163,63 @@ def load_skill(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool
+def setup_backtest_run(
+    config_json: str | dict[str, Any] | None = None,
+    signal_engine_py: str | None = None,
+    base_dir: str | None = None,
+) -> str:
+    """Create a timestamped run directory and write config.json/code before backtest.
+
+    Use this before `backtest(run_dir=...)` for any new backtest request.
+
+    Args:
+        config_json: JSON string or object for config.json.
+        signal_engine_py: Python source for code/signal_engine.py.
+        base_dir: Optional parent directory for the new run.
+    """
+    args: dict[str, Any] = {}
+    if config_json is not None:
+        args["config_json"] = config_json
+    if signal_engine_py is not None:
+        args["signal_engine_py"] = signal_engine_py
+    if base_dir:
+        args["base_dir"] = base_dir
+
+    import uuid
+    from datetime import datetime
+
+    run_base = Path(args.get("base_dir") or "").expanduser()
+    if not run_base or not run_base.is_absolute():
+        run_base = DATA_ROOT / "runs"
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
+    suffix = uuid.uuid4().hex[:6]
+    run_dir = run_base / f"{ts}_{suffix}"
+
+    (run_dir / "code").mkdir(parents=True, exist_ok=True)
+    (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+
+    if config_json is not None:
+        config_data = json.loads(config_json) if isinstance(config_json, str) else config_json
+        (run_dir / "config.json").write_text(
+            json.dumps(config_data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    if signal_engine_py:
+        (run_dir / "code" / "signal_engine.py").write_text(signal_engine_py, encoding="utf-8")
+
+    return json.dumps({
+        "status": "ok",
+        "run_dir": str(run_dir),
+        "files_written": (
+            (["config.json"] if config_json is not None else []) +
+            (["code/signal_engine.py"] if signal_engine_py else [])
+        ),
+    }, ensure_ascii=False)
+
+@mcp.tool
 def backtest(run_dir: str) -> str:
     """Run a vectorized backtest using config.json and code/signal_engine.py.
 
@@ -117,11 +231,11 @@ def backtest(run_dir: str) -> str:
     - "yfinance": HK/US equities (free, no API key needed)
     - "okx": cryptocurrency (free, no API key needed)
     - "tushare": China A-shares (requires TUSHARE_TOKEN env var)
-    - "akshare": A-shares, US, HK, futures, forex (free, no API key)
-    - "ccxt": crypto from 100+ exchanges (free, no API key)
-    - "auto": auto-detect based on symbol format (with fallback)
+    - "auto": auto-detect based on symbol format
 
     Returns metrics (Sharpe, return, drawdown, etc.) and artifact paths.
+    For a new run, call `setup_backtest_run(...)` first so config.json and
+    code/signal_engine.py exist before this tool runs.
 
     Args:
         run_dir: Path to the run directory containing config.json and code/.
@@ -249,27 +363,6 @@ def read_document(file_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Web search tool
-# ---------------------------------------------------------------------------
-
-@mcp.tool
-def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web via DuckDuckGo and return top results.
-
-    Returns titles, URLs, and snippets. Use read_url() to fetch full content
-    from any result URL. Free, no API key required.
-
-    Args:
-        query: Search query string.
-        max_results: Maximum results to return (default 5, max 10).
-    """
-    registry = _get_registry()
-    return registry.execute("web_search", {
-        "query": query, "max_results": min(max_results, 10),
-    })
-
-
-# ---------------------------------------------------------------------------
 # File I/O tools (sandboxed to workspace)
 # ---------------------------------------------------------------------------
 
@@ -322,20 +415,22 @@ def run_swarm(preset_name: str, variables: dict[str, str]) -> str:
     For example, the 'investment_committee' preset runs bull analyst, bear analyst,
     risk officer, and portfolio manager in sequence.
 
-    Use list_swarm_presets() to see available presets and their required variables.
+    IMPORTANT: Always extract required variable values from the user's message before calling
+    this tool. Do NOT call with an empty variables dict — extract target, market, goal, etc.
+    from context. Use list_swarm_presets() to discover what variables each preset requires.
 
     Args:
         preset_name: Swarm preset name (e.g. 'investment_committee', 'quant_strategy_desk').
-        variables: Required variables for the preset (e.g. {"target": "AAPL.US", "market": "US"}).
+        variables: Required variables extracted from user context (e.g. {"target": "NVDA", "market": "US"}).
     """
     import time
-    from src.swarm.runtime import SwarmRuntime
+    from src.swarm.runtime import WorkflowRuntime
     from src.swarm.store import SwarmStore
     from src.swarm.models import RunStatus
 
     swarm_dir = AGENT_DIR / ".swarm" / "runs"
     store = SwarmStore(base_dir=swarm_dir)
-    runtime = SwarmRuntime(store=store)
+    runtime = WorkflowRuntime(store=store)
 
     try:
         run = runtime.start_run(preset_name, variables)
@@ -377,7 +472,6 @@ _SOURCE_PATTERNS = [
     (re.compile(r"^[A-Z]+\.US$", re.I), "yfinance"),
     (re.compile(r"^\d{3,5}\.HK$", re.I), "yfinance"),
     (re.compile(r"^[A-Z]+-USDT$", re.I), "okx"),
-    (re.compile(r"^[A-Z]+/USDT$", re.I), "ccxt"),
 ]
 
 
@@ -389,9 +483,13 @@ def _detect_source(code: str) -> str:
 
 
 def _get_loader(source: str):
-    """Get loader class via registry with fallback support."""
-    from backtest.loaders.registry import get_loader_cls_with_fallback
-    return get_loader_cls_with_fallback(source)
+    if source == "okx":
+        from backtest.loaders.okx import DataLoader
+    elif source == "yfinance":
+        from backtest.loaders.yfinance_loader import DataLoader
+    else:
+        from backtest.loaders.tushare import DataLoader
+    return DataLoader
 
 
 @mcp.tool
@@ -408,15 +506,13 @@ def get_market_data(
     - "yfinance": HK/US equities (free, e.g. AAPL.US, 700.HK)
     - "okx": cryptocurrency (free, e.g. BTC-USDT, ETH-USDT)
     - "tushare": China A-shares (requires TUSHARE_TOKEN, e.g. 000001.SZ)
-    - "akshare": A-shares, US, HK, futures, forex (free, e.g. 000001.SZ, AAPL.US)
-    - "ccxt": crypto from 100+ exchanges (free, e.g. BTC/USDT)
-    - "auto": auto-detect based on symbol format (with fallback)
+    - "auto": auto-detect based on symbol format (supports mixed markets)
 
     Args:
         codes: List of symbols (e.g. ["AAPL.US", "BTC-USDT", "000001.SZ"]).
         start_date: Start date (YYYY-MM-DD).
         end_date: End date (YYYY-MM-DD).
-        source: Data source ("auto", "yfinance", "okx", "tushare", "akshare", "ccxt").
+        source: Data source ("auto", "yfinance", "okx", "tushare").
         interval: Bar size (1m/5m/15m/30m/1H/4H/1D, default "1D").
     """
     results = {}
