@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { CheckCircle2, XCircle, Circle, BarChart3, List, Code2, ArrowLeft, Download, FileText } from "lucide-react";
+import hljs from "highlight.js/lib/core";
+import python from "highlight.js/lib/languages/python";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { api, type RunData, type BacktestMetrics } from "@/lib/api";
@@ -11,6 +13,8 @@ import { Skeleton, SkeletonMetrics, SkeletonChart } from "@/components/common/Sk
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { MarkdownRenderer } from "@/components/common/MarkdownRenderer";
 import { markdownProseClass } from "@/components/common/markdownStyles";
+
+hljs.registerLanguage("python", python);
 
 type Tab = "report" | "chart" | "trades" | "code";
 
@@ -253,15 +257,27 @@ function CodeTab({ code }: { code: Record<string, string> }) {
   const files = Object.entries(code);
   const [active, setActive] = useState(files[0]?.[0] || "");
   if (files.length === 0) return <div className="p-8 text-muted-foreground text-sm">No code files.</div>;
+  const activeFile = active && code[active] != null ? active : files[0][0];
+  const activeSource = (code[activeFile] || "").replace(/\r\n?/g, "\n");
+  const highlightedSource = useMemo(
+    () => hljs.highlight(activeSource, { language: "python", ignoreIllegals: true }).value,
+    [activeSource]
+  );
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex gap-1 p-2 border-b border-border">
         {files.map(([name]) => (
-          <button key={name} onClick={() => setActive(name)} className={cn("px-3 py-1 rounded-button text-xs font-mono", active === name ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{name}</button>
+          <button key={name} onClick={() => setActive(name)} className={cn("px-3 py-1 rounded-button text-xs font-mono", activeFile === name ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{name}</button>
         ))}
       </div>
-      <div className="flex-1 overflow-auto p-3 text-[11px] leading-relaxed bg-muted/30 [&_pre]:m-0 [&_pre]:bg-transparent [&_code]:text-[11px]">
-        <MarkdownRenderer>{`\`\`\`python\n${code[active] || ""}\n\`\`\``}</MarkdownRenderer>
+      <div className="flex-1 overflow-auto bg-muted/30 p-3">
+        <pre className="m-0 min-w-full overflow-x-auto rounded-card border border-white/10 bg-[#20262f] px-4 py-3 shadow-inner shadow-black/15">
+          <code
+            className="hljs language-python block min-w-full whitespace-pre bg-transparent p-0 font-mono text-[11px] leading-relaxed"
+            dangerouslySetInnerHTML={{ __html: highlightedSource }}
+          />
+        </pre>
       </div>
     </div>
   );

@@ -13,6 +13,7 @@
     "@visactor/vchart-extension": "^2.0.21",
     "clsx": "^2.1.0",
     "echarts": "^6.0.0",
+    "highlight.js": "^11.11.1",
     "lucide-react": "^0.460.0",
     "mermaid": "^11.14.0",
     "react": "^19.0.0",
@@ -23,8 +24,7 @@
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.6.0",
-    "zustand": "^5.0.0",
-    "superpowers": "github:obra/superpowers#systematic-debugging"
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^11.12.0",
