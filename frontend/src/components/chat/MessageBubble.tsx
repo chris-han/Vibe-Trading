@@ -1,5 +1,5 @@
 import { memo, useState, useCallback } from "react";
-import { User, XCircle, RefreshCw, Copy, Check } from "lucide-react";
+import { User, XCircle, RefreshCw, Copy, Check, Download } from "lucide-react";
 import { formatTimestamp } from "@/lib/formatters";
 import type { AgentMessage } from "@/types/agent";
 import { AgentAvatar } from "./AgentAvatar";
@@ -18,10 +18,31 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="absolute top-2 right-2 p-1.5 rounded-button bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+      className="p-1.5 rounded-button bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground transition-opacity"
       title={copied ? "Copied" : "Copy"}
     >
       {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+function DownloadButton({ text, filename }: { text: string; filename?: string }) {
+  const handleDownload = useCallback(() => {
+    const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || `message_${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [text, filename]);
+  return (
+    <button
+      onClick={handleDownload}
+      className="p-1.5 rounded-button bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground transition-opacity"
+      title="Download"
+    >
+      <Download className="h-3.5 w-3.5" />
     </button>
   );
 }
@@ -48,7 +69,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
   if (msg.type === "user") {
     return (
       <div className="flex justify-end gap-3 group">
-        <div className="min-w-0 max-w-[72%] rounded-card rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words break-all overflow-hidden">
+        <div className="relative min-w-0 max-w-[72%] rounded-card rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words break-all overflow-hidden">
+          <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <CopyButton text={msg.content} />
+            <DownloadButton text={msg.content} filename={`user_message_${new Date(msg.timestamp).toISOString().slice(0, 10)}.md`} />
+          </div>
           {msg.content}
           {ts && <span className="block text-[9px] opacity-70 text-right mt-1">{ts}</span>}
         </div>
@@ -64,7 +89,10 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
       <div className="flex gap-3 group">
         <AgentAvatar />
         <div className="flex-1 min-w-0 relative">
-          <CopyButton text={msg.content} />
+          <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <CopyButton text={msg.content} />
+            <DownloadButton text={msg.content} filename={`assistant_message_${new Date(msg.timestamp).toISOString().slice(0, 10)}.md`} />
+          </div>
           <div className={markdownProseClass("chat")}>
             <MarkdownRenderer>{msg.content}</MarkdownRenderer>
           </div>

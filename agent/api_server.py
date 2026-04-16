@@ -1758,6 +1758,7 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
         final_text, final_error = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
 
         if card_ctx:
+            streaming_closed = False
             try:
                 has_charts = _FEISHU_VISUALIZATION_ADAPTER.has_chart_elements(final_text)
                 if has_charts:
@@ -1782,6 +1783,7 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                     enabled=False,
                     summary="Failed" if final_error else "Complete",
                 )
+                streaming_closed = True
 
                 # After streaming is closed, replace the card body with proper
                 # chart elements via the IM message update endpoint.
@@ -1789,7 +1791,16 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                     final_elements = _FEISHU_VISUALIZATION_ADAPTER.split_card_elements(final_text)
                     if final_error:
                         final_elements.append({"tag": "markdown", "content": f"\n\n---\n\n**Error:** {final_error}"})
-                    await _feishu_patch_card_body(card_ctx, "semantier", final_elements)
+                    try:
+                        await _feishu_patch_card_body(card_ctx, "semantier", final_elements)
+                    except Exception:
+                        _feishu_logger.warning(
+                            "[Feishu WS] Chart card patch failed after streaming close; preserving markdown card for chat=%s attempt=%s",
+                            chat_id,
+                            attempt_id,
+                            exc_info=True,
+                        )
+                        return
                 _feishu_logger.info("[Feishu WS] Streamed card reply to chat=%s (attempt=%s)", chat_id, attempt_id)
                 return
             except Exception:
@@ -1799,6 +1810,8 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                     attempt_id,
                     exc_info=True,
                 )
+                if streaming_closed:
+                    return
 
         if final_text:
             await _feishu_send_reply(chat_id, final_text if not final_error else f"{final_text}\n\nError: {final_error}")

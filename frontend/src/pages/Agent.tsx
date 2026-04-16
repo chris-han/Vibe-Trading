@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowUp, Loader2, ArrowDown, CheckCircle2, Square, Download, Plus, Paperclip, X, Users } from "lucide-react";
+import { ArrowUp, Loader2, ArrowDown, CheckCircle2, Square, Plus, Paperclip, X, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
 import { useSessionsStore } from "@/stores/sessions";
@@ -691,32 +691,6 @@ export function Agent() {
     runPrompt(userContent);
   }, [status]);
 
-  const handleExport = () => {
-    if (messages.length === 0) return;
-    const lines: string[] = [`# Chat Export`, ``, `Export time: ${new Date().toLocaleString()}`, ``];
-    for (const msg of messages) {
-      const time = new Date(msg.timestamp).toLocaleString();
-      if (msg.type === "user") {
-        lines.push(`## User (${time})`, ``, msg.content, ``);
-      } else if (msg.type === "answer") {
-        lines.push(`## Assistant (${time})`, ``, msg.content, ``);
-      } else if (msg.type === "error") {
-        lines.push(`## Error (${time})`, ``, msg.content, ``);
-      } else if (msg.type === "tool_call") {
-        lines.push(`> Tool call: ${msg.tool || "unknown"}`, ``);
-      } else if (msg.type === "run_complete") {
-        lines.push(`> Backtest complete: ${msg.runId || ""}`, ``);
-      }
-    }
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `chat_${new Date().toISOString().slice(0, 10)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -990,16 +964,6 @@ export function Agent() {
               className="flex-1 px-4 py-2.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-shadow resize-none max-h-32 overflow-hidden text-foreground placeholder:text-muted-foreground"
               disabled={status === "streaming"}
             />
-            {messages.length > 0 && (
-              <button
-                type="button"
-                onClick={handleExport}
-                className="w-9 h-9 flex items-center justify-center rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                title="Export chat"
-              >
-                <Download className="h-4 w-4" />
-              </button>
-            )}
             {status === "streaming" ? (
               <button
                 type="button"
