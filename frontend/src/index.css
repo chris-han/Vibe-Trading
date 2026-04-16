@@ -167,6 +167,54 @@
     content: none !important;
   }
 
+  .run-code-surface {
+    background: var(--near-black);
+    box-shadow: rgba(14, 15, 12, 0.12) 0 0 0 1px;
+  }
+
+  .run-code-surface .hljs,
+  .run-code-surface .hljs-subst {
+    color: var(--light-surface);
+  }
+
+  .run-code-surface .hljs-comment,
+  .run-code-surface .hljs-quote {
+    color: color-mix(in srgb, var(--light-surface) 58%, var(--near-black));
+  }
+
+  .run-code-surface .hljs-keyword,
+  .run-code-surface .hljs-selector-tag,
+  .run-code-surface .hljs-built_in,
+  .run-code-surface .hljs-name,
+  .run-code-surface .hljs-tag {
+    color: var(--wise-green);
+  }
+
+  .run-code-surface .hljs-string,
+  .run-code-surface .hljs-attr,
+  .run-code-surface .hljs-template-tag {
+    color: var(--bright-orange);
+  }
+
+  .run-code-surface .hljs-number,
+  .run-code-surface .hljs-literal,
+  .run-code-surface .hljs-symbol,
+  .run-code-surface .hljs-bullet {
+    color: var(--warning-yellow);
+  }
+
+  .run-code-surface .hljs-title,
+  .run-code-surface .hljs-title.class_,
+  .run-code-surface .hljs-title.function_ {
+    color: var(--pastel-green);
+  }
+
+  .run-code-surface .hljs-variable,
+  .run-code-surface .hljs-property,
+  .run-code-surface .hljs-params {
+    color: color-mix(in srgb, var(--light-surface) 84%, var(--wise-green));
+  }
+
   /* Smooth scrollbar for webkit */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }

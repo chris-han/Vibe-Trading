@@ -272,9 +272,9 @@ function CodeTab({ code }: { code: Record<string, string> }) {
         ))}
       </div>
       <div className="flex-1 overflow-auto bg-muted/30 p-3">
-        <pre className="m-0 min-w-full overflow-x-auto rounded-card border border-white/10 bg-[#20262f] px-4 py-3 shadow-inner shadow-black/15">
+        <pre className="run-code-surface m-0 min-w-full overflow-x-auto rounded-card border border-border px-4 py-3">
           <code
-            className="hljs language-python block min-w-full whitespace-pre bg-transparent p-0 font-mono text-[11px] leading-relaxed"
+            className="run-code-content hljs language-python block min-w-full whitespace-pre bg-transparent p-0 font-mono text-[11px] leading-relaxed"
             dangerouslySetInnerHTML={{ __html: highlightedSource }}
           />
         </pre>
