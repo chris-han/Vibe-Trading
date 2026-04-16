@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DEFAULT_ANALYSIS_PERIODS = [5, 20]
+_ARTIFACT_MD_PATTERN = re.compile(r"artifacts/([A-Za-z0-9._/-]+\.md)\b")
 
 
 def format_run_date(date_str: Optional[str]) -> Optional[str]:
@@ -159,6 +161,23 @@ def load_run_report(run_dir: Path) -> Optional[str]:
     Returns:
         Markdown/text report content when available.
     """
+    def maybe_expand_artifact_markdown(text: str) -> str:
+        if "```echarts" in text or "```mermaid" in text or "```chart" in text or "```vchart" in text:
+            return text
+
+        matches = _ARTIFACT_MD_PATTERN.findall(text)
+        for relative_path in matches:
+            artifact_path = run_dir / "artifacts" / Path(relative_path).name
+            if not artifact_path.exists():
+                continue
+            try:
+                artifact_text = artifact_path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                continue
+            if artifact_text:
+                return artifact_text
+        return text
+
     for file_name in ("report.md", "summary.md", "answer.md", "final_report.md", "final_report.txt"):
         path = run_dir / file_name
         if not path.exists():
@@ -168,7 +187,7 @@ def load_run_report(run_dir: Path) -> Optional[str]:
         except Exception:
             continue
         if text:
-            return text
+            return maybe_expand_artifact_markdown(text)
 
     request_data = load_json_file(run_dir / "req.json") or {}
     context = request_data.get("context") or {}
@@ -196,8 +215,8 @@ def load_run_report(run_dir: Path) -> Optional[str]:
             metadata = event.get("metadata") or {}
             inner_meta = metadata.get("metadata") or {}
             if inner_meta.get("run_id") == run_dir.name:
-                return content
-            fallback = content
+                return maybe_expand_artifact_markdown(content)
+            fallback = maybe_expand_artifact_markdown(content)
     except Exception:
         return None
 

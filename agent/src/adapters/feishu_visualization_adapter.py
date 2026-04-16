@@ -55,6 +55,61 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
             return "bar"
         return "bar" if index == 0 else "line"
 
+    @staticmethod
+    def _common_axis_defaults(axes: Any) -> List[Dict[str, Any]]:
+        normalized_axes: List[Dict[str, Any]] = []
+        seen_orients: set[str] = set()
+
+        if isinstance(axes, list):
+            for axis in axes:
+                if not isinstance(axis, dict):
+                    continue
+                axis_dict = dict(axis)
+                orient = axis_dict.get("orient")
+                if axis_dict.get("type") is None:
+                    if orient == "bottom":
+                        axis_dict["type"] = "band"
+                    elif orient in {"left", "right"}:
+                        axis_dict["type"] = "linear"
+                if isinstance(orient, str):
+                    seen_orients.add(orient)
+                normalized_axes.append(axis_dict)
+
+        if "bottom" not in seen_orients:
+            normalized_axes.append({"orient": "bottom", "type": "band"})
+        if not ({"left", "right"} & seen_orients):
+            normalized_axes.append({"orient": "left", "type": "linear"})
+
+        return normalized_axes
+
+    @staticmethod
+    def _infer_common_y_field(
+        dataset: Any,
+        *,
+        x_field: Any,
+        y_fields: Any,
+        index: int,
+        series_field: Any,
+    ) -> str:
+        if isinstance(y_fields, list) and index < len(y_fields) and isinstance(y_fields[index], str):
+            return y_fields[index]
+        if isinstance(y_fields, str):
+            return y_fields
+
+        values = dataset.get("values") if isinstance(dataset, dict) else None
+        first_value = values[0] if isinstance(values, list) and values else {}
+        if isinstance(first_value, dict):
+            excluded_fields = set()
+            if isinstance(x_field, str):
+                excluded_fields.add(x_field)
+            elif isinstance(x_field, list):
+                excluded_fields.update(field for field in x_field if isinstance(field, str))
+            if isinstance(series_field, str):
+                excluded_fields.add(series_field)
+            return next((key for key in first_value.keys() if key not in excluded_fields), "value")
+
+        return "value"
+
     def sanitize_chart_spec(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         """Coerce common LLM-generated VChart spec mistakes into valid shapes."""
         normalized = dict(spec)
@@ -103,6 +158,10 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
 
         if normalized.get("type") == "common":
             data = normalized.get("data")
+            if isinstance(data, dict) and isinstance(data.get("values"), list):
+                normalized["data"] = [{"id": "source", "values": data["values"]}]
+                data = normalized["data"]
+
             if isinstance(data, list):
                 dataset_id_to_index: Dict[str, int] = {}
                 for index, dataset in enumerate(data):
@@ -110,6 +169,9 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
                         dataset_id_to_index[str(dataset["id"])] = index
 
                 if isinstance(normalized.get("series"), list):
+                    x_field = normalized.get("xField")
+                    y_fields = normalized.get("yField")
+                    top_level_series_field = normalized.get("seriesField")
                     rewritten_series: List[Dict[str, Any]] = []
                     for index, series_item in enumerate(normalized["series"]):
                         if not isinstance(series_item, dict):
@@ -121,40 +183,56 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
                                 series_dict["dataIndex"] = dataset_id_to_index[data_id]
                             else:
                                 series_dict["dataIndex"] = min(index, max(len(data) - 1, 0))
+
+                        if "xField" not in series_dict and isinstance(x_field, (str, list)):
+                            series_dict["xField"] = x_field
+                        if "yField" not in series_dict:
+                            dataset_index = series_dict.get("dataIndex")
+                            dataset = (
+                                data[dataset_index]
+                                if isinstance(dataset_index, int) and 0 <= dataset_index < len(data)
+                                else data[min(index, max(len(data) - 1, 0))]
+                            )
+                            series_dict["yField"] = self._infer_common_y_field(
+                                dataset,
+                                x_field=series_dict.get("xField", x_field),
+                                y_fields=y_fields,
+                                index=index,
+                                series_field=series_dict.get("seriesField", top_level_series_field),
+                            )
                         rewritten_series.append(series_dict)
                     normalized["series"] = rewritten_series
+                    if rewritten_series:
+                        normalized["axes"] = self._common_axis_defaults(normalized.get("axes"))
+                        normalized.pop("xField", None)
+                        normalized.pop("yField", None)
+                        normalized.pop("seriesField", None)
                 else:
                     x_field = normalized.get("xField")
                     y_fields = normalized.get("yField")
-                    if isinstance(x_field, str):
+                    if isinstance(x_field, (str, list)):
                         y_field_list = y_fields if isinstance(y_fields, list) else []
                         series = []
                         for index, dataset in enumerate(data):
                             if not isinstance(dataset, dict):
                                 continue
                             data_id = str(dataset.get("id") or f"series_{index + 1}")
-                            values = dataset.get("values")
-                            first_value = values[0] if isinstance(values, list) and values else {}
-                            inferred_y_field = None
-                            if index < len(y_field_list) and isinstance(y_field_list[index], str):
-                                inferred_y_field = y_field_list[index]
-                            elif isinstance(first_value, dict):
-                                inferred_y_field = next((k for k in first_value.keys() if k != x_field), "value")
-                            else:
-                                inferred_y_field = "value"
                             series.append({
                                 "type": self._infer_common_series_type(data_id, index),
                                 "dataIndex": index,
                                 "xField": x_field,
-                                "yField": inferred_y_field,
+                                "yField": self._infer_common_y_field(
+                                    dataset,
+                                    x_field=x_field,
+                                    y_fields=y_field_list,
+                                    index=index,
+                                    series_field=normalized.get("seriesField"),
+                                ),
                             })
                         if series:
                             normalized["series"] = series
-                            if not isinstance(normalized.get("axes"), list) or not normalized.get("axes"):
-                                normalized["axes"] = [
-                                    {"orient": "bottom", "type": "band"},
-                                    {"orient": "left", "type": "linear"},
-                                ]
+                            normalized["axes"] = self._common_axis_defaults(normalized.get("axes"))
+                            normalized.pop("xField", None)
                             normalized.pop("yField", None)
                             normalized.pop("seriesField", None)
 
@@ -299,7 +377,13 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
             return f"{summary}\n\n{table}"
         return summary
 
-    def split_card_elements(self, text: str, *, aspect_ratio: Optional[str] = None) -> List[Dict[str, Any]]:
+    def split_card_elements(
+        self,
+        text: str,
+        *,
+        aspect_ratio: Optional[str] = None,
+        enforce_chart_limit: bool = True,
+    ) -> List[Dict[str, Any]]:
         """Split markdown text into alternating markdown and chart card elements."""
         elements: List[Dict[str, Any]] = []
         last_end = 0
@@ -325,7 +409,7 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
                             reason=renderability_reason,
                         ),
                     })
-                elif chart_count >= self.max_chart_elements:
+                elif enforce_chart_limit and chart_count >= self.max_chart_elements:
                     logger.info(
                         "[Feishu] Chart count exceeded limit (%s); downgraded to markdown",
                         self.max_chart_elements,
@@ -354,6 +438,37 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
         if not elements:
             elements.append({"tag": "markdown", "content": " "})
         return elements
+
+    def chunk_card_elements(
+        self,
+        elements: List[Dict[str, Any]],
+        *,
+        max_chart_elements: Optional[int] = None,
+    ) -> List[List[Dict[str, Any]]]:
+        """Split parsed card elements into card-sized batches while preserving order."""
+        chart_limit = max_chart_elements or self.max_chart_elements
+        if chart_limit <= 0:
+            return [elements] if elements else [[{"tag": "markdown", "content": " "}]]
+
+        batches: List[List[Dict[str, Any]]] = []
+        current_batch: List[Dict[str, Any]] = []
+        current_chart_count = 0
+
+        for element in elements:
+            is_chart = element.get("tag") == "chart"
+            if is_chart and current_chart_count >= chart_limit and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_chart_count = 0
+
+            current_batch.append(element)
+            if is_chart:
+                current_chart_count += 1
+
+        if current_batch:
+            batches.append(current_batch)
+
+        return batches or [[{"tag": "markdown", "content": " "}]]
 
     def build_card_payload_from_elements(
         self,

@@ -34,7 +34,7 @@ Feishu (Lark) Cards support chart components based on **VChart version 1.6.x** w
 | Scatter chart | `scatter` | Correlation/distribution |
 | Radar chart | `radar` | Multi-dimensional |
 | Bar progress | `linearProgress` | Linear progress bars |
-| Circular progress | `gauge` | Circular indicators |
+| Circular progress | `circularProgress` | Circular indicators |
 | Word cloud | `wordCloud` | Keyword frequency |
 
 ## NOT Supported
@@ -99,6 +99,54 @@ The following VChart properties will cause charts to fail on mobile:
 - **Using candlestick for financial data** - Use `line` or `bar` instead
 - **Including JavaScript in chart_spec** - Will cause render failure
 - **Exceeding 5 charts per card** - Card will fail to load
+- **Using shorthand combo specs for `common` charts** - Use Feishu's official `data[] + series[] + axes[]` combo schema, not `data: {values:[...]}` with partial series fields
+
+## Combo Chart Schema
+
+For `type: "common"`, use the official Feishu combo structure:
+
+```json
+{
+  "type": "common",
+  "title": {"text": "组合图"},
+  "data": [
+    {
+      "id": "combo_bar",
+      "values": [
+        {"x": "周一", "type": "早餐", "y": 15},
+        {"x": "周一", "type": "午餐", "y": 25}
+      ]
+    },
+    {
+      "id": "combo_line",
+      "values": [
+        {"x": "周一", "type": "饮料", "y": 22},
+        {"x": "周二", "type": "饮料", "y": 43}
+      ]
+    }
+  ],
+  "series": [
+    {
+      "type": "bar",
+      "dataIndex": 0,
+      "seriesField": "type",
+      "xField": ["x", "type"],
+      "yField": "y"
+    },
+    {
+      "type": "line",
+      "dataIndex": 1,
+      "seriesField": "type",
+      "xField": "x",
+      "yField": "y"
+    }
+  ],
+  "axes": [
+    {"orient": "bottom", "type": "band"},
+    {"orient": "left", "type": "linear"}
+  ]
+}
+```
 
 ## Alternative for Financial Data
 

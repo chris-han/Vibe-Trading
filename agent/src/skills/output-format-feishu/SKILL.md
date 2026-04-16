@@ -50,3 +50,50 @@ Additional constraints:
 - If unsure whether a chart type is supported, fall back to a Markdown pipe-table.
 - For a **single-series** line, area, or bar chart, **omit `seriesField` entirely**. Adding `seriesField` to a single-series chart causes VChart to split data into one mini-series per distinct field value; when that field is numeric (e.g. the same column as `yField`), every series contains only the rows matching that value and all dots render at the same Y height.
 - When `seriesField` is needed for multi-series charts, it **must** be a dedicated categorical string column. It must **never** be the same field as `xField` or `yField`, and must never be a numeric column.
+- For a **`common` combo chart**, follow the official Feishu combo schema exactly: use `data` as an array of datasets, and define every entry in `series[]` with its own `type`, `dataIndex`, `xField`, and `yField`. Do **not** emit the loose shorthand `data: {"values": [...]}` with top-level `xField` plus partial `series[]`; that shape is not the stable Feishu combo contract.
+- For `common` charts that mix **bar + line**, include cartesian axes explicitly as `[{"orient":"bottom","type":"band"},{"orient":"left","type":"linear"}]` unless the user already supplied a stricter valid axis config.
+
+Official `common` combo pattern:
+
+```vchart
+{
+  "type": "common",
+  "title": {"text": "组合图"},
+  "data": [
+    {
+      "id": "combo_bar",
+      "values": [
+        {"x": "周一", "type": "早餐", "y": 15},
+        {"x": "周一", "type": "午餐", "y": 25}
+      ]
+    },
+    {
+      "id": "combo_line",
+      "values": [
+        {"x": "周一", "type": "饮料", "y": 22},
+        {"x": "周二", "type": "饮料", "y": 43}
+      ]
+    }
+  ],
+  "series": [
+    {
+      "type": "bar",
+      "dataIndex": 0,
+      "seriesField": "type",
+      "xField": ["x", "type"],
+      "yField": "y"
+    },
+    {
+      "type": "line",
+      "dataIndex": 1,
+      "seriesField": "type",
+      "xField": "x",
+      "yField": "y"
+    }
+  ],
+  "axes": [
+    {"orient": "bottom", "type": "band"},
+    {"orient": "left", "type": "linear"}
+  ]
+}
+```

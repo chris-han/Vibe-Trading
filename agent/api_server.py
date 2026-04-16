@@ -1618,6 +1618,45 @@ async def _feishu_create_streaming_card_message(chat_id: str, title: str, initia
     }
 
 
+async def _feishu_send_card_message(
+    chat_id: str,
+    title: str,
+    elements: List[Dict[str, Any]],
+    *,
+    template: str = "blue",
+) -> Dict[str, Any]:
+    """Create a non-streaming CardKit card entity and send it to a chat."""
+    create_data = await _feishu_openapi_request(
+        "POST",
+        "/open-apis/cardkit/v1/cards",
+        {
+            "type": "card_json",
+            "data": _FEISHU_VISUALIZATION_ADAPTER.build_card_payload_from_elements(
+                title,
+                elements,
+                template=template,
+            ),
+        },
+    )
+    card_id = str(create_data.get("card_id") or "")
+    if not card_id:
+        raise RuntimeError(f"Missing card_id from create-card response: {create_data}")
+
+    message_data = await _feishu_openapi_request(
+        "POST",
+        "/open-apis/im/v1/messages?receive_id_type=chat_id",
+        {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": json.dumps({"type": "card", "data": {"card_id": card_id}}, ensure_ascii=False),
+        },
+    )
+    return {
+        "card_id": card_id,
+        "message_id": str(message_data.get("message_id") or ""),
+    }
+
+
 def _feishu_take_card_sequence(card_ctx: Dict[str, Any]) -> int:
     """Return the next strictly increasing sequence number for card operations."""
     sequence = int(card_ctx.get("sequence") or 1)
@@ -1788,11 +1827,17 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                 # After streaming is closed, replace the card body with proper
                 # chart elements via the IM message update endpoint.
                 if has_charts:
-                    final_elements = _FEISHU_VISUALIZATION_ADAPTER.split_card_elements(final_text)
+                    final_elements = _FEISHU_VISUALIZATION_ADAPTER.split_card_elements(
+                        final_text,
+                        enforce_chart_limit=False,
+                    )
                     if final_error:
                         final_elements.append({"tag": "markdown", "content": f"\n\n---\n\n**Error:** {final_error}"})
+                    final_batches = _FEISHU_VISUALIZATION_ADAPTER.chunk_card_elements(final_elements)
                     try:
-                        await _feishu_patch_card_body(card_ctx, "semantier", final_elements)
+                        await _feishu_patch_card_body(card_ctx, "semantier", final_batches[0])
+                        for extra_batch in final_batches[1:]:
+                            await _feishu_send_card_message(chat_id, "semantier", extra_batch)
                     except Exception:
                         _feishu_logger.warning(
                             "[Feishu WS] Chart card patch failed after streaming close; preserving markdown card for chat=%s attempt=%s",

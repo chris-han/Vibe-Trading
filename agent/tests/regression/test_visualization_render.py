@@ -221,6 +221,46 @@ class TestVChartSanitizer:
             {"type": "line", "dataIndex": 1, "xField": "x", "yField": "y", "seriesField": "type"},
         ]
 
+    def test_common_combo_single_dataset_series_shorthand_is_normalized_for_feishu(self):
+        spec = {
+            "type": "common",
+            "title": {"text": "销售目标追踪"},
+            "data": {
+                "values": [
+                    {"month": "Jan", "sales": 42000, "target": 40000, "rate": 0.85},
+                    {"month": "Feb", "sales": 38000, "target": 42000, "rate": 0.78},
+                ]
+            },
+            "xField": "month",
+            "series": [
+                {"type": "bar", "yField": "sales", "name": "实际销售"},
+                {"type": "line", "yField": "target", "name": "目标"},
+                {"type": "line", "yField": "rate", "name": "完成率"},
+            ],
+        }
+
+        result = self._roundtrip(spec)
+
+        assert result["data"] == [
+            {
+                "id": "source",
+                "values": [
+                    {"month": "Jan", "sales": 42000, "target": 40000, "rate": 0.85},
+                    {"month": "Feb", "sales": 38000, "target": 42000, "rate": 0.78},
+                ],
+            }
+        ]
+        assert result["series"] == [
+            {"type": "bar", "yField": "sales", "name": "实际销售", "dataIndex": 0, "xField": "month"},
+            {"type": "line", "yField": "target", "name": "目标", "dataIndex": 0, "xField": "month"},
+            {"type": "line", "yField": "rate", "name": "完成率", "dataIndex": 0, "xField": "month"},
+        ]
+        assert result["axes"] == [
+            {"orient": "bottom", "type": "band"},
+            {"orient": "left", "type": "linear"},
+        ]
+        assert "xField" not in result
+
     def test_common_combo_with_invalid_data_index_is_downgraded_to_markdown(self):
         text = "```vchart\n" + json.dumps(
             {
@@ -238,6 +278,30 @@ class TestVChartSanitizer:
         assert not charts
         assert markdown
         assert "invalid dataIndex" in markdown[0]["content"]
+
+    def test_chunk_card_elements_splits_many_charts_into_multiple_batches(self):
+        blocks = []
+        for index in range(6):
+            blocks.append(
+                "```vchart\n"
+                + json.dumps(
+                    {
+                        "type": "line",
+                        "title": {"text": f"Chart {index + 1}"},
+                        "data": {"values": [{"x": "A", "y": index + 1}]},
+                        "xField": "x",
+                        "yField": "y",
+                    }
+                )
+                + "\n```"
+            )
+
+        elements = _FEISHU_ADAPTER.split_card_elements("\n\n".join(blocks), enforce_chart_limit=False)
+        batches = _FEISHU_ADAPTER.chunk_card_elements(elements)
+
+        assert len(batches) == 2
+        assert sum(1 for item in batches[0] if item.get("tag") == "chart") == 5
+        assert sum(1 for item in batches[1] if item.get("tag") == "chart") == 1
 
     def test_unsupported_chart_type_is_downgraded_to_markdown_table(self):
         text = "```vchart\n" + json.dumps(
