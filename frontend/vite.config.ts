@@ -26,6 +26,7 @@ export default defineConfig({
     },
   },
   build: {
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -33,14 +34,24 @@ export default defineConfig({
             return;
           }
 
+          // Core React and routing
           if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/react-router")) {
             return "vendor-react";
           }
 
+          // Large charting libraries
           if (id.includes("/echarts/")) {
             return "vendor-charts";
           }
 
+          if (id.includes("/@visactor/vchart")) {
+            return "vendor-vchart";
+          }
+
+          // Mermaid is excluded here to allow its own internal dynamic splitting to work
+          // (it generates dozens of small diagram-specific chunks).
+
+          // Markdown and syntax highlighting
           if (
             id.includes("/react-markdown/")
             || id.includes("/remark-gfm/")
@@ -50,7 +61,8 @@ export default defineConfig({
             return "vendor-markdown";
           }
 
-          if (id.includes("/lucide-react/") || id.includes("/zustand/")) {
+          // Common UI utilities
+          if (id.includes("/lucide-react/") || id.includes("/zustand/") || id.includes("/clsx/") || id.includes("/tailwind-merge/")) {
             return "vendor-ui";
           }
         },
