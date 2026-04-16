@@ -445,28 +445,41 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
         *,
         max_chart_elements: Optional[int] = None,
     ) -> List[List[Dict[str, Any]]]:
-        """Split parsed card elements into card-sized batches while preserving order."""
-        chart_limit = max_chart_elements or self.max_chart_elements
-        if chart_limit <= 0:
+        """Split parsed card elements so each chart renders on its own Feishu card."""
+        if max_chart_elements is not None and max_chart_elements <= 0:
             return [elements] if elements else [[{"tag": "markdown", "content": " "}]]
+        if not elements:
+            return [[{"tag": "markdown", "content": " "}]]
 
         batches: List[List[Dict[str, Any]]] = []
-        current_batch: List[Dict[str, Any]] = []
-        current_chart_count = 0
+        leading_markdown: List[Dict[str, Any]] = []
+        inter_chart_markdown: List[Dict[str, Any]] = []
+        current_batch: Optional[List[Dict[str, Any]]] = None
 
         for element in elements:
-            is_chart = element.get("tag") == "chart"
-            if is_chart and current_chart_count >= chart_limit and current_batch:
+            if element.get("tag") != "chart":
+                if current_batch is None:
+                    leading_markdown.append(element)
+                else:
+                    inter_chart_markdown.append(element)
+                continue
+
+            if current_batch is not None:
                 batches.append(current_batch)
-                current_batch = []
-                current_chart_count = 0
+                current_batch = inter_chart_markdown.copy()
+                inter_chart_markdown = []
+            else:
+                current_batch = leading_markdown.copy()
+                leading_markdown = []
 
             current_batch.append(element)
-            if is_chart:
-                current_chart_count += 1
 
-        if current_batch:
+        if current_batch is not None:
+            if inter_chart_markdown:
+                current_batch.extend(inter_chart_markdown)
             batches.append(current_batch)
+        elif leading_markdown:
+            batches.append(leading_markdown)
 
         return batches or [[{"tag": "markdown", "content": " "}]]
 

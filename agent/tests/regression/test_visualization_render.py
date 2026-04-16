@@ -299,9 +299,69 @@ class TestVChartSanitizer:
         elements = _FEISHU_ADAPTER.split_card_elements("\n\n".join(blocks), enforce_chart_limit=False)
         batches = _FEISHU_ADAPTER.chunk_card_elements(elements)
 
-        assert len(batches) == 2
-        assert sum(1 for item in batches[0] if item.get("tag") == "chart") == 5
+        assert len(batches) == 6
+        assert sum(1 for item in batches[0] if item.get("tag") == "chart") == 1
         assert sum(1 for item in batches[1] if item.get("tag") == "chart") == 1
+
+    def test_chunk_card_elements_isolates_independent_chart_sections(self):
+        blocks = []
+        for index in range(3):
+            blocks.append(
+                f"## Chart {index + 1}\n\n说明 {index + 1}\n\n"
+                + "```vchart\n"
+                + json.dumps(
+                    {
+                        "type": "line",
+                        "title": {"text": f"Chart {index + 1}"},
+                        "data": {"values": [{"x": "A", "y": index + 1}]},
+                        "xField": "x",
+                        "yField": "y",
+                    }
+                )
+                + "\n```"
+            )
+
+        elements = _FEISHU_ADAPTER.split_card_elements("\n\n".join(blocks), enforce_chart_limit=False)
+        batches = _FEISHU_ADAPTER.chunk_card_elements(elements)
+
+        assert len(batches) == 3
+        for index, batch in enumerate(batches, start=1):
+            assert sum(1 for item in batch if item.get("tag") == "chart") == 1
+            assert any(item.get("tag") == "markdown" and f"Chart {index}" in item.get("content", "") for item in batch)
+
+    def test_chunk_card_elements_attaches_shared_intro_to_first_chart_only(self):
+        text = (
+            "总览说明\n\n"
+            "```vchart\n"
+            + json.dumps(
+                {
+                    "type": "line",
+                    "title": {"text": "Chart 1"},
+                    "data": {"values": [{"x": "A", "y": 1}]},
+                    "xField": "x",
+                    "yField": "y",
+                }
+            )
+            + "\n```\n\n"
+            + "```vchart\n"
+            + json.dumps(
+                {
+                    "type": "line",
+                    "title": {"text": "Chart 2"},
+                    "data": {"values": [{"x": "A", "y": 2}]},
+                    "xField": "x",
+                    "yField": "y",
+                }
+            )
+            + "\n```"
+        )
+
+        elements = _FEISHU_ADAPTER.split_card_elements(text, enforce_chart_limit=False)
+        batches = _FEISHU_ADAPTER.chunk_card_elements(elements)
+
+        assert len(batches) == 2
+        assert any(item.get("tag") == "markdown" and "总览说明" in item.get("content", "") for item in batches[0])
+        assert not any(item.get("tag") == "markdown" and "总览说明" in item.get("content", "") for item in batches[1])
 
     def test_unsupported_chart_type_is_downgraded_to_markdown_table(self):
         text = "```vchart\n" + json.dumps(
