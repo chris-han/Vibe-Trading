@@ -139,7 +139,15 @@ export function CandlestickChart({ data, markers, indicators, height = 500 }: Pr
       value: m.side === "BUY" ? "B" : "S",
       name: [`${m.side} @ ${m.price}`, m.qty ? `Qty: ${m.qty}` : "", m.reason || ""].filter(Boolean).join("\n"),
       itemStyle: { color: m.side === "BUY" ? t.upColor : t.downColor },
-      label: { color: "#fff", fontSize: 10, fontWeight: "bold" as const },
+      label: {
+        color: dark ? "#ffffff" : "#111827",
+        fontSize: 10,
+        fontWeight: "bold" as const,
+        textBorderWidth: 0,
+        backgroundColor: dark ? "rgba(15, 23, 42, 0.92)" : "rgba(255, 255, 255, 0.96)",
+        borderRadius: 999,
+        padding: [1, 5],
+      },
     }));
 
     const vol = data.map((d, i) => ({

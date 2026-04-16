@@ -172,8 +172,8 @@ class TestVChartSanitizer:
         }
         result = self._roundtrip(spec)
         assert result["series"] == [
-            {"type": "bar", "dataId": "bar", "xField": "month", "yField": "revenue"},
-            {"type": "line", "dataId": "line", "xField": "month", "yField": "margin"},
+            {"type": "bar", "dataIndex": 0, "xField": "month", "yField": "revenue"},
+            {"type": "line", "dataIndex": 1, "xField": "month", "yField": "margin"},
         ]
         assert result["axes"] == [
             {"orient": "bottom", "type": "band"},
@@ -181,6 +181,92 @@ class TestVChartSanitizer:
         ]
         assert "yField" not in result
         assert "seriesField" not in result
+
+    def test_common_combo_data_id_is_rewritten_to_data_index_for_feishu(self):
+        spec = {
+            "type": "common",
+            "data": [
+                {"id": "bars", "values": [{"x": "Mon", "type": "Breakfast", "y": 15}]},
+                {"id": "line", "values": [{"x": "Mon", "type": "Drink", "y": 22}]},
+            ],
+            "series": [
+                {"type": "bar", "dataId": "bars", "xField": ["x", "type"], "yField": "y", "seriesField": "type"},
+                {"type": "line", "dataId": "line", "xField": "x", "yField": "y", "seriesField": "type"},
+            ],
+            "axes": [{"orient": "bottom"}, {"orient": "left"}],
+        }
+        result = self._roundtrip(spec)
+        assert result["series"] == [
+            {"type": "bar", "dataIndex": 0, "xField": ["x", "type"], "yField": "y", "seriesField": "type"},
+            {"type": "line", "dataIndex": 1, "xField": "x", "yField": "y", "seriesField": "type"},
+        ]
+
+    def test_common_combo_with_invalid_data_index_is_downgraded_to_markdown(self):
+        text = "```vchart\n" + json.dumps(
+            {
+                "type": "common",
+                "title": {"text": "Broken Combo"},
+                "data": [{"values": [{"x": "Mon", "y": 15}]}],
+                "series": [{"type": "bar", "dataIndex": 9, "xField": "x", "yField": "y"}],
+            }
+        ) + "\n```"
+        out = _FEISHU_ADAPTER.split_card_elements(text)
+
+        charts = [item for item in out if item.get("tag") == "chart"]
+        markdown = [item for item in out if item.get("tag") == "markdown"]
+
+        assert not charts
+        assert markdown
+        assert "invalid dataIndex" in markdown[0]["content"]
+
+    def test_unsupported_chart_type_is_downgraded_to_markdown_table(self):
+        text = "```vchart\n" + json.dumps(
+            {
+                "type": "candlestick",
+                "title": "OHLC",
+                "data": {
+                    "values": [
+                        {"date": "2026-04-15", "open": 100, "high": 110, "low": 95, "close": 108},
+                        {"date": "2026-04-16", "open": 108, "high": 112, "low": 101, "close": 103},
+                    ]
+                },
+            }
+        ) + "\n```"
+        out = _FEISHU_ADAPTER.split_card_elements(text)
+
+        charts = [item for item in out if item.get("tag") == "chart"]
+        markdown = [item for item in out if item.get("tag") == "markdown"]
+
+        assert not charts
+        assert markdown
+        assert "candlestick" in markdown[0]["content"]
+        assert "| date | open | high | low | close |" in markdown[0]["content"]
+
+    def test_only_first_five_charts_render_as_chart_elements(self):
+        blocks = []
+        for index in range(6):
+            blocks.append(
+                "```vchart\n"
+                + json.dumps(
+                    {
+                        "type": "line",
+                        "title": f"Chart {index + 1}",
+                        "data": {"values": [{"x": "A", "y": index + 1}]},
+                        "xField": "x",
+                        "yField": "y",
+                    }
+                )
+                + "\n```"
+            )
+        out = _FEISHU_ADAPTER.split_card_elements("\n\n".join(blocks))
+
+        charts = [item for item in out if item.get("tag") == "chart"]
+        markdown = [item for item in out if item.get("tag") == "markdown"]
+
+        assert len(charts) == 5
+        assert markdown
+        assert "Chart 6" in markdown[-1]["content"]
+        assert "at most 5 charts" in markdown[-1]["content"]
 
 
 # ---------------------------------------------------------------------------
