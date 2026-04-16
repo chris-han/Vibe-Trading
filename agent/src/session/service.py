@@ -28,6 +28,7 @@ _BACKTEST_WORKFLOW_PROMPT = (
     "- Then call setup_backtest_run(config_json=..., signal_engine_py=...) to create the run directory and write config.json/code.\n"
     "- Only after setup_backtest_run succeeds, call backtest(run_dir=...).\n"
     "- Never ask the user to manually create config.json or code/signal_engine.py when the tool can create them.\n"
+    "- If a backtest fails because generated strategy code is wrong, prefer creating a fresh run with setup_backtest_run(...) instead of patching unrelated files.\n"
 )
 
 _DOCUMENT_WORKFLOW_PROMPT = (
@@ -49,7 +50,8 @@ _MARKET_DATA_WORKFLOW_PROMPT = (
     "- Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.\n"
     "- Use the project-supported Python patterns from load_skill (for example yfinance or OKX API helpers).\n"
     "- Prefer writing one focused Python script with write_file, then execute it with bash.\n"
-    "- The terminal/file tools are already scoped to the active session or run artifact directory; keep output paths relative so the runtime chooses the final location.\n"
+    "- The terminal/file tools are scoped to the active session or backtest run directory; keep output paths relative so the runtime chooses the final location.\n"
+    "- For analysis outputs and helper scripts, prefer paths under artifacts/. Only write config.json or code/signal_engine.py when intentionally updating the active backtest run.\n"
     "- Never hardcode output file paths such as /app/agent/... or agent/... in scripts, skills, or bash commands.\n"
     "- Use the repo-local interpreter via ./.venv/bin/python for script execution.\n"
     "- For package installs, use ./.venv/bin/python -m pip. Do NOT call pip/pip3 directly.\n"
@@ -903,13 +905,14 @@ class SessionService:
 
         from src.vibe_trading_helper import reset_session_runs_dir, set_session_runs_dir
         _runs_token = set_session_runs_dir(self.runs_dir)
-        # Configure hermes built-in file/terminal tools to write into the run's
-        # artifact directory instead of the process cwd.
+        # Configure Hermes built-in file/terminal tools to stay inside the active
+        # run directory. Use artifacts/ as cwd so relative outputs land there,
+        # while still allowing explicit edits to config.json or code/.
         try:
             from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
             register_task_env_overrides(sid, {
                 "cwd": str(run_dir / "artifacts"),
-                "safe_write_root": str(run_dir / "artifacts"),
+                "safe_write_root": str(run_dir),
             })
             _hermes_overrides_set = True
         except Exception:

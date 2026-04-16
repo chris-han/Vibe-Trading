@@ -410,10 +410,46 @@ class TestHermesSessionEvents:
         prompt = captured_kwargs.get("ephemeral_system_prompt", "")
         assert "setup_backtest_run(config_json=..., signal_engine_py=...)" in prompt
         assert "Never ask the user to manually create config.json" in prompt
+        assert "prefer creating a fresh run with setup_backtest_run(...)" in prompt
         assert "Never invent a PDF filename" in prompt
         assert "read_url or browser tools" in prompt
         assert "Do NOT fetch market data with curl" in prompt
         assert "Prefer writing one focused Python script with write_file, then execute it with bash." in prompt
+        assert "Only write config.json or code/signal_engine.py when intentionally updating the active backtest run." in prompt
+
+    def test_run_with_agent_scopes_safe_write_root_to_run_dir(self, tmp_path):
+        """Session runtime must allow edits anywhere inside the active backtest run."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Backtest AAPL")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "r1"
+        register_calls: list[tuple[str, dict]] = []
+
+        def _register(task_id, overrides):
+            register_calls.append((task_id, dict(overrides)))
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
+                run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
+            ))
+            with patch("src.core.state.RunStateStore") as MockStore, \
+                 patch("tools.terminal_tool.register_task_env_overrides", side_effect=_register), \
+                 patch("tools.terminal_tool.clear_task_env_overrides"):
+                MockStore.return_value.create_run_dir.return_value = run_dir
+                MockStore.return_value.mark_success.return_value = None
+                await svc._run_with_agent(attempt)
+
+        _run(_t())
+
+        assert register_calls
+        _, final_overrides = register_calls[-1]
+        assert final_overrides["cwd"] == str(run_dir / "artifacts")
+        assert final_overrides["safe_write_root"] == str(run_dir)
 
     def test_hermes_toolset_selection_exposes_legacy_vt_aliases(self):
         """Compat toolset is now empty; all tools are provided by hermes built-in toolsets.
