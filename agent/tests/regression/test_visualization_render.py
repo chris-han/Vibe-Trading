@@ -159,6 +159,26 @@ class TestVChartSanitizer:
         assert result["nameField"] == "word"
         assert "seriesField" not in result
 
+    def test_label_text_stroke_is_removed_for_feishu_chart_labels(self):
+        spec = {
+            "type": "line",
+            "data": {"values": [{"month": "Jan", "sales": 1}]},
+            "xField": "month",
+            "yField": "sales",
+            "label": {
+                "visible": True,
+                "textBorderWidth": 4,
+                "style": {"textStrokeWidth": 3, "lineWidth": 2},
+                "textStyle": {"textBorderWidth": 5},
+            },
+        }
+        result = self._roundtrip(spec)
+        assert result["label"]["textBorderWidth"] == 0
+        assert result["label"]["textStrokeWidth"] == 0
+        assert result["label"]["style"]["textStrokeWidth"] == 0
+        assert result["label"]["style"]["lineWidth"] == 0
+        assert result["label"]["textStyle"]["textBorderWidth"] == 0
+
     def test_common_combo_shorthand_is_expanded_for_feishu(self):
         spec = {
             "type": "common",

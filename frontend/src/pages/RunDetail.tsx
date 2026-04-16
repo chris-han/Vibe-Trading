@@ -102,6 +102,9 @@ export function RunDetail() {
 
   const ok = run.status === "success";
   const failed = run.status === "failed";
+  const activeTabClass = "bg-primary text-primary-foreground font-semibold shadow-sm border border-primary/30";
+  const inactiveTabClass = "text-muted-foreground/80 hover:bg-muted/70 hover:text-foreground";
+  const utilityButtonClass = "flex items-center gap-1.5 px-3 py-1.5 rounded-button text-xs text-muted-foreground/75 hover:bg-muted/60 hover:text-foreground transition-colors";
 
   return (
     <div className="flex flex-col h-full">
@@ -129,7 +132,7 @@ export function RunDetail() {
               onClick={() => setTab(id)}
               className={cn(
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-button text-sm transition-colors",
-                tab === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                tab === id ? activeTabClass : inactiveTabClass
               )}
             >
               <Icon className="h-3.5 w-3.5" /> {label}
@@ -140,7 +143,7 @@ export function RunDetail() {
             {run.trade_log && run.trade_log.length > 0 && (
               <button
                 onClick={() => downloadCsv(`trades_${runId}.csv`, buildTradesCsv(run.trade_log!))}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-button text-xs text-muted-foreground hover:bg-muted transition-colors"
+                className={utilityButtonClass}
                 title={t.downloadTradesCsv}
               >
                 <Download className="h-3.5 w-3.5" /> {t.downloadTradesCsv}
@@ -149,7 +152,7 @@ export function RunDetail() {
             {run.metrics && (
               <button
                 onClick={() => downloadCsv(`metrics_${runId}.csv`, buildMetricsCsv(run.metrics!))}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-button text-xs text-muted-foreground hover:bg-muted transition-colors"
+                className={utilityButtonClass}
                 title={t.downloadMetricsCsv}
               >
                 <Download className="h-3.5 w-3.5" /> {t.downloadMetricsCsv}

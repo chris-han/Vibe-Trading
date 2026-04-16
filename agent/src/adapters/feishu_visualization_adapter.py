@@ -34,6 +34,7 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
         "circularProgress",
         "wordCloud",
     })
+    _LABELISH_KEYS = frozenset({"label", "outerLabel", "transformLabel"})
 
     @property
     def channel(self) -> str:
@@ -165,7 +166,40 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
                 title_dict = dict(title)
                 title_dict["text"] = title_dict.pop("value")
                 normalized["title"] = title_dict
+        self._normalize_label_text_stroke(normalized)
         return normalized
+
+    def _normalize_label_text_stroke(self, node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                self._normalize_label_text_stroke(item)
+            return
+
+        if not isinstance(node, dict):
+            return
+
+        for key, value in list(node.items()):
+            if key in self._LABELISH_KEYS and isinstance(value, dict):
+                self._strip_label_text_stroke(value)
+            self._normalize_label_text_stroke(value)
+
+    @staticmethod
+    def _strip_label_text_stroke(label_config: Dict[str, Any]) -> None:
+        style = label_config.get("style")
+        if not isinstance(style, dict):
+            style = {}
+        style["textStrokeWidth"] = 0
+        style["lineWidth"] = 0
+        label_config["style"] = style
+
+        text_style = label_config.get("textStyle")
+        if isinstance(text_style, dict):
+            text_style["textBorderWidth"] = 0
+            text_style["textStrokeWidth"] = 0
+            label_config["textStyle"] = text_style
+
+        label_config["textBorderWidth"] = 0
+        label_config["textStrokeWidth"] = 0
 
     def _is_supported_chart_spec(self, spec: Dict[str, Any]) -> bool:
         chart_type = spec.get("type")
