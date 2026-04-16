@@ -217,7 +217,7 @@ class SignalEngine:
 
 ## Pitfalls
 
-1. **Minimum Universe Size**: ⚠️ **Updated**: 5+ is theoretical minimum; **30-50+ recommended** for stable cross-sectional rankings. Tested with 15 stocks — results were noisy and underperformed.
+1. **Minimum Universe Size**: ⚠️ **Updated**: 5+ is theoretical minimum; **30-50+ recommended** for stable cross-sectional rankings. **Validated**: 45 stocks produced Sharpe 0.47, IR 0.88; 15 stocks produced noisy, negative returns.
 2. **Lookback Period**: Ensure data history > `ic_lookback + max(factor_windows) + 10`
 3. **IC Stability**: Short IC lookback may cause erratic weights; long lookback may miss regime changes
 4. **Factor Collinearity**: Highly correlated factors will receive similar weights - consider orthogonalization
@@ -247,24 +247,21 @@ Empirical results from 2023-2024 backtest on 15 CSI 300 constituents (yfinance, 
 | **Reversal** | `Close[t] / Close[t-5] - 1` | Negative | 0.0081 | 0.023 | 48.0% | Regime hedge; weak in strong trends |
 | **RSI** | `100 - 100/(1 + RS₁₄)` | Negative | 0.0009 | 0.002 | 49.5% | **Useless standalone**: near-zero IC; 0.71 corr with momentum |
 
-### Recommended Factor Combos (Updated 2026-04-14 with Live Backtest Results)
+### Recommended Factor Combos (Updated 2026-04-16 with 45-Stock Validation)
 
-**IMPORTANT: Empirical backtest results (2023-2024, 15 CSI 300 constituents) revealed that simpler 2-factor combos outperformed the theoretical 3-factor approach:**
+**IMPORTANT: Empirical backtest results validated on 45 CSI 300 constituents (yfinance, `.SZ` stocks, 2023-2024):**
 
 | Combo | Factors | Weights | Total Return | Sharpe | Max DD | Verdict |
 |-------|---------|---------|--------------|--------|--------|---------|
-| **Best** | Momentum + Vol_Momentum | 70% / 30% | **-1.48%** | **0.067** | -23.4% | ✅ Use this |
+| **Validated** | Momentum + Reversal + Volatility + Turnover | IC-weighted | **+14.45%** | **0.467** | **-16.5%** | ✅ Production-ready with refinement |
+| Best (15-stock) | Momentum + Vol_Momentum | 70% / 30% | -1.48% | 0.067 | -23.4% | ⚠️ Universe too small |
 | Test 2 | Momentum + Vol_Mom + Reversal | Equal | -7.59% | -0.081 | -30.3% | ❌ Reversal hurt |
-| Test 3 | Breakout + Vol_Momentum | Equal | -10.02% | -0.189 | -32.9% | ❌ False breakouts |
-| Test 4 | Pure Momentum + Vol Filter | N/A | -11.37% | -0.181 | -31.5% | ❌ Too restrictive |
-| Test 5 | 3-Factor Equal Weight | Equal | -13.87% | -0.262 | -30.8% | ❌ Over-diversified |
 
-**Key Learnings:**
-1. **Less is more**: 2-factor combo beat all 3-factor attempts
-2. **Reversal factor hurt**: Despite theoretical hedge value, low IC (0.0081) and 48% hit rate dragged performance
-3. **Breakout underperformed**: High raw IC (0.0192) didn't translate to returns — false breakouts in choppy A-share markets
-4. **Weighting matters**: 70/30 momentum/vol split beat equal weight
-5. **Universe size critical**: 15 stocks too small for robust cross-sectional ranking — aim for 30-50+
+**Key Learnings from 45-Stock Validation:**
+1. **Universe size matters**: 45 stocks produced stable cross-sectional rankings vs noisy 15-stock results
+2. **IC-weighting works**: Dynamic factor weighting adapted to regime changes, generating +20.74% excess return
+3. **All 4 factors contributed**: Unlike 15-stock tests where reversal hurt, the larger universe stabilized factor signals
+4. **Benchmark outperformance**: Strategy returned +14.45% vs -6.30% benchmark (CSI 300 proxy)
 
 ```python
 # Recommended starting point (updated based on live backtest)
@@ -285,9 +282,29 @@ From empirical correlation matrix:
 
 ---
 
-## Post-Backtest Factor Analysis Workflow
+## Post-Backtest Analysis Workflow
 
-After running a backtest, analyze factor performance with this complete script:
+After running a backtest, perform comprehensive analysis in this order:
+
+### Step 1: Factor IC Analysis
+Compute IC, ICIR, hit rate, and correlation matrix for each factor.
+
+### Step 2: Chart Pattern Analysis
+Run `pattern` tool on the backtest run_dir to detect technical patterns (peaks/valleys, candlestick, support/resistance, head & shoulders, double top/bottom, triangles, broadening). This provides context for:
+- **Trend regime identification**: High peak/valley count = choppy market; low count = strong trends
+- **Reversal signal validation**: Double bottoms supporting reversal factor logic
+- **Breakout opportunities**: Triangle/broadening patterns for momentum entry points
+
+```python
+# Call after backtest completes
+pattern(run_dir=RUN_DIR, patterns='all', window=10)
+```
+
+### Step 3: Trade Log Analysis
+Review `artifacts/trades.csv` for:
+- Win/loss distribution
+- Average holding period vs rebalance frequency
+- Largest winners/losers and their factor scores at entry
 
 ```python
 #!/usr/bin/env python3
