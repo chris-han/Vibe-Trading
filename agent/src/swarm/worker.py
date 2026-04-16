@@ -21,6 +21,7 @@ _DEFAULT_MAX_ITERATIONS = 50
 _BACKTEST_WORKFLOW_HINT = (
     "- For any new backtest, call `setup_backtest_run(config_json=..., signal_engine_py=...)` before `backtest(run_dir=...)`.\n"
     "- Never ask the user to create `config.json` or `code/signal_engine.py` manually when the setup tool can write them.\n"
+    "- If generated strategy code is wrong, prefer a fresh `setup_backtest_run(...)` with corrected code instead of trying to patch files from a previous run.\n"
 )
 
 _DOCUMENT_WORKFLOW_HINT = (
@@ -36,6 +37,7 @@ _MARKET_DATA_WORKFLOW_HINT = (
     "- `execute_code` is forbidden in this runtime. Use `write_file` plus `bash` with the runtime-provided cwd instead.\n"
     "- **NEVER use curl/requests/urllib to fetch market data.** Call `load_skill('yfinance')` first, then write a Python script.\n"
     "- Never hardcode output file paths such as `/app/agent/...` or `agent/...`; keep outputs relative so Hermes stores them under the task artifact directory.\n"
+    "- Worker file tools only write inside the current task artifact directory unless another tool creates files for you elsewhere.\n"
 )
 
 

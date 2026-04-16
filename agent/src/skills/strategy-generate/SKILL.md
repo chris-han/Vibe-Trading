@@ -5,20 +5,21 @@ description: Create, modify, and optimize quantitative trading strategies, then 
 
 ## Workflow
 
-1. **Requirements parsing**: parse user intent, extract instrument codes, time range, and strategy logic, then write `config.json`
+1. **Requirements parsing**: parse user intent, extract instrument codes, time range, and strategy logic, then prepare the `config_json` payload
 2. **Strategy design**: think through the 5 questions of data / signal / position sizing / backtest / validation
-3. **Strategy coding**: write `code/signal_engine.py` (following the `SignalEngine` contract)
-4. **Syntax check**: `bash("./.venv/bin/python -m py_compile code/signal_engine.py && echo OK")`
-5. **Run backtest**: call the `backtest` tool (built into the engine; no need to write `run_backtest.py`)
-6. **Evaluate results**: read `artifacts/metrics.csv` and judge by the review criteria
-7. **Iterative fixing**: if results are poor, modify with `edit_file` → run `backtest` → re-evaluate
+3. **Strategy coding**: prepare `signal_engine_py` (following the `SignalEngine` contract)
+4. **Create run**: call `setup_backtest_run(config_json=..., signal_engine_py=...)`
+5. **Syntax check**: `bash("./.venv/bin/python -m py_compile code/signal_engine.py && echo OK")`
+6. **Run backtest**: call the `backtest` tool (built into the engine; no need to write `run_backtest.py`)
+7. **Evaluate results**: read `artifacts/metrics.csv` and judge by the review criteria
+8. **Iterative fixing**: if generated code is wrong, prefer creating a fresh run with corrected `signal_engine_py`; if you intentionally update the active run, edit `code/signal_engine.py` in that run and re-run `backtest`
 
-**You only need to write `signal_engine.py` and `config.json`. The `backtest` tool automatically handles data loading and backtest execution.**
+**For new backtests, do not create `config.json` or `code/signal_engine.py` manually with file tools. Use `setup_backtest_run(config_json=..., signal_engine_py=...)` so the runtime creates the run directory correctly.**
 
 ## Runtime Rules
 
 - Do not hardcode output paths like `/app/agent/...` or `agent/...`.
-- Keep file paths relative to `run_dir`; `config.json` belongs in the run root and strategy code belongs in `code/signal_engine.py`.
+- For manual inspection or targeted fixes, keep file paths relative to `run_dir`; `config.json` belongs in the run root and strategy code belongs in `code/signal_engine.py`.
 - Use `./.venv/bin/python` for local Python commands and `./.venv/bin/python -m pip` for package installs.
 
 ## Requirements Parsing
@@ -33,7 +34,7 @@ Extract the following from the user's description:
 - Strategy description is vague (for example, "help me build a strategy") → provide 2-3 strategy directions for the user to choose from
 - Mixed markets but not clearly specified → confirm the data source
 
-**Write `config.json` first, then write code.** `config.json` must be placed in the root of `run_dir`.
+**Build `config_json` first, then `signal_engine_py`, then call `setup_backtest_run(...)`.**
 
 ## Strategy Design
 

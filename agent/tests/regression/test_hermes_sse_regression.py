@@ -745,5 +745,7 @@ class TestHermesSwarmWorkerEvents:
         prompt = captured_kwargs.get("ephemeral_system_prompt", "")
         assert "setup_backtest_run(config_json=..., signal_engine_py=...)" in prompt
         assert "Never ask the user to create `config.json`" in prompt
+        assert "prefer a fresh `setup_backtest_run(...)` with corrected code" in prompt
         assert "Never invent a PDF filename" in prompt
         assert "read_url or browser tools" in prompt
+        assert "Worker file tools only write inside the current task artifact directory" in prompt
