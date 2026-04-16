@@ -113,6 +113,75 @@ class TestVChartSanitizer:
         markdown = [item for item in out if item.get("tag") == "markdown"]
         assert markdown
 
+    def test_radar_xy_fields_are_remapped_for_feishu(self):
+        spec = {
+            "type": "radar",
+            "data": [{"id": "data", "values": [{"dimension": "A", "score": 1}]}],
+            "xField": "dimension",
+            "yField": "score",
+        }
+        result = self._roundtrip(spec)
+        assert result["categoryField"] == "dimension"
+        assert result["valueField"] == "score"
+        assert "xField" not in result
+        assert "yField" not in result
+
+    def test_circular_progress_gets_synthetic_category_field_for_feishu(self):
+        spec = {
+            "type": "circularProgress",
+            "data": [{"id": "data", "values": [{"value": 78}]}],
+            "valueField": "value",
+        }
+        result = self._roundtrip(spec)
+        assert result["categoryField"] == "_label"
+        assert result["data"][0]["values"][0]["_label"] == "progress"
+
+    def test_donut_gets_explicit_radii_for_feishu(self):
+        spec = {
+            "type": "pie",
+            "data": [{"id": "data", "values": [{"region": "North", "value": 30}]}],
+            "seriesField": "region",
+            "valueField": "value",
+            "isDonut": True,
+        }
+        result = self._roundtrip(spec)
+        assert result["innerRadius"] == 0.5
+        assert result["outerRadius"] == 0.8
+
+    def test_wordcloud_seriesfield_is_promoted_to_namefield_for_feishu(self):
+        spec = {
+            "type": "wordCloud",
+            "data": [{"id": "data", "values": [{"word": "AI", "weight": 80}]}],
+            "seriesField": "word",
+            "valueField": "weight",
+        }
+        result = self._roundtrip(spec)
+        assert result["nameField"] == "word"
+        assert "seriesField" not in result
+
+    def test_common_combo_shorthand_is_expanded_for_feishu(self):
+        spec = {
+            "type": "common",
+            "data": [
+                {"id": "bar", "values": [{"month": "Jan", "revenue": 120}]},
+                {"id": "line", "values": [{"month": "Jan", "margin": 25}]},
+            ],
+            "xField": "month",
+            "yField": ["revenue", "margin"],
+            "seriesField": "type",
+        }
+        result = self._roundtrip(spec)
+        assert result["series"] == [
+            {"type": "bar", "dataId": "bar", "xField": "month", "yField": "revenue"},
+            {"type": "line", "dataId": "line", "xField": "month", "yField": "margin"},
+        ]
+        assert result["axes"] == [
+            {"orient": "bottom", "type": "band"},
+            {"orient": "left", "type": "linear"},
+        ]
+        assert "yField" not in result
+        assert "seriesField" not in result
+
 
 # ---------------------------------------------------------------------------
 # 2. Mermaid block structural validation

@@ -113,6 +113,16 @@ function buildHierarchyFromParent(
   return { name: "root", children: roots };
 }
 
+function inferCommonSeriesType(dataId: string, index: number): string {
+  const lowered = dataId.toLowerCase();
+  if (lowered.includes('line')) return 'line';
+  if (lowered.includes('area')) return 'area';
+  if (lowered.includes('scatter')) return 'scatter';
+  if (lowered.includes('pie')) return 'pie';
+  if (lowered.includes('bar') || lowered.includes('column')) return 'bar';
+  return index === 0 ? 'bar' : 'line';
+}
+
 function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> {
   const spec: Record<string, unknown> = { ...input };
   const chartType = spec.type as string;
@@ -243,6 +253,7 @@ function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> 
   // wordCloud: uses nameField (not categoryField) for the word text.
   if (spec.type === "wordCloud") {
     if (spec.categoryField && !spec.nameField) { spec.nameField = spec.categoryField; delete spec.categoryField; }
+    if (spec.seriesField && !spec.nameField) { spec.nameField = spec.seriesField; delete spec.seriesField; }
   }
 
   // linearProgress extends CartesianSeries: category→yField (band/left axis),
@@ -260,6 +271,39 @@ function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> 
   // sankey: model sometimes emits nodeField instead of sourceField.
   if (spec.type === "sankey") {
     if (spec.nodeField && !spec.sourceField) { spec.sourceField = spec.nodeField; delete spec.nodeField; }
+  }
+
+  // common: model emits a simplified combo-chart shorthand with one dataset per
+  // series and yField as an array. Expand it into VChart's series[] format.
+  if (spec.type === "common" && !Array.isArray(spec.series) && Array.isArray(spec.data)) {
+    const datasets = spec.data as Record<string, unknown>[];
+    const yFields = Array.isArray(spec.yField) ? spec.yField : [];
+    if (datasets.length > 0 && typeof spec.xField === "string") {
+      const series = datasets.map((dataset, index) => {
+        const dataId = typeof dataset.id === "string" && dataset.id ? dataset.id : `series_${index + 1}`;
+        const values = Array.isArray(dataset.values) ? dataset.values : [];
+        const firstValue = values[0] as Record<string, unknown> | undefined;
+        const inferredYField =
+          (typeof yFields[index] === "string" && yFields[index]) ||
+          Object.keys(firstValue ?? {}).find((key) => key !== spec.xField) ||
+          "value";
+        return {
+          type: inferCommonSeriesType(dataId, index),
+          dataId,
+          xField: spec.xField,
+          yField: inferredYField,
+        };
+      });
+      spec.series = series;
+      if (!Array.isArray(spec.axes) || spec.axes.length === 0) {
+        spec.axes = [
+          { orient: "bottom", type: "band" },
+          { orient: "left", type: "linear" },
+        ];
+      }
+      delete spec.yField;
+      delete spec.seriesField;
+    }
   }
 
   // ── SPECIAL POST-WRAP PATCHES ─────────────────────────────────────────────

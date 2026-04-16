@@ -578,6 +578,16 @@ class TestNormalizeSpecFieldRemapping:
             "normalizeSpec wordCloud handler must remap categoryField → nameField."
         )
 
+    def test_wordcloud_seriesfield_remapped_to_namefield(self):
+        src = self._source()
+        wordcloud_idx = src.find('"wordCloud"')
+        assert wordcloud_idx > 0
+        snippet = src[wordcloud_idx: wordcloud_idx + 400]
+        assert "seriesField" in snippet and "nameField" in snippet, (
+            "normalizeSpec wordCloud handler must remap seriesField → nameField "
+            "for model-emitted specs like {seriesField:'word', valueField:'weight'}."
+        )
+
     # ── linearProgress ────────────────────────────────────────────────────────
     def test_linearprogress_categoryfield_remapped_to_yfield(self):
         """linearProgress: model emits categoryField; must become yField.
@@ -1019,4 +1029,52 @@ class TestNormalizeSpecPieDonut:
         snippet = src[pie_idx: pie_idx + 600]
         assert "opacity" in snippet, (
             "normalizeSpec must set opacity on the pie mark style."
+        )
+
+
+class TestNormalizeSpecCommonChart:
+    """Guards for the simplified model-emitted common/combo chart shorthand."""
+
+    def _source(self) -> str:
+        assert VCHART_BLOCK_FILE.exists()
+        return _read(VCHART_BLOCK_FILE)
+
+    def test_common_chart_handler_exists(self):
+        src = self._source()
+        assert '"common"' in src or "'common'" in src, (
+            "normalizeSpec must handle simplified common/combo chart specs."
+        )
+
+    def test_common_chart_expands_series_array(self):
+        src = self._source()
+        common_idx = src.find('"common"')
+        assert common_idx > 0
+        snippet = src[common_idx: common_idx + 1400]
+        assert "spec.series" in snippet, (
+            "normalizeSpec common handler must expand shorthand specs into spec.series[]."
+        )
+        assert "dataId" in snippet, (
+            "normalizeSpec common handler must bind each generated series to its dataset via dataId."
+        )
+        assert "spec.axes" in snippet and '"band"' in snippet and '"linear"' in snippet, (
+            "normalizeSpec common handler must inject explicit bottom band and left "
+            "linear axes so combo charts with bar series have the required band axis."
+        )
+        assert "inferCommonSeriesType" in src, (
+            "VChartBlock.tsx must define inferCommonSeriesType() so combo shorthand "
+            "can infer bar vs line series from dataset ids like 'bar' and 'line'."
+        )
+
+    def test_common_chart_removes_invalid_top_level_fields(self):
+        src = self._source()
+        common_idx = src.find('"common"')
+        assert common_idx > 0
+        snippet = src[common_idx: common_idx + 1400]
+        assert "delete spec.yField" in snippet, (
+            "normalizeSpec common handler must delete the shorthand top-level yField "
+            "after expanding series[]."
+        )
+        assert "delete spec.seriesField" in snippet, (
+            "normalizeSpec common handler must delete shorthand seriesField when it "
+            "does not exist in the underlying datasets."
         )

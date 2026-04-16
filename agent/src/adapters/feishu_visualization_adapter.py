@@ -25,9 +25,103 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
     def channel(self) -> str:
         return "feishu"
 
+    @staticmethod
+    def _infer_common_series_type(data_id: str, index: int) -> str:
+        lowered = data_id.lower()
+        if "line" in lowered:
+            return "line"
+        if "area" in lowered:
+            return "area"
+        if "scatter" in lowered:
+            return "scatter"
+        if "pie" in lowered:
+            return "pie"
+        if "bar" in lowered or "column" in lowered:
+            return "bar"
+        return "bar" if index == 0 else "line"
+
     def sanitize_chart_spec(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         """Coerce common LLM-generated VChart spec mistakes into valid shapes."""
         normalized = dict(spec)
+
+        if normalized.get("type") == "radar":
+            if normalized.get("xField") and not normalized.get("categoryField"):
+                normalized["categoryField"] = normalized.pop("xField")
+            if normalized.get("yField") and not normalized.get("valueField"):
+                normalized["valueField"] = normalized.pop("yField")
+
+        if normalized.get("type") == "wordCloud":
+            if normalized.get("categoryField") and not normalized.get("nameField"):
+                normalized["nameField"] = normalized.pop("categoryField")
+            if normalized.get("seriesField") and not normalized.get("nameField"):
+                normalized["nameField"] = normalized.pop("seriesField")
+
+        if normalized.get("type") == "circularProgress" and not normalized.get("categoryField"):
+            normalized["categoryField"] = "_label"
+            data = normalized.get("data")
+            if isinstance(data, list):
+                for dataset in data:
+                    if not isinstance(dataset, dict):
+                        continue
+                    values = dataset.get("values")
+                    if isinstance(values, list):
+                        dataset["values"] = [
+                            {"_label": "progress", **value} if isinstance(value, dict) else value
+                            for value in values
+                        ]
+
+        if normalized.get("type") == "pie" and normalized.get("isDonut") is True:
+            normalized.setdefault("innerRadius", 0.5)
+            normalized.setdefault("outerRadius", 0.8)
+
+        if normalized.get("type") == "pie":
+            pie = normalized.get("pie")
+            if not isinstance(pie, dict):
+                pie = {}
+            style = pie.get("style")
+            if not isinstance(style, dict):
+                style = {}
+            style.setdefault("fillOpacity", 1)
+            style.setdefault("opacity", 1)
+            pie["style"] = style
+            normalized["pie"] = pie
+
+        if normalized.get("type") == "common" and not isinstance(normalized.get("series"), list):
+            data = normalized.get("data")
+            x_field = normalized.get("xField")
+            y_fields = normalized.get("yField")
+            if isinstance(data, list) and isinstance(x_field, str):
+                y_field_list = y_fields if isinstance(y_fields, list) else []
+                series: List[Dict[str, Any]] = []
+                for index, dataset in enumerate(data):
+                    if not isinstance(dataset, dict):
+                        continue
+                    data_id = str(dataset.get("id") or f"series_{index + 1}")
+                    values = dataset.get("values")
+                    first_value = values[0] if isinstance(values, list) and values else {}
+                    inferred_y_field = None
+                    if index < len(y_field_list) and isinstance(y_field_list[index], str):
+                        inferred_y_field = y_field_list[index]
+                    elif isinstance(first_value, dict):
+                        inferred_y_field = next((k for k in first_value.keys() if k != x_field), "value")
+                    else:
+                        inferred_y_field = "value"
+                    series.append({
+                        "type": self._infer_common_series_type(data_id, index),
+                        "dataId": data_id,
+                        "xField": x_field,
+                        "yField": inferred_y_field,
+                    })
+                if series:
+                    normalized["series"] = series
+                    if not isinstance(normalized.get("axes"), list) or not normalized.get("axes"):
+                        normalized["axes"] = [
+                            {"orient": "bottom", "type": "band"},
+                            {"orient": "left", "type": "linear"},
+                        ]
+                    normalized.pop("yField", None)
+                    normalized.pop("seriesField", None)
+
         if "title" in normalized:
             title = normalized["title"]
             if isinstance(title, str):
