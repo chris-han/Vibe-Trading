@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.ui_services import expand_artifact_markdown
+
 logger = logging.getLogger(__name__)
 
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
@@ -151,7 +153,9 @@ class SessionService:
         Returns:
             The newly created Session.
         """
-        session = Session(title=title, config=config or {})
+        next_config = dict(config or {})
+        next_config.setdefault("channel", "web")
+        session = Session(title=title, config=next_config)
         self.store.create_session(session)
         self.event_bus.emit(session.session_id, "session.created", {"session_id": session.session_id, "title": title})
         return session
@@ -364,7 +368,46 @@ class SessionService:
 
     def get_messages(self, session_id: str, limit: int = 100) -> list[Message]:
         """Return the message history."""
-        return self.store.get_messages(session_id, limit)
+        messages = self.store.get_messages(session_id, limit)
+        expanded: list[Message] = []
+        attempt_run_dirs: dict[str, Path] = {}
+
+        for msg in messages:
+            if msg.role != "assistant" or not msg.content or not msg.linked_attempt_id:
+                expanded.append(msg)
+                continue
+
+            run_dir = attempt_run_dirs.get(msg.linked_attempt_id)
+            if run_dir is None:
+                attempt = self.store.get_attempt(session_id, msg.linked_attempt_id)
+                if attempt and attempt.run_dir:
+                    candidate = Path(attempt.run_dir)
+                    if candidate.exists():
+                        run_dir = candidate
+                        attempt_run_dirs[msg.linked_attempt_id] = candidate
+
+            if run_dir is None:
+                expanded.append(msg)
+                continue
+
+            content = expand_artifact_markdown(msg.content, run_dir)
+            if content == msg.content:
+                expanded.append(msg)
+                continue
+
+            expanded.append(
+                Message(
+                    message_id=msg.message_id,
+                    session_id=msg.session_id,
+                    role=msg.role,
+                    content=content,
+                    created_at=msg.created_at,
+                    linked_attempt_id=msg.linked_attempt_id,
+                    metadata=msg.metadata,
+                )
+            )
+
+        return expanded
 
     def get_events(self, session_id: str, limit: int = 1000) -> list[SessionEvent]:
         """Return canonical session events."""

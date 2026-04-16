@@ -45,6 +45,13 @@ class SessionStore:
     def _events_file(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "events.jsonl"
 
+    def _session_channel(self, session_id: str) -> Optional[str]:
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        channel = session.config.get("channel") if isinstance(session.config, dict) else None
+        return str(channel) if channel else None
+
     def _attempt_dir(self, session_id: str, attempt_id: str) -> Path:
         return self._session_dir(session_id) / "attempts" / attempt_id
 
@@ -138,6 +145,9 @@ class SessionStore:
 
     def append_event(self, event: SessionEvent) -> None:
         """Append a canonical event to the session event log."""
+        channel = self._session_channel(event.session_id)
+        if channel:
+            event.metadata = {**(event.metadata or {}), "channel": channel}
         path = self._events_file(event.session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
@@ -162,6 +172,9 @@ class SessionStore:
         Args:
             message: Message to append.
         """
+        channel = self._session_channel(message.session_id)
+        if channel and "channel" not in message.metadata:
+            message.metadata = {**message.metadata, "channel": channel}
         self.append_event(
             SessionEvent(
                 session_id=message.session_id,

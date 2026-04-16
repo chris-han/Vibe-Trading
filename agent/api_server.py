@@ -309,6 +309,7 @@ class SessionResponse(BaseModel):
     session_id: str
     title: str
     status: str
+    channel: Optional[str] = None
     created_at: str
     updated_at: str
     last_attempt_id: Optional[str] = None
@@ -1081,6 +1082,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
         session_id=session.session_id,
         title=session.title,
         status=session.status.value,
+        channel=(session.config or {}).get("channel"),
         created_at=session.created_at,
         updated_at=session.updated_at,
         last_attempt_id=session.last_attempt_id,
@@ -1100,6 +1102,7 @@ async def list_sessions(request: Request, limit: int = Query(50, ge=1, le=200)):
             session_id=s.session_id,
             title=s.title,
             status=s.status.value,
+            channel=(s.config or {}).get("channel"),
             created_at=s.created_at,
             updated_at=s.updated_at,
             last_attempt_id=s.last_attempt_id,
@@ -1122,6 +1125,7 @@ async def get_session(session_id: str, request: Request):
         session_id=session.session_id,
         title=session.title,
         status=session.status.value,
+        channel=(session.config or {}).get("channel"),
         created_at=session.created_at,
         updated_at=session.updated_at,
         last_attempt_id=session.last_attempt_id,

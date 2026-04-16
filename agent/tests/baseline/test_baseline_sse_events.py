@@ -67,10 +67,11 @@ class TestBaselineSessionEvents:
         """create_session() emits 'session.created' with session_id."""
         cap = EventCapture()
         svc = _make_service(cap, tmp_path)
-        svc.create_session(title="test")
+        session = svc.create_session(title="test")
         assert "session.created" in cap.types()
         p = cap.data_for("session.created")[0]
         assert "session_id" in p
+        assert session.config["channel"] == "web"
 
     def test_message_received_event(self, tmp_path):
         """send_message() emits 'message.received' with message_id, role, content."""

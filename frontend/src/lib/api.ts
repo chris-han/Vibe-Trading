@@ -59,7 +59,10 @@ export const api = {
   getRun: (id: string) => request<RunData>(`/runs/${id}`),
   getRunCode: (id: string) => request<Record<string, string>>(`/runs/${id}/code`),
   listSessions: () => request<SessionItem[]>("/sessions"),
-  createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
+  createSession: (title?: string) => request<SessionItem>("/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: title || "", config: { channel: "web" } }),
+  }),
   deleteSessions: (session_ids: string[]) => request<{ status: string; deleted: string[]; missing: string[] }>("/sessions/batch-delete", {
     method: "POST",
     body: JSON.stringify({ session_ids }),
@@ -196,6 +199,7 @@ export interface SessionItem {
   session_id: string;
   title?: string;
   status?: string;
+  channel?: string;
   created_at?: string;
   updated_at?: string;
   last_attempt_id?: string;

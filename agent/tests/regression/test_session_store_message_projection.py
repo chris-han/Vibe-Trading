@@ -59,3 +59,49 @@ def test_get_messages_not_truncated_by_delta_events(tmp_path):
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[0].content == "美股宏观分析"
     assert messages[1].content == "最终回答"
+
+
+def test_append_message_persists_session_channel_in_message_and_event_metadata(tmp_path):
+    from src.session.models import Message, Session
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=tmp_path)
+    session = Session(session_id="sess_web_1", title="Web chat", config={"channel": "web"})
+    store.create_session(session)
+
+    store.append_message(
+        Message(
+            message_id="assistant_1",
+            session_id=session.session_id,
+            role="assistant",
+            content="chart output",
+        )
+    )
+
+    messages = store.get_messages(session.session_id, limit=10)
+    events = store.get_events(session.session_id, limit=10)
+
+    assert messages[0].metadata["channel"] == "web"
+    assert events[0].metadata["channel"] == "web"
+
+
+def test_append_event_uses_session_channel_metadata_for_non_message_events(tmp_path):
+    from src.session.models import Session, SessionEvent, SessionEventType
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=tmp_path)
+    session = Session(session_id="sess_feishu_1", title="Feishu chat", config={"channel": "feishu"})
+    store.create_session(session)
+
+    store.append_event(
+        SessionEvent(
+            session_id=session.session_id,
+            event_type=SessionEventType.TOOL_RESULT.value,
+            tool="render_chart",
+            status="ok",
+        )
+    )
+
+    events = store.get_events(session.session_id, limit=10)
+
+    assert events[0].metadata["channel"] == "feishu"

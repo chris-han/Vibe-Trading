@@ -64,6 +64,32 @@ def load_json_file(path: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
+def expand_artifact_markdown(text: str, run_dir: Path) -> str:
+    """Inline a referenced markdown artifact when the current text is only a pointer.
+
+    This supports assistant replies such as "saved to artifacts/chart_showcase.md"
+    so the web UI can render the actual markdown/chart content without a second
+    explicit fetch step.
+    """
+    if not text:
+        return text
+    if "```echarts" in text or "```mermaid" in text or "```chart" in text or "```vchart" in text:
+        return text
+
+    matches = _ARTIFACT_MD_PATTERN.findall(text)
+    for relative_path in matches:
+        artifact_path = run_dir / "artifacts" / Path(relative_path).name
+        if not artifact_path.exists():
+            continue
+        try:
+            artifact_text = artifact_path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            continue
+        if artifact_text:
+            return artifact_text
+    return text
+
+
 def load_csv_records(path: Path) -> List[Dict[str, Any]]:
     """Load CSV rows as dictionaries.
 
@@ -161,23 +187,6 @@ def load_run_report(run_dir: Path) -> Optional[str]:
     Returns:
         Markdown/text report content when available.
     """
-    def maybe_expand_artifact_markdown(text: str) -> str:
-        if "```echarts" in text or "```mermaid" in text or "```chart" in text or "```vchart" in text:
-            return text
-
-        matches = _ARTIFACT_MD_PATTERN.findall(text)
-        for relative_path in matches:
-            artifact_path = run_dir / "artifacts" / Path(relative_path).name
-            if not artifact_path.exists():
-                continue
-            try:
-                artifact_text = artifact_path.read_text(encoding="utf-8", errors="replace").strip()
-            except Exception:
-                continue
-            if artifact_text:
-                return artifact_text
-        return text
-
     for file_name in ("report.md", "summary.md", "answer.md", "final_report.md", "final_report.txt"):
         path = run_dir / file_name
         if not path.exists():
@@ -187,7 +196,7 @@ def load_run_report(run_dir: Path) -> Optional[str]:
         except Exception:
             continue
         if text:
-            return maybe_expand_artifact_markdown(text)
+            return expand_artifact_markdown(text, run_dir)
 
     request_data = load_json_file(run_dir / "req.json") or {}
     context = request_data.get("context") or {}
@@ -215,8 +224,8 @@ def load_run_report(run_dir: Path) -> Optional[str]:
             metadata = event.get("metadata") or {}
             inner_meta = metadata.get("metadata") or {}
             if inner_meta.get("run_id") == run_dir.name:
-                return maybe_expand_artifact_markdown(content)
-            fallback = maybe_expand_artifact_markdown(content)
+                return expand_artifact_markdown(content, run_dir)
+            fallback = expand_artifact_markdown(content, run_dir)
     except Exception:
         return None
 
