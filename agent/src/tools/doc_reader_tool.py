@@ -28,6 +28,21 @@ _BACKEND_DIR = Path(__file__).resolve().parents[2]
 _UPLOADS_DIR = _BACKEND_DIR / "uploads"
 
 
+def _get_document_search_roots() -> tuple[Path, Path]:
+    """Return the active sessions/uploads roots for document lookup.
+
+    Prefer the runtime-scoped data root so workspace users only resolve
+    uploaded files from their own agent storage. Fall back to the repo-local
+    backend directories when runtime helpers are unavailable.
+    """
+    try:
+        from runtime_env import get_sessions_dir, get_uploads_dir
+
+        return get_sessions_dir(), get_uploads_dir()
+    except Exception:
+        return _BACKEND_DIR / "sessions", _UPLOADS_DIR
+
+
 def _get_ocr():
     """Lazily load the RapidOCR engine (first call takes ~1-2s)."""
     global _ocr_engine
@@ -151,12 +166,16 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
 
 
 def _resolve_pdf_path(file_path: str) -> Path:
-    """Resolve a PDF path against common workspace and upload locations.
+    """Resolve a PDF path against the active runtime upload locations.
 
     The tool receives either an absolute path or a path relative to the
     current workspace. For uploaded PDFs, users often refer to the original
     filename or a path under ``uploads/`` even when the runtime stores files
     under a session-scoped ``sessions/<session_id>/uploads`` directory.
+
+    Relative lookups are intentionally constrained to the active runtime's
+    uploads storage so document discovery cannot wander into unrelated repo,
+    desktop, or host-mounted locations.
     """
     raw_path = Path(file_path).expanduser()
     candidates: list[Path] = []
@@ -164,18 +183,18 @@ def _resolve_pdf_path(file_path: str) -> Path:
     if raw_path.is_absolute():
         candidates.append(raw_path)
     else:
-        session_matches = sorted((_BACKEND_DIR / "sessions").glob(f"*/uploads/{raw_path.name}"))
-        candidates.extend(
-            [
-                Path.cwd() / raw_path,
-                Path.cwd() / "agent" / raw_path,
-                Path.cwd() / "agent" / "uploads" / raw_path.name,
-                Path.cwd() / "uploads" / raw_path.name,
-                _BACKEND_DIR / raw_path,
-                _UPLOADS_DIR / raw_path.name,
-                *session_matches,
-            ]
-        )
+        sessions_dir, uploads_dir = _get_document_search_roots()
+        upload_relative = raw_path
+        if raw_path.parts[:1] == ("uploads",):
+            upload_relative = Path(*raw_path.parts[1:]) if len(raw_path.parts) > 1 else Path(raw_path.name)
+
+        session_matches = sorted(sessions_dir.glob(f"*/uploads/{raw_path.name}"))
+        if str(upload_relative) not in {"", "."}:
+            candidates.append(uploads_dir / upload_relative)
+        candidates.extend([
+            uploads_dir / raw_path.name,
+            *session_matches,
+        ])
 
     seen: set[str] = set()
     for candidate in candidates:

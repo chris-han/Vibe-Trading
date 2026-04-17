@@ -31,6 +31,8 @@ _mock_run_agent = _types.ModuleType("run_agent")
 _mock_run_agent.AIAgent = MagicMock  # replaced per-test via patch
 sys.modules.setdefault("run_agent", _mock_run_agent)
 
+from src import runtime_prompt_policy
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -408,14 +410,10 @@ class TestHermesSessionEvents:
 
         _run(_t())
         prompt = captured_kwargs.get("ephemeral_system_prompt", "")
-        assert "setup_backtest_run(config_json=..., signal_engine_py=...)" in prompt
-        assert "Never ask the user to manually create config.json" in prompt
-        assert "prefer creating a fresh run with setup_backtest_run(...)" in prompt
-        assert "Never invent a PDF filename" in prompt
-        assert "read_url or browser tools" in prompt
-        assert "Do NOT fetch market data with curl" in prompt
-        assert "Prefer writing one focused Python script with write_file, then execute it with bash." in prompt
-        assert "Only write config.json or code/signal_engine.py when intentionally updating the active backtest run." in prompt
+        assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
+        assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
+        assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
+        assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
 
     def test_run_with_agent_scopes_safe_write_root_to_run_dir(self, tmp_path):
         """Session runtime must allow edits anywhere inside the active backtest run."""
@@ -813,9 +811,6 @@ class TestHermesSwarmWorkerEvents:
 
         assert result.status == "completed"
         prompt = captured_kwargs.get("ephemeral_system_prompt", "")
-        assert "setup_backtest_run(config_json=..., signal_engine_py=...)" in prompt
-        assert "Never ask the user to create `config.json`" in prompt
-        assert "prefer a fresh `setup_backtest_run(...)` with corrected code" in prompt
-        assert "Never invent a PDF filename" in prompt
-        assert "read_url or browser tools" in prompt
-        assert "Worker file tools only write inside the current task artifact directory" in prompt
+        assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
+        assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
+        assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt

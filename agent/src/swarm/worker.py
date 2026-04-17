@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Callable
 
 from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
+from src.runtime_prompt_policy import (
+    BACKTEST_WORKFLOW_PROMPT,
+    DOCUMENT_WORKFLOW_PROMPT,
+    MARKET_DATA_WORKFLOW_PROMPT,
+)
 from src.swarm.models import (
     SwarmAgentSpec,
     SwarmEvent,
@@ -18,24 +23,6 @@ from src.swarm.models import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_ITERATIONS = 50
-_BACKTEST_WORKFLOW_HINT = (
-    "- For any new backtest, call `setup_backtest_run(...)` before `backtest(run_dir=...)`.\n"
-    "- If generated strategy code is wrong, prefer a fresh `setup_backtest_run(...)` before retrying.\n"
-)
-
-_DOCUMENT_WORKFLOW_HINT = (
-    "- If the task includes an uploaded PDF reference, call `read_document(file_path=...)` before summarizing the document.\n"
-    "- Never invent a PDF filename; only call `read_document` when the exact path is known.\n"
-    "- If no local path is available, use read_url or browser tools to fetch the report from the source site.\n"
-    "- If no local path is available, use `read_url` or browser tools to fetch the report from the source site.\n"
-    "- Prefer targeted page ranges first for long filings or reports.\n"
-    "- OCR is feature-flagged through `HERMES_ENABLE_PDF_OCR` and may be unavailable.\n"
-)
-
-_MARKET_DATA_WORKFLOW_HINT = (
-    "- `execute_code` is forbidden in this runtime.\n"
-    "- **NEVER use curl/requests/urllib to fetch market data.** Call `load_skill('yfinance')` first, then write a Python script.\n"
-)
 
 
 def _normalize_usage(raw: dict) -> dict:
@@ -182,12 +169,12 @@ def build_worker_prompt(
         "**Phase 1 — Plan (0 tool calls):** Before calling any tool, state your plan in 3-5 bullet points.\n\n"
         "**Phase 2 — Execute (≤15 tool calls):**\n"
         "- `load_skill` first to get data access methods and analysis patterns.\n"
-        f"{_MARKET_DATA_WORKFLOW_HINT}"
+        f"{MARKET_DATA_WORKFLOW_PROMPT}"
         "- Use the runtime-provided tools and cwd for any execution flow.\n"
         "- Install packages with `./.venv/bin/python -m pip`. Do NOT call `pip` or `pip3` directly.\n"
         "- Do NOT fetch data with curl/requests. Use the patterns from load_skill (yfinance, OKX API via Python).\n"
-        f"{_BACKTEST_WORKFLOW_HINT}"
-        f"{_DOCUMENT_WORKFLOW_HINT}"
+        f"{BACKTEST_WORKFLOW_PROMPT}"
+        f"{DOCUMENT_WORKFLOW_PROMPT}"
         "- If a scripted step fails, inspect the error and retry with a corrected tool flow. Max 2 retries per script.\n\n"
         "**Phase 3 — Summarize (0 tool calls):**\n"
         "- Write your final findings as a concise markdown summary directly in your response.\n"

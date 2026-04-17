@@ -24,6 +24,8 @@ read_document(file_path="uploads/research.pdf", pages="1,3,15-20")
 
 **Forbidden**: do not run a Python script from bash to read PDFs. Call the tool directly.
 
+If the user mentions an uploaded report but does not provide the filename, inspect only the current workspace upload area for candidate PDFs. Do not search Desktop, Downloads, `/mnt`, or other host filesystem locations for uploaded documents.
+
 ## Return Format
 
 ```json

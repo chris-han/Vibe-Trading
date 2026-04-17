@@ -16,81 +16,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.runtime_prompt_policy import build_session_runtime_prompt
 from src.ui_services import expand_artifact_markdown
 
 logger = logging.getLogger(__name__)
 
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
-
-_BACKTEST_WORKFLOW_PROMPT = (
-    "Backtest workflow rules:\n"
-    "- If the user asks for a new backtest or strategy test, do NOT call backtest(run_dir=...) first.\n"
-    "- First call load_skill(\"strategy-generate\") when you need the SignalEngine contract.\n"
-    "- Only after setup_backtest_run succeeds, call backtest(run_dir=...).\n"
-    "- If a backtest fails because generated strategy code is wrong, prefer a fresh setup_backtest_run(...) before retrying.\n"
-)
-
-_DOCUMENT_WORKFLOW_PROMPT = (
-    "Document workflow rules:\n"
-    "- If the user provides an uploaded PDF reference, prefer read_document(file_path=...) to extract it.\n"
-    "- Never invent a PDF filename; only call read_document when the exact local path is known.\n"
-    "- If no local path is available, use read_url or browser tools to fetch the report from the source site.\n"
-    "- Prefer reading the first relevant pages first with pages='1-5' when the document is long.\n"
-    "- Treat low-text pages as scanned/image pages; OCR is optional and controlled by HERMES_ENABLE_PDF_OCR.\n"
-    "- Do not claim you cannot read PDFs when read_document is available.\n"
-)
-
-_MARKET_DATA_WORKFLOW_PROMPT = (
-    "Market data workflow rules:\n"
-    "- For finance or research tasks, call load_skill first to get approved data access methods and symbol conventions.\n"
-    "- execute_code is forbidden in this runtime.\n"
-    "- Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.\n"
-    "- Use the project-supported Python patterns from load_skill (for example yfinance or OKX API helpers).\n"
-    "- Use the repo-local interpreter via ./.venv/bin/python for script execution.\n"
-    "- For package installs, use ./.venv/bin/python -m pip. Do NOT call pip/pip3 directly.\n"
-    "- Do NOT embed long Python programs directly in bash commands.\n"
-    "- If an external endpoint or symbol looks suspicious, validate it against the loaded skill before using it.\n"
-)
-
-_OUTPUT_FORMAT_PROMPT = (
-    "Output format rules:\n"
-    "- Prefer Markdown, Mermaid, and structured chart blocks for rich visual output.\n"
-    "- Render tables as Markdown pipe-tables.\n"
-    "- Use Mermaid for diagrams and flowcharts.\n"
-    "- Use echarts blocks for charts in the web UI.\n"
-    "- For Feishu or other constrained channels, follow the channel-specific chart rules instead of the web rule.\n"
-    "- If unsure, fall back to a Markdown table rather than emitting a chart fence.\n"
-    "- Never use ANSI art or terminal box-drawing characters.\n"
-)
-
-
-def _load_output_format_skill(channel: str) -> str:
-    """Load the channel-appropriate output-format skill body from its SKILL.md file.
-
-    Reads directly from the skills directory instead of using SkillsLoader so
-    that only the one relevant file is touched at agent bootstrap time.
-
-    Args:
-        channel: Session channel identifier (e.g. "feishu" or "" for web UI).
-
-    Returns:
-        Skill body text (frontmatter stripped), or an empty string on failure.
-    """
-    skill_name = "output-format-feishu" if channel == "feishu" else "output-format-web"
-    skills_dir = Path(__file__).resolve().parents[1] / "skills"
-    skill_file = skills_dir / skill_name / "SKILL.md"
-    try:
-        text = skill_file.read_text(encoding="utf-8")
-    except Exception:
-        logger.warning("output-format skill not found: %s", skill_file)
-        return ""
-    # Strip YAML frontmatter (--- ... ---)
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            text = text[end + 4:]
-    return text.strip()
 
 
 from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
@@ -932,6 +864,7 @@ class SessionService:
             from tools.terminal_tool import register_task_env_overrides
             register_task_env_overrides(sid, {
                 "cwd": str(file_root),
+                "safe_read_root": str(file_root),
                 "safe_write_root": str(file_root),
             })
         except Exception:
@@ -960,14 +893,10 @@ class SessionService:
             tool_gen_callback=_on_tool_generation,
             reasoning_callback=_on_reasoning,
             stream_delta_callback=_on_delta,
-            ephemeral_system_prompt=(
-                f"Run directory: {run_dir}\n"
-                f"Session: {sid}\n"
-                f"{_BACKTEST_WORKFLOW_PROMPT}"
-                f"{_DOCUMENT_WORKFLOW_PROMPT}"
-                f"{_MARKET_DATA_WORKFLOW_PROMPT}"
-                f"{_OUTPUT_FORMAT_PROMPT}"
-                f"{_load_output_format_skill((self.store.get_session(sid) or Session()).config.get('channel', ''))}\n"
+            ephemeral_system_prompt=build_session_runtime_prompt(
+                str(run_dir),
+                sid,
+                (self.store.get_session(sid) or Session()).config.get("channel", ""),
             ),
             skip_context_files=True,
             **agent_kwargs,
@@ -986,6 +915,7 @@ class SessionService:
             from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
             register_task_env_overrides(sid, {
                 "cwd": str(run_dir / "artifacts"),
+                "safe_read_root": str(file_root),
                 "safe_write_root": str(run_dir),
             })
             _hermes_overrides_set = True

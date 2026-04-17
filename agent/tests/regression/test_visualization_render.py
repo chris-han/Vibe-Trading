@@ -1,6 +1,6 @@
 """Regression tests for visualization rendering.
 
-Covers the output formats declared in _OUTPUT_FORMAT_PROMPT and produced
+Covers the output formats declared in OUTPUT_FORMAT_PROMPT and produced
 throughout the agent/ codebase:
 
   1. ECharts JSON blocks (```echarts```) – rendered by the frontend ECharts JS
@@ -26,7 +26,7 @@ if str(AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(AGENT_ROOT))
 
 from src.adapters.factory import get_feishu_visualization_adapter  # noqa: E402
-from src.session.service import _OUTPUT_FORMAT_PROMPT  # noqa: E402
+from src.runtime_prompt_policy import OUTPUT_FORMAT_PROMPT  # noqa: E402
 
 
 _FEISHU_ADAPTER = get_feishu_visualization_adapter()
@@ -503,18 +503,18 @@ class TestMarkdownPipeTable:
 
 class TestOutputFormatPrompt:
     def test_prompt_requires_markdown_tables(self):
-        assert "Markdown pipe-tables" in _OUTPUT_FORMAT_PROMPT
+        assert "Markdown pipe-tables" in OUTPUT_FORMAT_PROMPT
 
     def test_prompt_requires_mermaid_for_diagrams(self):
-        p = _OUTPUT_FORMAT_PROMPT
+        p = OUTPUT_FORMAT_PROMPT
         assert "mermaid" in p.lower()
         assert "flowcharts" in p.lower() or "diagrams" in p.lower()
 
     def test_prompt_requires_echarts_for_web_charts(self):
-        p = _OUTPUT_FORMAT_PROMPT
+        p = OUTPUT_FORMAT_PROMPT
         assert "echarts" in p.lower()
         assert "use echarts blocks for charts in the web ui." in p.lower()
 
     def test_prompt_forbids_ansi_art(self):
-        p = _OUTPUT_FORMAT_PROMPT
+        p = OUTPUT_FORMAT_PROMPT
         assert "ANSI" in p or "ASCII" in p
