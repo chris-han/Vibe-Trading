@@ -37,8 +37,9 @@ _MARKET_DATA_WORKFLOW_RULES = (
     "execute_code is forbidden in this runtime.",
     "Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.",
     "Use the project-supported Python patterns from load_skill (for example yfinance or OKX API helpers).",
-    "Use the repo-local interpreter via ./.venv/bin/python for script execution.",
-    "For package installs, use ./.venv/bin/python -m pip. Do NOT call pip/pip3 directly.",
+    "For interactive session terminal commands, use python3 from the preconfigured session environment for script execution.",
+    "Do NOT assume .venv exists under the current run directory or use host absolute interpreter paths.",
+    "For package installs, use python3 -m pip. Do NOT call pip/pip3 directly.",
     "Do NOT embed long Python programs directly in bash commands.",
     "If an external endpoint or symbol looks suspicious, validate it against the loaded skill before using it.",
 )

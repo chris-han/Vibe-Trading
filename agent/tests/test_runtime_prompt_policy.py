@@ -28,6 +28,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
+    assert "use python3 from the preconfigured session environment" in prompt
+    assert "Do NOT assume .venv exists under the current run directory" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
     assert prompt.endswith("skill-body-for:web\n")
 
