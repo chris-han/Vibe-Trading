@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback, useDeferredValue, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowUp, Loader2, ArrowDown, CheckCircle2, Square, Plus, Paperclip, X, Users } from "lucide-react";
 import { toast } from "sonner";
@@ -14,6 +14,8 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ThinkingTimeline } from "@/components/chat/ThinkingTimeline";
 import { ConversationTimeline } from "@/components/chat/ConversationTimeline";
 import { SwarmDashboard, type SwarmAgent, type SwarmDashboardProps } from "@/components/chat/SwarmDashboard";
+import { MarkdownRenderer } from "@/components/common/MarkdownRenderer";
+import { markdownProseClass } from "@/components/common/markdownStyles";
 
 const SESSION_MESSAGES_PAGE_SIZE = 100;
 
@@ -78,6 +80,7 @@ export function Agent() {
 
   const { connect, disconnect, onStatusChange } = useSSE();
   const { t } = useI18n();
+  const deferredStreamingText = useDeferredValue(streamingText);
 
   const urlSessionId = searchParams.get("session");
 
@@ -825,9 +828,9 @@ export function Agent() {
                   </div>
                 )}
                 {streamingText && (
-                  <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed text-foreground">
-                    {streamingText}
-                    <span className="inline-block w-0.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
+                  <div className={markdownProseClass("chat")}>
+                    <MarkdownRenderer>{deferredStreamingText}</MarkdownRenderer>
+                    <span className="inline-block h-4 w-0.5 animate-pulse align-middle bg-primary ml-0.5" />
                   </div>
                 )}
                 {status === "streaming" && toolCalls.length > 0 && (() => {
