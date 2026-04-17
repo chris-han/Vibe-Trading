@@ -13,6 +13,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import shutil
 import stat
@@ -34,9 +35,12 @@ FORBIDDEN_PROMPT_PHRASES = [
 ]
 
 # Paths relative to repo root
-SERVICE_PY = Path("agent/src/session/service.py")
-HOOK_DST   = Path(".git/hooks/pre-commit")
-HOOK_SRC   = Path(".github/skills/runtime-code-sanitizer/scripts/pre-commit")
+PROMPT_SOURCE_FILES = (
+    Path("agent/src/runtime_prompt_policy.py"),
+    Path("agent/src/session/service.py"),
+)
+HOOK_DST = Path(".git/hooks/pre-commit")
+HOOK_SRC = Path(".github/skills/runtime-code-sanitizer/scripts/pre-commit")
 
 # ---------------------------------------------------------------------------
 
@@ -52,17 +56,58 @@ def _find_repo_root() -> Path:
     sys.exit("ERROR: Could not locate repository root (.git not found)")
 
 
-def _read_service(root: Path) -> str:
-    path = root / SERVICE_PY
-    if not path.exists():
-        sys.exit(f"ERROR: {SERVICE_PY} not found — run from repo root")
-    return path.read_text(encoding="utf-8")
+def _read_prompt_source(root: Path) -> tuple[Path, str]:
+    for path in PROMPT_SOURCE_FILES:
+        candidate = root / path
+        if not candidate.exists():
+            continue
+        source = candidate.read_text(encoding="utf-8")
+        if _extract_output_format_prompt(source):
+            return path, source
+    search_list = ", ".join(str(path) for path in PROMPT_SOURCE_FILES)
+    sys.exit(f"ERROR: no prompt source with OUTPUT_FORMAT_PROMPT found; checked: {search_list}")
+
+
+def _extract_from_ast(source: str) -> str:
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return ""
+
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if target.id not in {"OUTPUT_FORMAT_PROMPT", "_OUTPUT_FORMAT_PROMPT"}:
+                continue
+            try:
+                value = ast.literal_eval(node.value)
+            except Exception:
+                value = None
+            if isinstance(value, str):
+                return value
+            if (
+                isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "_format_rules"
+                and len(node.value.args) >= 2
+            ):
+                title = ast.literal_eval(node.value.args[0])
+                rules = ast.literal_eval(node.value.args[1])
+                if isinstance(title, str) and isinstance(rules, tuple) and all(isinstance(rule, str) for rule in rules):
+                    return title + ":\n" + "\n".join(f"- {rule}" for rule in rules) + "\n"
+    return ""
 
 
 def _extract_output_format_prompt(source: str) -> str:
-    """Return the string value of _OUTPUT_FORMAT_PROMPT."""
+    """Return the string value of OUTPUT_FORMAT_PROMPT or _OUTPUT_FORMAT_PROMPT."""
+    prompt = _extract_from_ast(source)
+    if prompt:
+        return prompt
     m = re.search(
-        r'_OUTPUT_FORMAT_PROMPT\s*=\s*\((.*?)\)\s*\n',
+        r'(?P<name>OUTPUT_FORMAT_PROMPT|_OUTPUT_FORMAT_PROMPT)\s*=\s*\((.*?)\)\s*\n',
         source,
         re.DOTALL,
     )
@@ -117,8 +162,11 @@ def main() -> None:
     if args.install_hook:
         install_hook(root)
 
-    source = _read_service(root)
+    source_path, source = _read_prompt_source(root)
     results = check_all(source)
+
+    print(f"Checking prompt guard in {source_path}")
+    print()
 
     passed = 0
     failed = 0
