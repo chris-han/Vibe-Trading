@@ -26,9 +26,8 @@ model:
   # max_output_length_thinking: 64000
   # # Maximum thinking/chain-of-thought length
   # max_chain_of_thought_length: 80000
-  # Default extra body params passed to Responses create (can be overridden per request)
-  extra_body_default:
-    enable_thinking: false
+  # Do not force provider-specific extra_body defaults here.
+  # Hermes' runtime/provider handling is authoritative for DashScope requests.
 
 agent:
   reasoning_effort: medium
