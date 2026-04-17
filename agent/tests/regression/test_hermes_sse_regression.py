@@ -854,6 +854,54 @@ class TestHermesSessionEvents:
 
         _run(_t())
 
+    def test_structured_research_reply_persists_report_without_reportable_tool(self, tmp_path):
+        """Long-form structured research replies should persist report.md even without read_document."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="pypl前景是否现在值得买")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "structured-research"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        final_response = (
+            "# PayPal 投资价值分析报告\n\n"
+            "## 核心数据概览\n\n"
+            "| 指标 | 数值 | 评估 |\n"
+            "|------|------|------|\n"
+            "| 当前价格 | $51.14 | 低位区间 |\n\n"
+            "## 与历史估值对比\n\n"
+            "| 时期 | 市盈率 | 背景 |\n"
+            "|------|--------|------|\n"
+            "| 2020 年高点 | ~80x | 疫情电商繁荣 |\n"
+            "| 当前 | 9.45x | 接近历史低位 |\n\n"
+            "## 操作策略\n\n"
+            "| 档位 | 区间 | 触发条件 | 动作 | 风险控制 |\n"
+            "|------|------|----------|------|----------|\n"
+            "| 第一档 | $45-48 | 回踩 50 日均线 | 分批买入 | 跌破 $44 减仓 |\n"
+        )
+
+        def _agent_factory(*args, **kwargs):
+            inst = MagicMock()
+            inst.run_conversation.return_value = {"final_response": final_response, "status": "success"}
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["has_run_artifact"] is True
+                assert (run_dir / "report.md").read_text(encoding="utf-8") == final_response
+
+        _run(_t())
+
     def test_feishu_run_strips_plain_fenced_box_drawing_block_from_final_response(self, tmp_path):
         """Feishu final replies must not persist plain fenced box-drawing layouts."""
         from src.session.models import Attempt

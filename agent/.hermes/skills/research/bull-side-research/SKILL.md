@@ -337,7 +337,7 @@ if profit_margin and profit_margin > 0.3:
 ## 操作策略 / Action Plan
 - ✅ Use emoji-led Markdown bullets for entry zone, add zone, stop loss, and target prices; or
 - 📋 Use a Markdown pipe-table with columns such as `Tier | Price Zone | Trigger | Action | Risk Note`
-- Never render this section as an ASCII card, terminal-style box, box-drawing frame, or plain fenced code block.
+- Make Markdown the default for this section. Keep it as standard bullets or a pipe-table, not as a separate visual layout.
 ```
 
 ## Common Pitfalls

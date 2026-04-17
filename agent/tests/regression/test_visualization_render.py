@@ -526,18 +526,18 @@ class TestOutputFormatPrompt:
 
 
 class TestReportSkillActionPlanFormatting:
-    def test_shared_report_skill_forbids_ascii_action_cards(self):
+    def test_shared_report_skill_defaults_action_plans_to_markdown(self):
         text = _REPORT_GENERATE_SKILL.read_text(encoding="utf-8")
         assert "操作策略 / Action Plan" in text
-        assert "Never render this section as an ASCII card" in text
+        assert "Make Markdown the default for this section" in text
 
     def test_research_and_valuation_skills_require_markdown_action_plans(self):
         for skill_file in (_BULL_REPORT_SKILL, _BEAR_REPORT_SKILL, _VALUATION_SKILL):
             text = skill_file.read_text(encoding="utf-8")
             assert "操作策略 / Action Plan" in text
-            assert "plain fenced code block" in text or "Markdown pipe-table" in text
+            assert "Markdown pipe-table" in text or "Markdown the default" in text
 
-    def test_web_output_format_forbids_ascii_strategy_layouts(self):
+    def test_web_output_format_defaults_strategy_layouts_to_markdown(self):
         text = _WEB_OUTPUT_FORMAT_SKILL.read_text(encoding="utf-8")
         assert "recommendation, action-plan, and `操作策略` sections" in text
-        assert "ASCII cards" in text
+        assert "Markdown bullets or Markdown pipe-tables by default" in text

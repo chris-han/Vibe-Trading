@@ -61,7 +61,7 @@ OUTPUT_FORMAT_PROMPT = _format_rules(
         "Use echarts blocks for charts in the web UI.",
         "For Feishu or other constrained channels, follow the channel-specific chart rules instead of the web rule.",
         "If unsure, fall back to a Markdown table rather than emitting a chart fence.",
-        "Never use ANSI art or terminal box-drawing characters.",
+        "Keep visual output Markdown-native so it renders cleanly across channels.",
     ),
 )
 

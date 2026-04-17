@@ -6,18 +6,18 @@ category: tool
 
 # Output Format Rules (Web UI)
 
-- Render all tables using Markdown pipe-table syntax, never ANSI or terminal box-drawing characters.
-- Never use plain fenced code blocks (no language tag) to display data, metrics, or key-value information. Plain code blocks are reserved for actual code (Python, SQL, bash, etc.) only. Always use a Markdown pipe-table for named indicators or key-value pairs.
-- Render recommendation, action-plan, and `操作策略` sections as emoji-led Markdown bullets or Markdown pipe-tables. Never present them as ASCII cards, terminal-style box layouts, or box-drawing frames.
+- Render all tables using Markdown pipe-table syntax.
+- Display data, metrics, and key-value information in normal Markdown tables or bullets. Reserve fenced code blocks for actual code (Python, SQL, bash, etc.).
+- Render recommendation, action-plan, and `操作策略` sections as emoji-led Markdown bullets or Markdown pipe-tables by default.
 - Render flowcharts and relationship diagrams as Mermaid code blocks (` ```mermaid ... ``` `).
 - Mermaid syntax: **always open with a diagram-type keyword on the first line**, e.g. `graph TD` or `flowchart TD`. Never write `top-down`, `left-right`, or any other English direction phrase as the first line — these are not valid Mermaid syntax. Valid opening keywords: `graph TD`, `graph LR`, `flowchart TD`, `flowchart LR`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`, `erDiagram`, `gantt`, `pie`, `timeline`, `mindmap`, `gitGraph`.
 - Mermaid layout: use `TD` (top-down) orientation for most diagrams; use `LR` only when node labels are very wide.
 - Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes), keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.
 - Mermaid timeline safety: for `timeline`, write section headers as `section Label` only, not `section Label : detail`; keep event text on the same `Period : Event` line and avoid HTML like `<br>`.
-- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks (` ```echarts ... ``` ` with a valid ECharts option object); do NOT produce ASCII/ANSI chart art.
+- Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks (` ```echarts ... ``` ` with a valid ECharts option object).
 - Always perform a **self-check** to **verify** that every field name in your `series[].data` (or `xAxis.data`) is an **exact key** present in your data source.
 - For multi-series charts, prefer the **long** (tidy) format where each series has its own name and data array.
-- Never use ANSI escape codes or terminal color sequences in responses.
+- Keep visual output Markdown-native so it renders consistently in the web UI.
 
 ## ECharts Spec Rules
 

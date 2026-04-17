@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _PLAIN_CODE_FENCE_RE = re.compile(r"```[ \t]*\n(.*?)\n```", re.DOTALL)
 _BOX_DRAWING_RE = re.compile(r"[┌┐└┘├┤┬┴┼│─╭╮╰╯╞╡╔╗╚╝═║]")
+_MARKDOWN_HEADING_RE = re.compile(r"^##\s+", re.MULTILINE)
 
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
@@ -992,7 +993,10 @@ class SessionService:
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics
-        if result.get("status") == "success" and final_text and saw_reportable_tool_run:
+        should_persist_report = result.get("status") == "success" and final_text and (
+            saw_reportable_tool_run or self._looks_like_report_output(final_text)
+        )
+        if should_persist_report:
             report_dir = Path(str(result.get("run_dir") or run_dir))
             try:
                 report_dir.mkdir(parents=True, exist_ok=True)
@@ -1027,6 +1031,16 @@ class SessionService:
             base / "artifacts" / "metrics.csv",
         ]
         return any(path.exists() and path.is_file() for path in artifact_paths)
+
+    @staticmethod
+    def _looks_like_report_output(text: str) -> bool:
+        """Return whether final output is structured enough to merit report persistence."""
+        body = str(text or "").strip()
+        if len(body) < 500:
+            return False
+        heading_count = len(_MARKDOWN_HEADING_RE.findall(body))
+        has_table = "|---" in body or "|------" in body
+        return heading_count >= 2 and has_table
 
     @staticmethod
     def _convert_messages_to_history(messages: list) -> list[Dict[str, Any]]:
