@@ -21,7 +21,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
         "Run directory: /tmp/run-123\n"
         "Artifacts directory: /tmp/run-123/artifacts\n"
         "Uploads directory: /workspace/sessions/session-abc/uploads\n"
-        "Use relative paths or the virtual session paths above for terminal and file operations.\n"
+        "Use relative paths for terminal work unless you need an explicit virtual session path.\n"
+        "Use /workspace only for reading shared session inputs, and use /workspace/run only for explicit writable locations.\n"
         "Do not rely on host absolute paths.\n"
         "Session: session-abc\n"
     )
@@ -30,6 +31,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
     assert "use python3 from the preconfigured session environment" in prompt
     assert "Do NOT assume .venv exists under the current run directory" in prompt
+    assert "The terminal already starts inside the run artifacts directory" in prompt
+    assert "Do NOT cd to /workspace" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
     assert prompt.endswith("skill-body-for:web\n")
 

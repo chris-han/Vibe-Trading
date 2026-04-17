@@ -41,6 +41,9 @@ _MARKET_DATA_WORKFLOW_RULES = (
     "Do NOT assume .venv exists under the current run directory or use host absolute interpreter paths.",
     "For package installs, use python3 -m pip. Do NOT call pip/pip3 directly.",
     "Do NOT embed long Python programs directly in bash commands.",
+    "The terminal already starts inside the run artifacts directory; prefer relative paths over any cd command.",
+    "Treat /workspace as a read-only workspace alias for locating inputs. Do NOT cd to /workspace for execution.",
+    "When a command needs an explicit writable path, use /workspace/run or a relative path under the current cwd.",
     "If an external endpoint or symbol looks suspicious, validate it against the loaded skill before using it.",
 )
 
@@ -103,7 +106,8 @@ def build_session_runtime_prompt(
         f"Run directory: {visible_run_dir}\n"
         f"Artifacts directory: {visible_artifacts_dir}\n"
         f"Uploads directory: {visible_uploads_dir}\n"
-        "Use relative paths or the virtual session paths above for terminal and file operations.\n"
+        "Use relative paths for terminal work unless you need an explicit virtual session path.\n"
+        "Use /workspace only for reading shared session inputs, and use /workspace/run only for explicit writable locations.\n"
         "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"
         f"{BACKTEST_WORKFLOW_PROMPT}"
