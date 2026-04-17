@@ -743,6 +743,9 @@ class SessionService:
                 except Exception:
                     parsed_result = None
 
+                if not is_error and tool_name in self._REPORTABLE_TOOL_NAMES:
+                    saw_reportable_tool_run = True
+
                 if not is_error and parsed_result:
                     if tool_name == "setup_backtest_run":
                         saw_reportable_tool_run = True

@@ -23,7 +23,7 @@ _BACKTEST_WORKFLOW_RULES = (
 _DOCUMENT_WORKFLOW_RULES = (
     "If the user provides an uploaded PDF reference, prefer read_document(file_path=...) to extract it.",
     "Never invent a PDF filename; only call read_document when the exact local path is known.",
-    "If the filename is unknown, inspect only the current workspace upload area for candidate PDFs.",
+    "If the filename is unknown, list the Uploads directory shown above for candidate PDFs before searching elsewhere.",
     "Never search Desktop, Downloads, /mnt, or other host filesystem locations for uploaded documents.",
     "If no local path is available, use read_url or browser tools to fetch the report from the source site.",
     "Prefer reading the first relevant pages first with pages='1-5' when the document is long.",
@@ -95,10 +95,12 @@ def build_session_runtime_prompt(
     visible_workspace_root = display_workspace_root or SESSION_VIRTUAL_WORKSPACE_ROOT
     visible_run_dir = display_run_dir or run_dir
     visible_artifacts_dir = display_artifacts_dir or f"{visible_run_dir.rstrip('/')}/artifacts"
+    visible_uploads_dir = f"{visible_workspace_root.rstrip('/')}/sessions/{session_id}/uploads"
     return (
         f"Session workspace: {visible_workspace_root}\n"
         f"Run directory: {visible_run_dir}\n"
         f"Artifacts directory: {visible_artifacts_dir}\n"
+        f"Uploads directory: {visible_uploads_dir}\n"
         "Use relative paths or the virtual session paths above for terminal and file operations.\n"
         "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"

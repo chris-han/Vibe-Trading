@@ -802,6 +802,58 @@ class TestHermesSessionEvents:
 
         _run(_t())
 
+    def test_document_analysis_run_persists_report_with_truncated_tool_preview(self, tmp_path):
+        """A successful read_document run should still persist report.md when the preview JSON is truncated."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="summarize uploaded earnings report")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "document-analysis-truncated-preview"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        final_response = "# Full report\n\nRevenue increased 17% year over year."
+
+        def _agent_factory(*args, **kwargs):
+            cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                if cb:
+                    cb(
+                        "tool.started",
+                        "read_document",
+                        "reading...",
+                        {"file_path": "/tmp/earnings.pdf", "pages": "1-15"},
+                    )
+                    cb(
+                        "tool.completed",
+                        "read_document",
+                        '{"status": "ok", "file": "earnings.pdf", "text": "Revenue increased 17%',
+                        {},
+                        is_error=False,
+                    )
+                return {"final_response": final_response, "status": "success"}
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["has_run_artifact"] is True
+                assert (run_dir / "report.md").read_text(encoding="utf-8") == final_response
+
+        _run(_t())
+
     def test_setup_backtest_run_only_persists_report_to_prepared_run_dir(self, tmp_path):
         """A setup_backtest_run-only workflow should write report.md to the prepared run dir."""
         from src.session.models import Attempt
