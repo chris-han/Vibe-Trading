@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -414,6 +415,9 @@ class TestHermesSessionEvents:
         assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
+        assert "Session workspace: /workspace" in prompt
+        assert "Run directory: /workspace/run" in prompt
+        assert str(tmp_path) not in prompt
 
     def test_run_with_agent_scopes_safe_write_root_to_run_dir(self, tmp_path):
         """Session runtime must allow edits anywhere inside the active backtest run."""
@@ -431,13 +435,18 @@ class TestHermesSessionEvents:
         def _register(task_id, overrides):
             register_calls.append((task_id, dict(overrides)))
 
+        fake_tools = types.ModuleType("tools")
+        fake_terminal_tool = types.ModuleType("tools.terminal_tool")
+        fake_terminal_tool.register_task_env_overrides = _register
+        fake_terminal_tool.clear_task_env_overrides = lambda task_id: None
+        fake_tools.terminal_tool = fake_terminal_tool
+
         async def _t():
             sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
                 run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
             ))
             with patch("src.core.state.RunStateStore") as MockStore, \
-                 patch("tools.terminal_tool.register_task_env_overrides", side_effect=_register), \
-                 patch("tools.terminal_tool.clear_task_env_overrides"):
+                 patch.dict(sys.modules, {"tools": fake_tools, "tools.terminal_tool": fake_terminal_tool}):
                 MockStore.return_value.create_run_dir.return_value = run_dir
                 MockStore.return_value.mark_success.return_value = None
                 await svc._run_with_agent(attempt)
@@ -447,7 +456,54 @@ class TestHermesSessionEvents:
         assert register_calls
         _, final_overrides = register_calls[-1]
         assert final_overrides["cwd"] == str(run_dir / "artifacts")
+        assert final_overrides["safe_read_root"] == str(tmp_path)
         assert final_overrides["safe_write_root"] == str(run_dir)
+        assert final_overrides["display_cwd"] == "/workspace/run/artifacts"
+        assert final_overrides["display_safe_read_root"] == "/workspace"
+        assert final_overrides["display_safe_write_root"] == "/workspace/run"
+
+    def test_run_with_agent_scopes_initial_read_root_to_workspace_root(self, tmp_path):
+        """Initial tool root should match the active workspace root, not repo-local agent/."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="find uploaded pdf")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "r-root"
+        register_calls: list[tuple[str, dict]] = []
+
+        def _register(task_id, overrides):
+            register_calls.append((task_id, dict(overrides)))
+
+        fake_tools = types.ModuleType("tools")
+        fake_terminal_tool = types.ModuleType("tools.terminal_tool")
+        fake_terminal_tool.register_task_env_overrides = _register
+        fake_terminal_tool.clear_task_env_overrides = lambda task_id: None
+        fake_tools.terminal_tool = fake_terminal_tool
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
+                run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
+            ))
+            with patch("src.core.state.RunStateStore") as MockStore, \
+                 patch.dict(sys.modules, {"tools": fake_tools, "tools.terminal_tool": fake_terminal_tool}):
+                MockStore.return_value.create_run_dir.return_value = run_dir
+                MockStore.return_value.mark_success.return_value = None
+                await svc._run_with_agent(attempt)
+
+        _run(_t())
+
+        assert register_calls
+        _, initial_overrides = register_calls[0]
+        assert initial_overrides["cwd"] == str(tmp_path)
+        assert initial_overrides["safe_read_root"] == str(tmp_path)
+        assert initial_overrides["safe_write_root"] == str(tmp_path)
+        assert initial_overrides["display_cwd"] == "/workspace"
+        assert initial_overrides["display_safe_read_root"] == "/workspace"
+        assert initial_overrides["display_safe_write_root"] == "/workspace"
 
     def test_hermes_toolset_selection_exposes_legacy_vt_aliases(self):
         """Compat toolset is now empty; all tools are provided by hermes built-in toolsets.
@@ -506,12 +562,12 @@ class TestHermesSessionEvents:
         svc.store.create_attempt(attempt)
 
         observed = {}
+        run_dir = tmp_path / "runs" / "r2"
 
         def _agent_factory(*args, **kwargs):
             inst = MagicMock()
 
             def run_conv(**kw):
-                run_dir = Path(kwargs["ephemeral_system_prompt"].splitlines()[0].replace("Run directory:", "").strip())
                 req_path = run_dir / "req.json"
                 observed["req_exists"] = req_path.exists()
                 observed["req_payload"] = req_path.read_text(encoding="utf-8") if req_path.exists() else ""
@@ -523,7 +579,6 @@ class TestHermesSessionEvents:
         async def _t():
             sys.modules["run_agent"].AIAgent = _agent_factory
             with patch("src.core.state.RunStateStore") as MockStore:
-                run_dir = tmp_path / "runs" / "r2"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 MockStore.return_value.create_run_dir.return_value = run_dir
                 MockStore.return_value.mark_success.return_value = None
@@ -551,12 +606,12 @@ class TestHermesSessionEvents:
         svc.store.create_attempt(attempt)
 
         observed = {}
+        run_dir = tmp_path / "runs" / "r3"
 
         def _agent_factory(*args, **kwargs):
             inst = MagicMock()
 
             def run_conv(**kw):
-                run_dir = Path(kwargs["ephemeral_system_prompt"].splitlines()[0].replace("Run directory:", "").strip())
                 req_path = run_dir / "req.json"
                 observed["req_exists"] = req_path.exists()
                 observed["req_payload"] = req_path.read_text(encoding="utf-8") if req_path.exists() else ""
@@ -568,7 +623,6 @@ class TestHermesSessionEvents:
         async def _t():
             sys.modules["run_agent"].AIAgent = _agent_factory
             with patch("src.core.state.RunStateStore") as MockStore:
-                run_dir = tmp_path / "runs" / "r3"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 MockStore.return_value.create_run_dir.return_value = run_dir
                 MockStore.return_value.mark_success.return_value = None

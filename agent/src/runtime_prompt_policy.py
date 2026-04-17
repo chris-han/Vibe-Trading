@@ -60,6 +60,10 @@ OUTPUT_FORMAT_PROMPT = _format_rules(
     ),
 )
 
+SESSION_VIRTUAL_WORKSPACE_ROOT = "/workspace"
+SESSION_VIRTUAL_RUN_DIR = f"{SESSION_VIRTUAL_WORKSPACE_ROOT}/run"
+SESSION_VIRTUAL_ARTIFACTS_DIR = f"{SESSION_VIRTUAL_RUN_DIR}/artifacts"
+
 
 def load_output_format_skill(channel: str) -> str:
     """Load the channel-appropriate output-format skill body from its SKILL.md file."""
@@ -78,10 +82,25 @@ def load_output_format_skill(channel: str) -> str:
     return text.strip()
 
 
-def build_session_runtime_prompt(run_dir: str, session_id: str, channel: str) -> str:
+def build_session_runtime_prompt(
+    run_dir: str,
+    session_id: str,
+    channel: str,
+    *,
+    display_workspace_root: str | None = None,
+    display_run_dir: str | None = None,
+    display_artifacts_dir: str | None = None,
+) -> str:
     """Build the Hermes ephemeral prompt used by interactive session runs."""
+    visible_workspace_root = display_workspace_root or SESSION_VIRTUAL_WORKSPACE_ROOT
+    visible_run_dir = display_run_dir or run_dir
+    visible_artifacts_dir = display_artifacts_dir or f"{visible_run_dir.rstrip('/')}/artifacts"
     return (
-        f"Run directory: {run_dir}\n"
+        f"Session workspace: {visible_workspace_root}\n"
+        f"Run directory: {visible_run_dir}\n"
+        f"Artifacts directory: {visible_artifacts_dir}\n"
+        "Use relative paths or the virtual session paths above for terminal and file operations.\n"
+        "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"
         f"{BACKTEST_WORKFLOW_PROMPT}"
         f"{DOCUMENT_WORKFLOW_PROMPT}"

@@ -83,6 +83,8 @@ def _candidate_runs_dirs(
     """
     if runs_dir is not None:
         roots = [runs_dir]
+        if RUNS_DIR not in roots:
+            roots.append(RUNS_DIR)
         if legacy_runs_dir is not None and legacy_runs_dir not in roots:
             roots.append(legacy_runs_dir)
         return roots

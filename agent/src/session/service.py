@@ -16,7 +16,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.runtime_prompt_policy import build_session_runtime_prompt
+from src.runtime_prompt_policy import (
+    SESSION_VIRTUAL_ARTIFACTS_DIR,
+    SESSION_VIRTUAL_RUN_DIR,
+    SESSION_VIRTUAL_WORKSPACE_ROOT,
+    build_session_runtime_prompt,
+)
 from src.ui_services import expand_artifact_markdown
 
 logger = logging.getLogger(__name__)
@@ -837,31 +842,12 @@ class SessionService:
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
 
-        # Configure terminal/file tool root via env var and per-session task
-        # override so every session starts in agent/ rather than the full repo
-        # root. This prevents search_files from crawling hermes-agent/ and other
-        # top-level sibling directories.
-        #
-        # TERMINAL_CWD is the global fallback; register_task_env_overrides pins
-        # the exact session-scoped cwd in Hermes' tool layer so that file ops
-        # and terminal commands resolve relative paths without any absolute path
-        # being injected via the prompt. The Vibe-Trading plugin loads through
-        # the installed Hermes entry-point package, so cwd is not part of
-        # plugin discovery.
-        repo_root = prepare_hermes_project_context(chdir=False)
-        agent_root = repo_root / "agent"
-
-        # TERMINAL_CWD may be set in .env as a relative path (e.g. a username
-        # like 'chris'). Resolve it against agent_root so the tool layer always
-        # receives an absolute path.
-        _raw_cwd = os.getenv("TERMINAL_CWD", "")
-        if _raw_cwd and not os.path.isabs(_raw_cwd):
-            file_root = (agent_root / _raw_cwd).resolve()
-        elif _raw_cwd:
-            file_root = Path(_raw_cwd).resolve()
-        else:
-            file_root = agent_root
-        # Ensure the directory exists so Hermes doesn't reject it.
+        # Scope built-in file/terminal tools to the active workspace root rather
+        # than the repo-local default agent/ directory. For authenticated web
+        # sessions this keeps uploads, sessions, and runs under the current
+        # workspace readable on the first turn.
+        prepare_hermes_project_context(chdir=False)
+        file_root = self.runs_dir.parent.resolve()
         file_root.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -870,6 +856,9 @@ class SessionService:
                 "cwd": str(file_root),
                 "safe_read_root": str(file_root),
                 "safe_write_root": str(file_root),
+                "display_cwd": SESSION_VIRTUAL_WORKSPACE_ROOT,
+                "display_safe_read_root": SESSION_VIRTUAL_WORKSPACE_ROOT,
+                "display_safe_write_root": SESSION_VIRTUAL_WORKSPACE_ROOT,
             })
         except Exception:
             pass  # Non-fatal: TERMINAL_CWD env-var fallback still applies
@@ -901,6 +890,9 @@ class SessionService:
                 str(run_dir),
                 sid,
                 (self.store.get_session(sid) or Session()).config.get("channel", ""),
+                display_workspace_root=SESSION_VIRTUAL_WORKSPACE_ROOT,
+                display_run_dir=SESSION_VIRTUAL_RUN_DIR,
+                display_artifacts_dir=SESSION_VIRTUAL_ARTIFACTS_DIR,
             ),
             skip_context_files=True,
             **agent_kwargs,
@@ -921,6 +913,9 @@ class SessionService:
                 "cwd": str(run_dir / "artifacts"),
                 "safe_read_root": str(file_root),
                 "safe_write_root": str(run_dir),
+                "display_cwd": SESSION_VIRTUAL_ARTIFACTS_DIR,
+                "display_safe_read_root": SESSION_VIRTUAL_WORKSPACE_ROOT,
+                "display_safe_write_root": SESSION_VIRTUAL_RUN_DIR,
             })
             _hermes_overrides_set = True
         except Exception:

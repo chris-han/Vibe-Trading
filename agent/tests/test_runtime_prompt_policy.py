@@ -16,7 +16,14 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
         "web",
     )
 
-    assert prompt.startswith("Run directory: /tmp/run-123\nSession: session-abc\n")
+    assert prompt.startswith(
+        "Session workspace: /workspace\n"
+        "Run directory: /tmp/run-123\n"
+        "Artifacts directory: /tmp/run-123/artifacts\n"
+        "Use relative paths or the virtual session paths above for terminal and file operations.\n"
+        "Do not rely on host absolute paths.\n"
+        "Session: session-abc\n"
+    )
     assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
