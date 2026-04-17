@@ -54,3 +54,4 @@ runs/
 sessions/
 output/
 agent/.hermes/skills/
+/node_modules/

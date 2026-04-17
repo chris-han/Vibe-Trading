@@ -1,4 +1,5 @@
-﻿import { Bot, TrendingUp, Bitcoin, Globe, Sparkles, Users } from "lucide-react";
+﻿import { useEffect, useState } from "react";
+import { Bot, TrendingUp, Bitcoin, Globe, Sparkles, Users } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
 interface Example {
@@ -107,33 +108,53 @@ interface Props {
   onExample: (s: string) => void;
 }
 
+const SHORT_VIEWPORT_HEIGHT = 760;
+
 export function WelcomeScreen({ onExample }: Props) {
   const { t } = useI18n();
+  const [isShortViewport, setIsShortViewport] = useState(false);
+  const [showAllCategories, setShowAllCategories] = useState(false);
+
+  useEffect(() => {
+    const syncViewportHeight = () => {
+      const shortViewport = window.innerHeight < SHORT_VIEWPORT_HEIGHT;
+      setIsShortViewport(shortViewport);
+      if (!shortViewport) {
+        setShowAllCategories(false);
+      }
+    };
+
+    syncViewportHeight();
+    window.addEventListener("resize", syncViewportHeight, { passive: true });
+    return () => window.removeEventListener("resize", syncViewportHeight);
+  }, []);
+
+  const visibleCategories = isShortViewport && !showAllCategories ? CATEGORIES.slice(0, 2) : CATEGORIES;
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center">
+    <div className="flex min-h-full flex-col items-center justify-start gap-4 py-4 text-center md:gap-5 md:py-5">
       {/* Header */}
-      <div className="space-y-3">
-        <div className="h-16 w-16 mx-auto rounded-button bg-primary flex items-center justify-center shadow-sm">
-          <img src="/logo-wireframe.svg" alt="semantier logo" className="h-16 w-16 object-contain object-center block mx-auto" />
+      <div className="space-y-2">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-button bg-primary shadow-sm">
+          <img src="/logo-wireframe.svg" alt="semantier logo" className="block h-14 w-14 object-contain object-center" />
         </div>
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-foreground">semantier</h2>
+          <h2 className="text-xl font-bold tracking-tight text-foreground md:text-2xl">semantier</h2>
           <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
             vibe trading with your professional financial agent team
           </p>
-          <p className="text-sm text-muted-foreground mt-2 max-w-md leading-relaxed mx-auto">
+          <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-muted-foreground">
             {t.describeStrategy}
           </p>
         </div>
       </div>
 
       {/* Capability chips */}
-      <div className="flex flex-wrap justify-center gap-2 max-w-lg">
+      <div className="flex max-w-3xl flex-wrap justify-center gap-1.5">
         {CAPABILITY_CHIPS.map((chip) => (
           <span
             key={chip}
-            className="px-2.5 py-1 text-xs rounded-full border border-border text-muted-foreground bg-muted/50"
+            className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-[11px] text-muted-foreground"
           >
             {chip}
           </span>
@@ -141,12 +162,12 @@ export function WelcomeScreen({ onExample }: Props) {
       </div>
 
       {/* Example categories grid */}
-      <div className="w-full max-w-2xl text-left space-y-4">
+      <div className="w-full max-w-4xl space-y-2.5 text-left">
         <p className="text-xs text-muted-foreground px-1">{t.examples}</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {CATEGORIES.map((cat) => (
-            <div key={cat.label} className="space-y-2">
-              <div className={`flex items-center gap-1.5 text-xs font-medium px-1 ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          {visibleCategories.map((cat) => (
+            <div key={cat.label} className="space-y-1.5">
+              <div className={`flex items-center gap-1.5 px-1 text-[11px] font-medium ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
                 {cat.icon}
                 <span>{cat.label}</span>
               </div>
@@ -155,12 +176,12 @@ export function WelcomeScreen({ onExample }: Props) {
                   <button
                     key={ex.title}
                     onClick={() => onExample(ex.prompt)}
-                    className={`block w-full text-left px-3 py-2.5 rounded-button border transition-colors bg-card hover:shadow-sm ${cat.color}`}
+                    className={`block w-full rounded-button border bg-card px-3 py-1.5 text-left transition-colors hover:shadow-sm ${cat.color}`}
                   >
-                    <span className="text-sm font-medium text-foreground leading-snug">
+                    <span className="text-[13px] font-medium leading-snug text-foreground md:text-sm">
                       {ex.title}
                     </span>
-                    <span className="block text-xs text-muted-foreground mt-0.5 leading-snug">
+                    <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground md:text-xs">
                       {ex.desc}
                     </span>
                   </button>
@@ -169,6 +190,17 @@ export function WelcomeScreen({ onExample }: Props) {
             </div>
           ))}
         </div>
+        {isShortViewport && !showAllCategories && (
+          <div className="flex justify-center pt-1">
+            <button
+              type="button"
+              onClick={() => setShowAllCategories(true)}
+              className="rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              Show more examples
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

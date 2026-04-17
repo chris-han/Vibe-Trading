@@ -10,7 +10,13 @@ def _pdf_payload() -> bytes:
     return b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
 
 
+def _patch_auth(monkeypatch):
+    monkeypatch.setattr(api_server, "_API_KEY", None)
+    monkeypatch.setattr(api_server, "_feishu_oauth_enabled", lambda: False)
+
+
 def test_upload_accepts_session_id_from_query_param(tmp_path, monkeypatch):
+    _patch_auth(monkeypatch)
     sessions_dir = tmp_path / "sessions"
     runs_dir = tmp_path / "runs"
     uploads_dir = tmp_path / "uploads"
@@ -39,6 +45,7 @@ def test_upload_accepts_session_id_from_query_param(tmp_path, monkeypatch):
 
 
 def test_upload_accepts_session_id_from_header(tmp_path, monkeypatch):
+    _patch_auth(monkeypatch)
     sessions_dir = tmp_path / "sessions"
     runs_dir = tmp_path / "runs"
     uploads_dir = tmp_path / "uploads"
@@ -64,7 +71,8 @@ def test_upload_accepts_session_id_from_header(tmp_path, monkeypatch):
     assert saved.parent == sessions_dir / session_id / "uploads"
 
 
-def test_upload_missing_scope_returns_actionable_error():
+def test_upload_missing_scope_returns_actionable_error(monkeypatch):
+    _patch_auth(monkeypatch)
     client = TestClient(api_server.app)
     response = client.post(
         "/upload",

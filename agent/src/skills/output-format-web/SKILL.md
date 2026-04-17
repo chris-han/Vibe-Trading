@@ -14,6 +14,8 @@ category: tool
 - Mermaid safety: avoid double quotes inside node labels (use plain text or single quotes), keep one statement per line, and never mix markdown headings/list markers inside a mermaid block.
 - Mermaid timeline safety: for `timeline`, write section headers as `section Label` only, not `section Label : detail`; keep event text on the same `Period : Event` line and avoid HTML like `<br>`.
 - Render time-series, bar charts, pie charts, and quantitative plots as ECharts JSON blocks (` ```echarts ... ``` ` with a valid ECharts option object); do NOT produce ASCII/ANSI chart art.
+- Always perform a **self-check** to **verify** that every field name in your `series[].data` (or `xAxis.data`) is an **exact key** present in your data source.
+- For multi-series charts, prefer the **long** (tidy) format where each series has its own name and data array.
 - Never use ANSI escape codes or terminal color sequences in responses.
 
 ## ECharts Spec Rules
@@ -37,7 +39,7 @@ For standard time-series charts, prefer explicit arrays with `xAxis.data` and `s
 ```json
 {"type":"candlestick","data":{"values":[{"time":"2026-04-01","open":1,"high":2,"low":0.5,"close":1.5}]}}
 ```
-This is wrong for the web UI because it is a VChart spec, not an ECharts option object.
+This is wrong for the web UI because it is an alternative chart spec, not an ECharts option object.
 
 For mixed charts, use a normal ECharts `series` array with one shared set of axes.
 

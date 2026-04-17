@@ -20,6 +20,7 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
         "Session workspace: /workspace\n"
         "Run directory: /tmp/run-123\n"
         "Artifacts directory: /tmp/run-123/artifacts\n"
+        "Uploads directory: /workspace/sessions/session-abc/uploads\n"
         "Use relative paths or the virtual session paths above for terminal and file operations.\n"
         "Do not rely on host absolute paths.\n"
         "Session: session-abc\n"

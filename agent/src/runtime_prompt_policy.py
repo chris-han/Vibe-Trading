@@ -21,6 +21,7 @@ _BACKTEST_WORKFLOW_RULES = (
 )
 
 _DOCUMENT_WORKFLOW_RULES = (
+    "Refer to the current workspace upload area shown above for all user-provided report paths.",
     "If the user provides an uploaded PDF reference, prefer read_document(file_path=...) to extract it.",
     "Never invent a PDF filename; only call read_document when the exact local path is known.",
     "If the filename is unknown, list the Uploads directory shown above for candidate PDFs before searching elsewhere.",

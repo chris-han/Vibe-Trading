@@ -753,8 +753,8 @@ export function Agent() {
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 overflow-hidden h-full">
-      <div ref={listRef} className="flex-1 overflow-auto p-6 scroll-smooth relative">
+    <div className="flex h-full min-h-0 flex-1 min-w-0 flex-col overflow-hidden">
+      <div ref={listRef} className="relative min-h-0 flex-1 overflow-auto p-6 scroll-smooth">
         <div className="max-w-3xl mx-auto space-y-4">
           {!sessionLoading && messages.length > 0 && hasMoreHistory && (
             <div className="flex justify-center py-1">
@@ -871,7 +871,7 @@ export function Agent() {
         <ConversationTimeline messages={messages} containerRef={listRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t border-border p-4 bg-background/80 backdrop-blur-sm">
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-border bg-background/80 p-4 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto space-y-2">
           {/* Swarm preset badge */}
           {swarmPreset && (

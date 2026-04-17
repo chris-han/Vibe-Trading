@@ -87,7 +87,7 @@ export function Layout() {
     <div className="flex h-screen bg-background">
       {/* Sidebar with warm neutral styling */}
       <aside className={cn(
-        "border-r border-border bg-card flex flex-col shrink-0 transition-all duration-200",
+        "border-r border-border bg-card flex min-h-0 flex-col shrink-0 transition-all duration-200",
         collapsed ? "w-12" : "w-64"
       )}>
         {/* Brand */}
@@ -124,7 +124,7 @@ export function Layout() {
 
         {/* Sessions — hidden when collapsed */}
         {!collapsed && (
-          <div className="flex-1 overflow-hidden border-t border-border mt-2 flex flex-col">
+          <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border">
             {/* Section Header */}
             <div className="flex items-center justify-between px-4 py-3">
               <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -150,7 +150,7 @@ export function Layout() {
             </div>
 
             {/* Session List */}
-            <div className="px-2 pb-2 space-y-0.5 overflow-auto flex-1">
+            <div className="flex-1 space-y-0.5 overflow-auto px-2 pb-2 min-h-0">
               {sessionsLoading ? (
                 <div className="space-y-1.5 px-2 py-1">
                   {[1, 2, 3].map((i) => (
@@ -389,9 +389,9 @@ export function Layout() {
       </aside>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <ConnectionBanner status={sseStatus} retryAttempt={sseRetryAttempt} />
-        <main className="flex-1 overflow-auto">
+        <main className={cn("min-h-0 flex-1", isAgentPage ? "overflow-hidden" : "overflow-auto")}>
           <Outlet />
         </main>
       </div>

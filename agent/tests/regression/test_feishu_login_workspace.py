@@ -13,6 +13,10 @@ def _patch_isolated_auth_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(api_server, "WORKSPACES_DIR", workspaces_dir)
     monkeypatch.setattr(api_server, "AUTH_CONTROL_DIR", control_dir)
     monkeypatch.setattr(api_server, "_FEISHU_SESSION_MAP_FILE", session_map_file)
+    # Patch these too as they might be imported or used from globals
+    monkeypatch.setattr(api_server, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(api_server, "SESSIONS_DIR", tmp_path / "sessions")
+    monkeypatch.setattr(api_server, "UPLOADS_DIR", tmp_path / "uploads")
     monkeypatch.setenv("FEISHU_OAUTH_ENABLED", "true")
     monkeypatch.setenv("FEISHU_SESSION_SECRET", "test-secret")
     monkeypatch.setenv("FEISHU_OAUTH_APP_ID", "cli_test_app")
@@ -200,6 +204,7 @@ def test_runs_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch):
     bob_run = workspaces_dir / "bob_lee" / "agent" / "runs" / "20260415_120000_bb2222"
     for run_dir, prompt in ((alice_run, "Alice strategy"), (bob_run, "Bob strategy")):
         (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        (run_dir.parent.parent / "uploads").mkdir(parents=True, exist_ok=True)
         (run_dir / "state.json").write_text('{"status":"success"}', encoding="utf-8")
         (run_dir / "req.json").write_text(f'{{"prompt":"{prompt}"}}', encoding="utf-8")
 

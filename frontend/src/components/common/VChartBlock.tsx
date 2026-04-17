@@ -139,15 +139,17 @@ function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> 
   //    Convert to scatter and clean up.
   if (chartType === "correlation") {
     const xVal = firstRow?.[spec.xField as string ?? "x"];
+    delete spec.axes; // correlation/heatmap/scatter infers axes automatically
     if (typeof xVal === "string") {
       // String-keyed correlation matrix → heatmap
       spec.type = "heatmap";
       // Map common matrix intensity fields to heatmap.valueField so the
       // renderer knows which property to color (supports `correlation`,
-      // `value`, `size`, or an explicit `colorField`).
-      spec.valueField = spec.valueField ?? spec.sizeField ?? spec.colorField ?? "correlation";
-      // heatmap doesn't use `sizeField`; remove it to avoid confusion.
+      // `value`, `size`, `seriesField`, or an explicit `colorField`).
+      spec.valueField = spec.valueField ?? spec.seriesField ?? spec.sizeField ?? spec.colorField ?? "correlation";
+      // heatmap doesn't use `sizeField` or `seriesField` for mapping; remove them to avoid confusion.
       if (spec.sizeField) delete spec.sizeField;
+      if (spec.seriesField) delete spec.seriesField;
     } else {
       // Numeric scatter-like correlation → scatter
       spec.type = "scatter";
@@ -156,7 +158,6 @@ function normalizeSpec(input: Record<string, unknown>): Record<string, unknown> 
         spec.sizeField = spec.seriesField;
         delete spec.seriesField;
       }
-      delete spec.axes; // scatter infers axes automatically
     }
   }
 
