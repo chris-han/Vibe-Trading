@@ -19,6 +19,78 @@ class WorkspacePaths:
     swarm_dir: Path
 
 
+def workspace_swarm_dir(agent_root: Path) -> Path:
+    """Return the canonical swarm storage root for a workspace agent dir."""
+    return agent_root / ".swarm"
+
+
+def workspace_sessions_dir(agent_root: Path) -> Path:
+    """Return the canonical session storage directory for a workspace agent dir."""
+    return agent_root / "sessions"
+
+
+def workspace_runs_dir(agent_root: Path) -> Path:
+    """Return the canonical run storage directory for a workspace agent dir."""
+    return agent_root / "runs"
+
+
+def workspace_uploads_dir(agent_root: Path) -> Path:
+    """Return the canonical uploads storage directory for a workspace agent dir."""
+    return agent_root / "uploads"
+
+
+def workspace_swarm_runs_dir(agent_root: Path) -> Path:
+    """Return the canonical swarm runs directory for a workspace agent dir."""
+    return workspace_swarm_dir(agent_root) / "runs"
+
+
+def legacy_workspace_swarm_dir(agent_root: Path) -> Path:
+    """Return the pre-refactor swarm storage root for a workspace agent dir."""
+    return agent_root / "swarm"
+
+
+def _merge_directory_contents(source_dir: Path, target_dir: Path) -> None:
+    """Recursively merge source contents into target without overwriting existing files."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for child in source_dir.iterdir():
+        destination = target_dir / child.name
+        if child.is_dir():
+            if destination.exists() and destination.is_dir():
+                _merge_directory_contents(child, destination)
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+                continue
+            shutil.move(str(child), str(destination))
+            continue
+
+        if destination.exists():
+            continue
+        shutil.move(str(child), str(destination))
+
+
+def migrate_workspace_swarm_dir(agent_root: Path) -> Path:
+    """Move legacy workspace swarm data from swarm/ into the canonical .swarm/."""
+    target_swarm_dir = workspace_swarm_dir(agent_root)
+    legacy_swarm_dir = legacy_workspace_swarm_dir(agent_root)
+    if not legacy_swarm_dir.exists() or legacy_swarm_dir == target_swarm_dir:
+        return
+
+    if not target_swarm_dir.exists():
+        legacy_swarm_dir.rename(target_swarm_dir)
+        return target_swarm_dir
+
+    _merge_directory_contents(legacy_swarm_dir, target_swarm_dir)
+
+    try:
+        legacy_swarm_dir.rmdir()
+    except OSError:
+        pass
+
+    return target_swarm_dir
+
+
 def workspace_paths(base_dir: Path, workspace_slug: str) -> WorkspacePaths:
     workspace_root = base_dir / workspace_slug
     agent_root = workspace_root / "agent"
@@ -27,15 +99,16 @@ def workspace_paths(base_dir: Path, workspace_slug: str) -> WorkspacePaths:
         workspace_root=workspace_root,
         agent_root=agent_root,
         hermes_home=agent_root / ".hermes",
-        sessions_dir=agent_root / "sessions",
-        runs_dir=agent_root / "runs",
-        uploads_dir=agent_root / "uploads",
-        swarm_dir=agent_root / "swarm",
+        sessions_dir=workspace_sessions_dir(agent_root),
+        runs_dir=workspace_runs_dir(agent_root),
+        uploads_dir=workspace_uploads_dir(agent_root),
+        swarm_dir=workspace_swarm_dir(agent_root),
     )
 
 
 def ensure_workspace(base_dir: Path, workspace_slug: str, template_hermes_home: Path) -> WorkspacePaths:
     paths = workspace_paths(base_dir, workspace_slug)
+    migrate_workspace_swarm_dir(paths.agent_root)
     for directory in (
         paths.agent_root,
         paths.hermes_home,

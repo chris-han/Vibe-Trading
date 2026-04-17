@@ -30,10 +30,10 @@ from pydantic import BaseModel, Field
 from rich.console import Console
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from runtime_env import ensure_runtime_env, get_data_root
+from runtime_env import ensure_runtime_env, get_data_root, get_runs_dir, get_sessions_dir, get_swarm_runs_dir, get_uploads_dir
 from src.adapters.factory import get_feishu_visualization_adapter
 from src.auth.store import AuthStore, AuthUser
-from src.auth.workspace import WorkspacePaths, ensure_workspace
+from src.auth.workspace import WorkspacePaths, ensure_workspace, workspace_swarm_runs_dir
 from src.ui_services import build_run_analysis, load_run_context, load_run_report
 
 logging.basicConfig(
@@ -64,9 +64,9 @@ AUTH_CONTROL_DIR = _AGENT_DIR / ".auth"
 AUTH_SESSION_COOKIE = "vt_session"
 _TEMPLATE_HERMES_HOME = _AGENT_DIR / ".hermes"
 
-RUNS_DIR = DATA_ROOT / "runs"
-SESSIONS_DIR = DATA_ROOT / "sessions"
-UPLOADS_DIR = DATA_ROOT / "uploads"
+RUNS_DIR = get_runs_dir(DATA_ROOT)
+SESSIONS_DIR = get_sessions_dir(DATA_ROOT)
+UPLOADS_DIR = get_uploads_dir(DATA_ROOT)
 LEGACY_RUNS_DIR = _AGENT_DIR / "runs"
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -1000,12 +1000,14 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
             return _session_service_by_workspace[key]
         store = SessionStore(base_dir=workspace.sessions_dir)
         runs_dir = workspace.runs_dir
+        swarm_dir = workspace.swarm_dir
     else:
         global _session_service
         if _session_service is not None:
             return _session_service
         store = SessionStore(base_dir=SESSIONS_DIR)
         runs_dir = RUNS_DIR
+        swarm_dir = None
     event_bus = EventBus()
 
     try:
@@ -1018,6 +1020,7 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         store=store,
         event_bus=event_bus,
         runs_dir=runs_dir,
+        swarm_dir=swarm_dir,
     )
     if workspace is not None:
         _session_service_by_workspace[workspace.workspace_slug] = svc
@@ -2352,7 +2355,7 @@ def _get_swarm_runtime(workspace: Optional[WorkspacePaths] = None):
         key = workspace.workspace_slug
         if key in _swarm_runtime_by_workspace:
             return _swarm_runtime_by_workspace[key]
-        swarm_dir = workspace.swarm_dir / "runs"
+        swarm_dir = workspace_swarm_runs_dir(workspace.agent_root)
         store = SwarmStore(base_dir=swarm_dir)
         runtime = WorkflowRuntime(store=store)
         _swarm_runtime_by_workspace[key] = runtime
@@ -2360,7 +2363,7 @@ def _get_swarm_runtime(workspace: Optional[WorkspacePaths] = None):
     global _swarm_runtime
     if _swarm_runtime is not None:
         return _swarm_runtime
-    swarm_dir = DATA_ROOT / ".swarm" / "runs"
+    swarm_dir = get_swarm_runs_dir(DATA_ROOT)
     store = SwarmStore(base_dir=swarm_dir)
     _swarm_runtime = WorkflowRuntime(store=store)
     return _swarm_runtime

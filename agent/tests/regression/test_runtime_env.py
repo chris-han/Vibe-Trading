@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 
 import runtime_env
 
@@ -102,6 +104,87 @@ def test_get_hermes_agent_kwargs_caps_azure_max_tokens(monkeypatch):
     kwargs = runtime_env.get_hermes_agent_kwargs()
 
     assert kwargs["max_tokens"] == 4096
+
+
+def test_get_hermes_agent_kwargs_preserves_primary_runtime(monkeypatch):
+    for key in (
+        "HERMES_INFERENCE_PROVIDER",
+        "HERMES_MAX_OUTPUT_TOKENS",
+        "KIMI_MAX_OUTPUT_TOKENS",
+        "HERMES_REASONING_EFFORT",
+        "KIMI_REASONING_EFFORT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("HERMES_INFERENCE_PROVIDER", "alibaba")
+    monkeypatch.setenv("HERMES_MAX_OUTPUT_TOKENS", "8192")
+    monkeypatch.setenv("HERMES_REASONING_EFFORT", "medium")
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", True)
+
+    fake_pkg = types.ModuleType("hermes_cli")
+    fake_runtime_provider = types.ModuleType("hermes_cli.runtime_provider")
+
+    def _fake_resolve_runtime_provider(*, requested=None, explicit_api_key=None, explicit_base_url=None):
+        assert requested == "alibaba"
+        assert explicit_api_key is None
+        assert explicit_base_url is None
+        return {
+            "provider": "alibaba",
+            "api_mode": "codex_responses",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "dashscope-test-key",
+        }
+
+    fake_runtime_provider.resolve_runtime_provider = _fake_resolve_runtime_provider
+
+    monkeypatch.setitem(sys.modules, "hermes_cli", fake_pkg)
+    monkeypatch.setitem(sys.modules, "hermes_cli.runtime_provider", fake_runtime_provider)
+
+    kwargs = runtime_env.get_hermes_agent_kwargs()
+
+    assert kwargs["provider"] == "alibaba"
+    assert kwargs["api_mode"] == "codex_responses"
+    assert kwargs["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert kwargs["api_key"] == "dashscope-test-key"
+    assert kwargs["max_tokens"] == 8192
+    assert kwargs["reasoning_config"] == {"enabled": True, "effort": "medium"}
+
+
+def test_ensure_runtime_env_clears_openai_base_url_for_named_provider(monkeypatch, tmp_path):
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "config.yaml").write_text(
+        """
+model:
+  provider: alibaba
+  default: qwen3.5-plus
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: dashscope-test-key
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    for key in (
+        "HERMES_HOME",
+        "HERMES_INFERENCE_PROVIDER",
+        "HERMES_MODEL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "LANGCHAIN_PROVIDER",
+        "LANGCHAIN_MODEL_NAME",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://stale.example/v1")
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
+
+    runtime_env.ensure_runtime_env()
+
+    assert os.getenv("HERMES_INFERENCE_PROVIDER") == "alibaba"
+    assert os.getenv("HERMES_MODEL") == "qwen3.5-plus"
+    assert os.getenv("OPENAI_BASE_URL") is None
 
 
 def test_prepare_hermes_project_context_sets_repo_root(monkeypatch):

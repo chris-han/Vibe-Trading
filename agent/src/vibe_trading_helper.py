@@ -21,6 +21,10 @@ _session_runs_dir_var: contextvars.ContextVar[Path | None] = contextvars.Context
     "session_runs_dir", default=None
 )
 
+_session_swarm_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "session_swarm_dir", default=None
+)
+
 
 def set_session_runs_dir(path: Path) -> contextvars.Token:
     """Set the active runs directory for the current context."""
@@ -30,6 +34,16 @@ def set_session_runs_dir(path: Path) -> contextvars.Token:
 def reset_session_runs_dir(token: contextvars.Token) -> None:
     """Reset the session runs directory context variable."""
     _session_runs_dir_var.reset(token)
+
+
+def set_session_swarm_dir(path: Path) -> contextvars.Token:
+    """Set the active swarm runs directory for the current context."""
+    return _session_swarm_dir_var.set(path)
+
+
+def reset_session_swarm_dir(token: contextvars.Token) -> None:
+    """Reset the session swarm directory context variable."""
+    _session_swarm_dir_var.reset(token)
 
 
 _AGENT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,10 +58,23 @@ if _HERMES_ROOT.exists() and str(_HERMES_ROOT) not in sys.path:
 def _get_fallback_runs_dir() -> Path:
     """Return DATA_ROOT/runs as the fallback for non-session (CLI/swarm) contexts."""
     try:
-        from runtime_env import get_data_root
-        return get_data_root() / "runs"
+        from runtime_env import get_runs_dir
+
+        return get_runs_dir()
     except Exception:
+        logger.exception("Failed to resolve runtime runs dir; falling back to agent-local runs dir")
         return _AGENT_ROOT / "runs"
+
+
+def _get_fallback_swarm_runs_dir() -> Path:
+    """Return DATA_ROOT/.swarm/runs as the fallback for non-session swarm contexts."""
+    try:
+        from runtime_env import get_swarm_runs_dir
+
+        return get_swarm_runs_dir()
+    except Exception:
+        logger.exception("Failed to resolve runtime swarm runs dir; falling back to agent-local .swarm/runs dir")
+        return _AGENT_ROOT / ".swarm" / "runs"
 
 
 def _setup_backtest_run(args: dict, **_) -> str:
@@ -220,7 +247,11 @@ def _run_swarm(args: dict, **_) -> str:
                 "provided_variables": variables,
             }, ensure_ascii=False)
 
-        swarm_dir = Path(__file__).resolve().parents[1] / ".swarm" / "runs"
+        ctx_swarm_dir = _session_swarm_dir_var.get()
+        if ctx_swarm_dir is not None:
+            swarm_dir = ctx_swarm_dir / "runs"
+        else:
+            swarm_dir = _get_fallback_swarm_runs_dir()
         store = SwarmStore(base_dir=swarm_dir)
         runtime = WorkflowRuntime(store=store)
 

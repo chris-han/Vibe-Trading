@@ -260,9 +260,22 @@ worst_1pct = np.percentile(final_returns, 1)
 
 ## Common Pitfalls
 
-1. **yfinance MultiIndex**: Always check `isinstance(df.columns, pd.MultiIndex)` and flatten with `df.columns = df.columns.get_level_values(0)` (more robust than `droplevel`)
+1. **yfinance MultiIndex (2025+)**: Yahoo Finance now returns MultiIndex columns. Always check and flatten:
+   ```python
+   if isinstance(df.columns, pd.MultiIndex):
+       df.columns = df.columns.droplevel(1)  # Remove ticker level, keeps metric names
+   ```
 2. **Series formatting in f-strings**: Pandas Series cannot be directly formatted — explicitly convert to float first: `float(df['Close'].iloc[-1])` not `df['Close'].iloc[-1]`
-3. **File paths**: Use absolute paths or `.` for current directory, not nested paths that may not exist
+3. **File paths**: Use absolute paths or `.` for current directory, not nested paths that may not exist. In swarm contexts, write to `artifacts/<agent_name>/` subdirectory.
+4. **Beta calculation failures**: Covariance/correlation can fail with dimensionality errors. Wrap in try/except and use defensive checks:
+   ```python
+   try:
+       beta = aligned_returns['NVDA'].cov(aligned_returns['SPY']) / aligned_returns['SPY'].var()
+   except Exception:
+       beta = None  # Handle gracefully
+   # Later: if beta is not None and beta > 1.5: ...
+   ```
+5. **yfinance financials iteration**: `quarterly_financials.loc['Total Revenue']` returns a Series with dates as index — iterate over `series.items()` or `list(series.index)`, NOT `series.columns`
 4. **Sector benchmarks**: Use appropriate sector averages (tech ~22x P/E, utilities ~15x, etc.)
 5. **GPD fitting**: Requires sufficient tail data (>10 exceedances); handle fit failures gracefully
 6. **Beta calculation**: Align dates between stock and market returns before computing covariance
@@ -275,6 +288,23 @@ worst_1pct = np.percentile(final_returns, 1)
 13. **Major holders parsing**: Values are numpy.float64, not strings — don't call `.replace()` on them; access via `.iloc[row, col]`
 14. **Earnings history columns**: Use `'epsEstimate'` and `'epsActual'` (lowercase), not `'EPS Estimate'`
 15. **Institutional holders change**: Column `'Change in Shares'` may be missing — check with `if 'Change in Shares' in df.columns`
+16. **yfinance earnings can be None**: `ticker.earnings` may return `None` (not just empty DataFrame) — check `if earnings is not None and not earnings.empty`
+17. **Quarterly financials iteration**: After `.loc['Total Revenue']`, result is a Series with dates as index — iterate over `list(revenue.index)` not `revenue.columns`
+19. **Institutional holders column variations**: Column name may be `'% Out'` or `'Pct Out'` — use `row.get('% Out', row.get('Pct Out', 0))`
+20. **Insider transactions returning N/A**: yfinance sometimes returns all 'N/A' values for insider data — this is a Yahoo limitation, not a bug
+21. **yfinance financials structure**: `quarterly_financials` and `financials` are DataFrames with metrics as rows and dates as columns — access via `.loc['Metric Name']`
+22. **yfinance abbreviated columns**: Recent yfinance versions may return abbreviated column names (`C`, `H`, `L`, `O`, `V`) — rename after fetching: `df = df.rename(columns={'C': 'Close', 'H': 'High', 'L': 'Low', 'O': 'Open', 'V': 'Volume'})`
+23. **Complete column handling pattern**: Combine MultiIndex flattening + column renaming in one block:
+```python
+if isinstance(df.columns, pd.MultiIndex):
+    df = df.droplevel(1, axis=1)
+    df.columns = [col[0] for col in df.columns]
+column_map = {'C': 'Close', 'H': 'High', 'L': 'Low', 'O': 'Open', 'V': 'Volume'}
+if 'C' in df.columns:
+    df = df.rename(columns=column_map)
+```
+24. **Revenue growth iteration**: When iterating quarterly revenue for growth calculation, use `revenue.pct_change()` on the Series directly — don't try to iterate over columns
+25. **Earnings can be None**: `ticker.earnings` may return `None` (not just empty DataFrame) — check `if earnings is not None and not earnings.empty`
 
 ## Enhanced Analysis: Insider & Institutional Flows
 

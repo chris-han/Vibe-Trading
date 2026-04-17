@@ -340,6 +340,7 @@ if profit_margin and profit_margin > 0.3:
 1. **yfinance MultiIndex**: Always check `isinstance(df.columns, pd.MultiIndex)` and drop level before accessing columns
 2. **Calculation Order**: Calculate ALL technical indicators BEFORE extracting values from `latest` row
 3. **None Handling**: Use `info.get()` with conditional checks; don't assume metrics exist
+4. **Scalar Extraction from DataFrame**: `df['Close'].iloc[-1]` may return a Series instead of scalar in some yfinance versions. Use `float(df['Close'].iloc[-1])` or `df['Close'].iloc[-1].item()` to force scalar. If still failing, check if dataframe has unexpected structure: `print(type(df['Close']), df['Close'].shape)`
 4. **Sector Context**: P/E of 40x may be cheap for 60% growth stock, expensive for 10% growth
 5. **Volume Interpretation**: High volume on down days = distribution; high volume on up days = accumulation
 6. **RSI Extremes**: RSI >70 can persist in strong trends; don't automatically sell overbought
@@ -350,6 +351,17 @@ if profit_margin and profit_margin > 0.3:
 11. **Recommendations Mean Calculation**: `recommendations.tail(4).mean()` fails on string columns — use `select_dtypes(include=[np.number])` first
 12. **major_holders Shape**: `major_holders.iloc[0, 1]` may fail if DataFrame has only 1 column — use `info.get('institutionsPercentHeld')` as fallback
 13. **Earnings History Index**: `earnings_history` uses quarter dates as index — access via `.loc[]` or iterate carefully
+14. **earnings_dates Column Names**: Column names vary — dynamically detect: `for col in earnings_dates.columns: if 'date' in col.lower() or 'earnings' in col.lower(): date_col = col`
+15. **recommendations_summary Attribute**: Use `ticker.recommendations_summary` (plural), NOT `recommendation_summary` — AttributeError otherwise
+16. **major_holders Iteration**: Use `row.iloc[0]` and `row.iloc[1]` with try/except, not `row[0]` — KeyError if index is string-based
+17. **Recommendations Type Handling**: `recommendations` DataFrame may contain string values (e.g., "Strong Buy" as column name with string counts). Always validate with `pd.api.types.is_number()` or wrap in `try/except` before calling `.sum()`. Safe pattern:
+```python
+try:
+    strong_buy = int(latest_rec.get('Strong Buy', 0)) if pd.api.types.is_number(latest_rec.get('Strong Buy', 0)) or str(latest_rec.get('Strong Buy', 0)).isdigit() else 0
+except:
+    strong_buy = 0
+```
+18. **yfinance MultiIndex Column Flattening**: After `yf.download()`, always flatten columns immediately: `if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)`. This prevents "Cannot set a DataFrame with multiple columns to the single column" errors when adding calculated columns.
 
 ## Dependencies
 
@@ -362,6 +374,21 @@ pip install yfinance pandas numpy
 ```python
 # See nvda_bull_analysis.py for full implementation
 # Run: python3 bull_research.py TICKER
+
+# Quick start template:
+from datetime import datetime, timedelta
+import yfinance as yf
+import pandas as pd
+
+ticker = yf.Ticker("NVDA")
+info = ticker.info
+df = yf.download("NVDA", start=(datetime.now()-timedelta(days=730)).strftime("%Y-%m-%d"), progress=False)
+
+# Handle MultiIndex (critical!)
+if isinstance(df.columns, pd.MultiIndex):
+    df = df.droplevel(1, axis=1)
+
+# Then calculate indicators, extract metrics, synthesize bull case
 ```
 
 ## Related Skills

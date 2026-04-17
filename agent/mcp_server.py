@@ -38,7 +38,7 @@ AGENT_DIR = Path(__file__).resolve().parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
-from runtime_env import ensure_runtime_env, get_data_root
+from runtime_env import ensure_runtime_env, get_data_root, get_runs_dir, get_swarm_runs_dir
 
 ensure_runtime_env()
 
@@ -190,7 +190,7 @@ def setup_backtest_run(
 
     run_base = Path(args.get("base_dir") or "").expanduser()
     if not run_base or not run_base.is_absolute():
-        run_base = DATA_ROOT / "runs"
+        run_base = get_runs_dir(DATA_ROOT)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
     suffix = uuid.uuid4().hex[:6]
@@ -428,7 +428,7 @@ def run_swarm(preset_name: str, variables: dict[str, str]) -> str:
     from src.swarm.store import SwarmStore
     from src.swarm.models import RunStatus
 
-    swarm_dir = AGENT_DIR / ".swarm" / "runs"
+    swarm_dir = get_swarm_runs_dir(DATA_ROOT)
     store = SwarmStore(base_dir=swarm_dir)
     runtime = WorkflowRuntime(store=store)
 
@@ -547,7 +547,7 @@ def get_market_data(
 # ---------------------------------------------------------------------------
 
 def _get_swarm_store():
-    swarm_dir = AGENT_DIR / ".swarm" / "runs"
+    swarm_dir = get_swarm_runs_dir(DATA_ROOT)
     swarm_dir.mkdir(parents=True, exist_ok=True)
     from src.swarm.store import SwarmStore
     return SwarmStore(base_dir=swarm_dir)

@@ -27,17 +27,13 @@ _BACKTEST_WORKFLOW_PROMPT = (
     "Backtest workflow rules:\n"
     "- If the user asks for a new backtest or strategy test, do NOT call backtest(run_dir=...) first.\n"
     "- First call load_skill(\"strategy-generate\") when you need the SignalEngine contract.\n"
-    "- Then call setup_backtest_run(config_json=..., signal_engine_py=...) to create the run directory and write config.json/code.\n"
     "- Only after setup_backtest_run succeeds, call backtest(run_dir=...).\n"
-    "- Never ask the user to manually create config.json or code/signal_engine.py when the tool can create them.\n"
-    "- If a backtest fails because generated strategy code is wrong, prefer creating a fresh run with setup_backtest_run(...) instead of patching unrelated files.\n"
+    "- If a backtest fails because generated strategy code is wrong, prefer a fresh setup_backtest_run(...) before retrying.\n"
 )
 
 _DOCUMENT_WORKFLOW_PROMPT = (
     "Document workflow rules:\n"
-    "- User uploaded files are stored at sessions/<session_id>/uploads/ relative to the working directory.\n"
-    "- To find uploads, use search_files with path=sessions/<session_id>/uploads (replace <session_id> with the Session value from the header above).\n"
-    "- If the user provides an exact uploaded PDF path, call read_document(file_path=...) to extract the text.\n"
+    "- If the user provides an uploaded PDF reference, prefer read_document(file_path=...) to extract it.\n"
     "- Never invent a PDF filename; only call read_document when the exact local path is known.\n"
     "- If no local path is available, use read_url or browser tools to fetch the report from the source site.\n"
     "- Prefer reading the first relevant pages first with pages='1-5' when the document is long.\n"
@@ -48,13 +44,9 @@ _DOCUMENT_WORKFLOW_PROMPT = (
 _MARKET_DATA_WORKFLOW_PROMPT = (
     "Market data workflow rules:\n"
     "- For finance or research tasks, call load_skill first to get approved data access methods and symbol conventions.\n"
-    "- execute_code is forbidden in this runtime. Use write_file plus bash instead.\n"
+    "- execute_code is forbidden in this runtime.\n"
     "- Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.\n"
     "- Use the project-supported Python patterns from load_skill (for example yfinance or OKX API helpers).\n"
-    "- Prefer writing one focused Python script with write_file, then execute it with bash.\n"
-    "- The terminal/file tools are scoped to the active session or backtest run directory; keep output paths relative so the runtime chooses the final location.\n"
-    "- For analysis outputs and helper scripts, prefer paths under artifacts/. Only write config.json or code/signal_engine.py when intentionally updating the active backtest run.\n"
-    "- Never hardcode output file paths such as /app/agent/... or agent/... in scripts, skills, or bash commands.\n"
     "- Use the repo-local interpreter via ./.venv/bin/python for script execution.\n"
     "- For package installs, use ./.venv/bin/python -m pip. Do NOT call pip/pip3 directly.\n"
     "- Do NOT embed long Python programs directly in bash commands.\n"
@@ -130,6 +122,7 @@ class SessionService:
         store: SessionStore,
         event_bus: EventBus,
         runs_dir: Path,
+        swarm_dir: Optional[Path] = None,
     ) -> None:
         """Initialize the session service.
 
@@ -137,10 +130,12 @@ class SessionService:
             store: Session persistence store.
             event_bus: SSE event bus.
             runs_dir: Root runs directory.
+            swarm_dir: Workspace-scoped swarm directory (swarm runs written here).
         """
         self.store = store
         self.event_bus = event_bus
         self.runs_dir = runs_dir
+        self.swarm_dir = swarm_dir
         self._active_loops: Dict[str, "AgentLoop"] = {}
 
     def create_session(self, title: str = "", config: Optional[Dict[str, Any]] = None) -> Session:
@@ -167,6 +162,24 @@ class SessionService:
     def list_sessions(self, limit: int = 50) -> list[Session]:
         """List all sessions."""
         return self.store.list_sessions(limit)
+
+    def _collect_swarm_run_dirs(self, session_id: str) -> list[Path]:
+        """Return swarm run directories produced by run_swarm calls in this session."""
+        if self.swarm_dir is None:
+            return []
+        swarm_runs_dir = self.swarm_dir / "runs"
+        run_dirs: list[Path] = []
+        try:
+            for event in self.store.get_events(session_id):
+                swarm_run_id = (event.metadata or {}).get("swarm_run_id")
+                if not swarm_run_id:
+                    continue
+                rd = swarm_runs_dir / str(swarm_run_id)
+                if rd.exists() and rd.is_dir():
+                    run_dirs.append(rd)
+        except Exception:
+            pass
+        return run_dirs
 
     def _collect_run_dirs(self, session_id: str) -> list[Path]:
         """Collect legacy run_dir paths stored outside the session directory.
@@ -197,33 +210,37 @@ class SessionService:
         return run_dirs
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session and its associated run artifact directories.
+        """Delete a session and all deterministic artifact directories.
 
-        For sessions created with the nested layout the run directories live
-        inside the session folder and are removed automatically when the session
-        tree is deleted.  The explicit ``_collect_run_dirs`` pass below handles
-        backward-compat cleanup for older flat-structure runs that were stored
-        outside the session directory.
+        This removes the session tree itself, which includes session-scoped
+        uploads, and also removes linked backtest run directories plus linked
+        swarm run directories that live outside the session folder.
         """
         import shutil
         legacy_run_dirs = self._collect_run_dirs(session_id)
+        swarm_run_dirs = self._collect_swarm_run_dirs(session_id)
         self.event_bus.clear(session_id)
         ok = self.store.delete_session(session_id)
         for rd in legacy_run_dirs:
             shutil.rmtree(rd, ignore_errors=True)
+        for rd in swarm_run_dirs:
+            shutil.rmtree(rd, ignore_errors=True)
         return ok
 
     def delete_sessions(self, session_ids: list[str]) -> Dict[str, Any]:
-        """Delete multiple sessions in one service call."""
+        """Delete multiple sessions and their linked artifact directories."""
         import shutil
         deleted: list[str] = []
         missing: list[str] = []
         for session_id in session_ids:
             legacy_run_dirs = self._collect_run_dirs(session_id)
+            swarm_run_dirs = self._collect_swarm_run_dirs(session_id)
             self.event_bus.clear(session_id)
             if self.store.delete_session(session_id):
                 deleted.append(session_id)
                 for rd in legacy_run_dirs:
+                    shutil.rmtree(rd, ignore_errors=True)
+                for rd in swarm_run_dirs:
                     shutil.rmtree(rd, ignore_errors=True)
             else:
                 missing.append(session_id)
@@ -800,6 +817,11 @@ class SessionService:
                     logger.error("[%s] tool.error    %s  result=%s", sid[:8], tool_name, preview_str)
                 else:
                     logger.info("[%s] tool.completed %s  result=%s", sid[:8], tool_name, preview_str[:200])
+                tool_result_meta: Dict[str, Any] = {"is_error": is_error}
+                if not is_error and tool_name == "run_swarm" and parsed_result:
+                    swarm_run_id = parsed_result.get("run_id")
+                    if swarm_run_id:
+                        tool_result_meta["swarm_run_id"] = str(swarm_run_id)
                 self._record_event(
                     sid,
                     SessionEventType.TOOL_RESULT.value,
@@ -807,7 +829,7 @@ class SessionService:
                     tool=tool_name,
                     content=preview_str,
                     status="error" if is_error else "ok",
-                    metadata={"is_error": is_error},
+                    metadata=tool_result_meta,
                 )
                 self.event_bus.emit(sid, "tool_result", {
                     "attempt_id": attempt_id,
@@ -946,8 +968,9 @@ class SessionService:
 
         history = self._convert_messages_to_history(messages) if messages else []
 
-        from src.vibe_trading_helper import reset_session_runs_dir, set_session_runs_dir
+        from src.vibe_trading_helper import reset_session_runs_dir, set_session_runs_dir, set_session_swarm_dir, reset_session_swarm_dir
         _runs_token = set_session_runs_dir(self.runs_dir)
+        _swarm_token = set_session_swarm_dir(self.swarm_dir) if self.swarm_dir is not None else None
         # Configure Hermes built-in file/terminal tools to stay inside the active
         # run directory. Use artifacts/ as cwd so relative outputs land there,
         # while still allowing explicit edits to config.json or code/.
@@ -1005,6 +1028,8 @@ class SessionService:
             }
         finally:
             reset_session_runs_dir(_runs_token)
+            if _swarm_token is not None:
+                reset_session_swarm_dir(_swarm_token)
             if _hermes_overrides_set:
                 try:
                     clear_task_env_overrides(sid)

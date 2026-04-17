@@ -19,13 +19,12 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_ITERATIONS = 50
 _BACKTEST_WORKFLOW_HINT = (
-    "- For any new backtest, call `setup_backtest_run(config_json=..., signal_engine_py=...)` before `backtest(run_dir=...)`.\n"
-    "- Never ask the user to create `config.json` or `code/signal_engine.py` manually when the setup tool can write them.\n"
-    "- If generated strategy code is wrong, prefer a fresh `setup_backtest_run(...)` with corrected code instead of trying to patch files from a previous run.\n"
+    "- For any new backtest, call `setup_backtest_run(...)` before `backtest(run_dir=...)`.\n"
+    "- If generated strategy code is wrong, prefer a fresh `setup_backtest_run(...)` before retrying.\n"
 )
 
 _DOCUMENT_WORKFLOW_HINT = (
-    "- If the task includes an exact local PDF path, call `read_document(file_path=...)` before summarizing the document.\n"
+    "- If the task includes an uploaded PDF reference, call `read_document(file_path=...)` before summarizing the document.\n"
     "- Never invent a PDF filename; only call `read_document` when the exact path is known.\n"
     "- If no local path is available, use read_url or browser tools to fetch the report from the source site.\n"
     "- If no local path is available, use `read_url` or browser tools to fetch the report from the source site.\n"
@@ -34,10 +33,8 @@ _DOCUMENT_WORKFLOW_HINT = (
 )
 
 _MARKET_DATA_WORKFLOW_HINT = (
-    "- `execute_code` is forbidden in this runtime. Use `write_file` plus `bash` with the runtime-provided cwd instead.\n"
+    "- `execute_code` is forbidden in this runtime.\n"
     "- **NEVER use curl/requests/urllib to fetch market data.** Call `load_skill('yfinance')` first, then write a Python script.\n"
-    "- Never hardcode output file paths such as `/app/agent/...` or `agent/...`; keep outputs relative so Hermes stores them under the task artifact directory.\n"
-    "- Worker file tools only write inside the current task artifact directory unless another tool creates files for you elsewhere.\n"
 )
 
 
@@ -186,14 +183,12 @@ def build_worker_prompt(
         "**Phase 2 — Execute (≤15 tool calls):**\n"
         "- `load_skill` first to get data access methods and analysis patterns.\n"
         f"{_MARKET_DATA_WORKFLOW_HINT}"
-        "- Prefer writing one focused Python script with write_file, then execute it with bash.\n"
-        "- Write ONE focused Python script via `write_file`, then run it from the current runtime cwd with `./.venv/bin/python`.\n"
+        "- Use the runtime-provided tools and cwd for any execution flow.\n"
         "- Install packages with `./.venv/bin/python -m pip`. Do NOT call `pip` or `pip3` directly.\n"
-        "- Do NOT write long Python code inside bash. Use write_file + bash.\n"
         "- Do NOT fetch data with curl/requests. Use the patterns from load_skill (yfinance, OKX API via Python).\n"
         f"{_BACKTEST_WORKFLOW_HINT}"
         f"{_DOCUMENT_WORKFLOW_HINT}"
-        "- If a script fails, read the error, fix with `edit_file`, re-run. Max 2 retries per script.\n\n"
+        "- If a scripted step fails, inspect the error and retry with a corrected tool flow. Max 2 retries per script.\n\n"
         "**Phase 3 — Summarize (0 tool calls):**\n"
         "- Write your final findings as a concise markdown summary directly in your response.\n"
         "- Include specific numbers, dates, and actionable conclusions.\n"

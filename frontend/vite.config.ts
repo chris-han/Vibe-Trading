@@ -10,6 +10,7 @@ export default defineConfig({
   server: {
     port: 5899,
     proxy: {
+      "/auth": { target: "http://localhost:8899", changeOrigin: true },
       "/run": { target: "http://localhost:8899", changeOrigin: true },
       "/runs": { target: "http://localhost:8899", changeOrigin: true },
       "/health": { target: "http://localhost:8899", changeOrigin: true },

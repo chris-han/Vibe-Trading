@@ -11,7 +11,6 @@ model:
   # Use the Responses (Codex-style) API
   api_mode: codex_responses
   # Generation defaults for kimi-k2.5 via DashScope
-  # Current limits: max output 16K, context 256K, max input about 224K
   max_tokens: 65536
   temperature: 0.0
   top_p: 1.0
@@ -52,10 +51,10 @@ web:
   tavily_api_key: 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
 
 vibe_trading:
-  azure_openai:
-    endpoint: https://mtcbj003.openai.azure.com/
-    deployment_name: gpt-4o
-    api_version: 2025-01-01-preview
+  # azure_openai:
+  #   endpoint: https://mtcbj003.openai.azure.com/
+  #   deployment_name: gpt-4o
+  #   api_version: 2025-01-01-preview
 
   kimi:
     api_key: sk-kimi-AucIhM3j6Ggv63XEKr63JZunCU7Ye65wg7GAWsanQnwqp4dDzoj0SPbqQXdhBYRv

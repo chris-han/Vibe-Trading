@@ -261,11 +261,16 @@ Use a single virtualenv only: `agent/.venv`. Avoid bare `pip` and `python3` in r
 <summary><b>Start web UI (optional)</b></summary>
 
 ```bash
+
+
 # Terminal 1: API server
-python cli.py serve --port 8899
+cd ../agent && python cli.py serve --port 8899
 
 # Terminal 2: Frontend dev server
-cd ../frontend && npm install && npm run dev
+cd ../frontend && bun install && bun run dev
+
+cd /home/chris/repo/Vibe-Trading/frontend
+bun run dev
 ```
 
 Open `http://localhost:5899`. The frontend proxies API calls to `localhost:8899`.
@@ -273,8 +278,9 @@ Open `http://localhost:5899`. The frontend proxies API calls to `localhost:8899`
 **Production mode (single server):**
 
 ```bash
-cd frontend && npm run build && cd ..
+cd frontend && bun run build && cd ..
 vibe-trading serve --port 8899     # FastAPI serves dist/ as static files
+uv run python cli.py serve --port 8899
 ```
 
 </details>

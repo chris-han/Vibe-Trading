@@ -39,6 +39,33 @@ def get_data_root() -> Path:
         root = AGENT_DIR
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def get_runs_dir(data_root: Path | None = None) -> Path:
+    """Return the canonical run storage directory for the active data root."""
+    return (data_root or get_data_root()) / "runs"
+
+
+def get_sessions_dir(data_root: Path | None = None) -> Path:
+    """Return the canonical session storage directory for the active data root."""
+    return (data_root or get_data_root()) / "sessions"
+
+
+def get_uploads_dir(data_root: Path | None = None) -> Path:
+    """Return the canonical uploads storage directory for the active data root."""
+    return (data_root or get_data_root()) / "uploads"
+
+
+def get_swarm_root(data_root: Path | None = None) -> Path:
+    """Return the canonical swarm storage root for the active data root."""
+    return (data_root or get_data_root()) / ".swarm"
+
+
+def get_swarm_runs_dir(data_root: Path | None = None) -> Path:
+    """Return the canonical swarm runs directory for the active data root."""
+    return get_swarm_root(data_root) / "runs"
+
+
 _FALSEY_STRINGS = {"", "0", "false", "off", "no", "none", "disabled"}
 _VALID_REASONING_EFFORTS = {"xhigh", "high", "medium", "low", "minimal"}
 
@@ -53,6 +80,19 @@ def _set_env_if_missing_or_blank(name: str, value: str | None) -> None:
     current = os.getenv(name)
     if current is None or not current.strip():
         os.environ[name] = normalized
+
+
+def _uses_global_openai_base_url(provider: str | None) -> bool:
+    """Return whether this provider should inherit OPENAI_BASE_URL semantics."""
+    normalized = str(provider or "").strip().lower()
+    return normalized in {"", "openai", "azure-openai", "custom"} or normalized.startswith("custom:")
+
+
+def _clear_stale_openai_base_url(provider: str | None) -> None:
+    """Drop OPENAI_BASE_URL for named providers resolved via Hermes runtime config."""
+    if _uses_global_openai_base_url(provider):
+        return
+    os.environ.pop("OPENAI_BASE_URL", None)
 
 
 def _resolve_hermes_home() -> Path:
@@ -129,7 +169,10 @@ def _seed_env_from_hermes_config(config: dict[str, Any]) -> None:
         default_model = model_cfg.get("default") or model_cfg.get("model")
         _set_env_if_missing_or_blank("HERMES_INFERENCE_PROVIDER", provider)
         _set_env_if_missing_or_blank("HERMES_MODEL", default_model)
-        _set_env_if_missing_or_blank("OPENAI_BASE_URL", model_cfg.get("base_url"))
+        if _uses_global_openai_base_url(str(provider or "")):
+            _set_env_if_missing_or_blank("OPENAI_BASE_URL", model_cfg.get("base_url"))
+        else:
+            _clear_stale_openai_base_url(str(provider or ""))
         _set_env_if_missing_or_blank("OPENAI_API_KEY", model_cfg.get("api_key"))
         _set_env_if_missing_or_blank("HERMES_MAX_OUTPUT_TOKENS", model_cfg.get("max_tokens"))
         _set_env_if_missing_or_blank("HERMES_CONTEXT_WINDOW", model_cfg.get("context_length"))
@@ -239,6 +282,43 @@ def _cap_max_tokens_for_provider(max_tokens: int) -> int:
     return max_tokens
 
 
+def _resolve_primary_runtime_kwargs() -> dict[str, object]:
+    """Resolve the main Hermes runtime into explicit AIAgent kwargs.
+
+    Vibe constructs ``AIAgent`` from backend code instead of invoking the
+    Hermes CLI entrypoint. Preserve the resolved provider/base URL/API mode so
+    the backend agent uses the same runtime that ``config.yaml`` selected.
+    """
+    requested = (os.getenv("HERMES_INFERENCE_PROVIDER") or "").strip() or None
+
+    try:
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        runtime = resolve_runtime_provider(requested=requested)
+    except Exception:
+        return {}
+
+    if not isinstance(runtime, dict):
+        return {}
+
+    kwargs: dict[str, object] = {}
+    provider = str(runtime.get("provider") or "").strip()
+    api_mode = str(runtime.get("api_mode") or "").strip()
+    base_url = str(runtime.get("base_url") or "").strip()
+    api_key = str(runtime.get("api_key") or "").strip()
+
+    if provider:
+        kwargs["provider"] = provider
+    if api_mode:
+        kwargs["api_mode"] = api_mode
+    if base_url:
+        kwargs["base_url"] = base_url
+    if api_key:
+        kwargs["api_key"] = api_key
+
+    return kwargs
+
+
 def ensure_runtime_env() -> None:
     """Load the repo-local Hermes config and bridge it into runtime env vars."""
     global _ENV_BOOTSTRAPPED
@@ -246,7 +326,8 @@ def ensure_runtime_env() -> None:
         return
 
     prepare_hermes_project_context(chdir=False)
-    _seed_env_from_hermes_config(_load_hermes_config())
+    config = _load_hermes_config()
+    _seed_env_from_hermes_config(config)
     _bridge_azure_env_to_hermes_defaults()
 
     kimi_key = os.getenv("KIMI_API_KEY", "")
@@ -269,6 +350,10 @@ def ensure_runtime_env() -> None:
         if kimi_key.startswith("sk-kimi-"):
             _set_env_if_missing_or_blank("KIMI_BASE_URL", "https://api.kimi.com/coding/v1")
 
+    model_cfg = config.get("model") if isinstance(config, dict) else None
+    provider = model_cfg.get("provider") if isinstance(model_cfg, dict) else None
+    _clear_stale_openai_base_url(str(provider or ""))
+
     _bridge_hermes_env_to_langchain_defaults()
     backend_python = _resolve_backend_python()
     if backend_python.exists():
@@ -281,7 +366,7 @@ def get_hermes_agent_kwargs() -> dict[str, object]:
     """Build optional AIAgent kwargs from runtime env settings."""
     ensure_runtime_env()
 
-    kwargs: dict[str, object] = {}
+    kwargs: dict[str, object] = _resolve_primary_runtime_kwargs()
 
     max_tokens = _positive_int_from_env(
         "HERMES_MAX_OUTPUT_TOKENS",
