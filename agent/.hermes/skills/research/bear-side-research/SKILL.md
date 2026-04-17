@@ -256,6 +256,11 @@ worst_1pct = np.percentile(final_returns, 1)
 
 ## What Would Disprove Bear Case
 [Conditions that would invalidate thesis]
+
+## 操作策略 / Action Plan
+- ✅ Use emoji-led Markdown bullets for trim zone, hedge zone, short entry zone, stop loss, and downside targets; or
+- 📋 Use a Markdown pipe-table with columns such as `Scenario | Trigger | Action | Target | Risk Control`
+- Never render this section as an ASCII card, terminal-style box, box-drawing frame, or plain fenced code block.
 ```
 
 ## Common Pitfalls
@@ -360,6 +365,8 @@ if options and len(options) > 0:
 
 ### Bear Case Confidence: HIGH/MEDIUM/LOW
 Signal Count: N/15 indicators triggered
+
+> Format rule: keep `## Recommended Actions` and any `## 操作策略` section as Markdown bullets or Markdown pipe-tables only. Do not wrap them in ASCII boxes, box-drawing frames, or plain fenced code blocks.
 ```
 
 ## Dependencies

@@ -247,6 +247,15 @@ Use at least 2 valuation methods and take the middle value:
 
 ### Investment Rating: Buy
 Target price ¥30.8, current price ¥25.0, upside 23%
+
+### 操作策略 / Action Plan
+| Tier | Price Zone | Trigger | Action | Risk Note |
+|------|------------|---------|--------|-----------|
+| Initial | ¥24-26 | Valuation discount remains >15% | Start position | Respect sector beta |
+| Add | ¥22-24 | Margin of safety expands after pullback | Add on weakness | Re-check earnings assumptions |
+| Reduce | ¥30-32 | Price reaches fair-value band | Trim position | Avoid chasing above target |
+
+Use a Markdown pipe-table or emoji-led Markdown bullets for this section. Never render valuation action steps as an ASCII card, box-drawing frame, or plain fenced code block.
 ```
 
 ## Notes

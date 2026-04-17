@@ -854,6 +854,47 @@ class TestHermesSessionEvents:
 
         _run(_t())
 
+    def test_feishu_run_strips_plain_fenced_box_drawing_block_from_final_response(self, tmp_path):
+        """Feishu final replies must not persist plain fenced box-drawing layouts."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t", config={"channel": "feishu"})
+        attempt = Attempt(session_id=session.session_id, prompt="give me a trading plan")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "feishu-box-layout"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        final_response = (
+            "## 🎯 操作策略\n\n"
+            "```\n"
+            "┌─────────────────────────────┐\n"
+            "│  当前位置：$278              │\n"
+            "│  第一档：$240-250           │\n"
+            "└─────────────────────────────┘\n"
+            "```\n"
+        )
+
+        def _agent_factory(*args, **kwargs):
+            inst = MagicMock()
+            inst.run_conversation.return_value = {"final_response": final_response, "status": "success"}
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert "```" not in result["content"]
+                assert "┌" in result["content"]
+
+        _run(_t())
+
     def test_setup_backtest_run_only_persists_report_to_prepared_run_dir(self, tmp_path):
         """A setup_backtest_run-only workflow should write report.md to the prepared run dir."""
         from src.session.models import Attempt

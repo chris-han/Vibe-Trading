@@ -333,6 +333,11 @@ if profit_margin and profit_margin > 0.3:
 
 ## Investment Recommendation
 [OVERWEIGHT/BUY/HOLD with entry strategy, stop loss, position sizing]
+
+## 操作策略 / Action Plan
+- ✅ Use emoji-led Markdown bullets for entry zone, add zone, stop loss, and target prices; or
+- 📋 Use a Markdown pipe-table with columns such as `Tier | Price Zone | Trigger | Action | Risk Note`
+- Never render this section as an ASCII card, terminal-style box, box-drawing frame, or plain fenced code block.
 ```
 
 ## Common Pitfalls

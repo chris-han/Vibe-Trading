@@ -26,6 +26,9 @@ from src.ui_services import expand_artifact_markdown
 
 logger = logging.getLogger(__name__)
 
+_PLAIN_CODE_FENCE_RE = re.compile(r"```[ \t]*\n(.*?)\n```", re.DOTALL)
+_BOX_DRAWING_RE = re.compile(r"[┌┐└┘├┤┬┴┼│─╭╮╰╯╞╡╔╗╚╝═║]")
+
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
 
@@ -667,6 +670,7 @@ class SessionService:
 
         sid = attempt.session_id
         attempt_id = attempt.attempt_id
+        session_channel = str((self.store.get_session(sid) or Session()).config.get("channel", "")).strip().lower()
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None
@@ -892,7 +896,7 @@ class SessionService:
             ephemeral_system_prompt=build_session_runtime_prompt(
                 str(run_dir),
                 sid,
-                (self.store.get_session(sid) or Session()).config.get("channel", ""),
+                session_channel,
                 display_workspace_root=SESSION_VIRTUAL_WORKSPACE_ROOT,
                 display_run_dir=SESSION_VIRTUAL_RUN_DIR,
                 display_artifacts_dir=SESSION_VIRTUAL_ARTIFACTS_DIR,
@@ -944,6 +948,7 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
+            final_text = self._normalize_channel_output(final_text, session_channel)
             state_store.mark_success(run_dir)
             result: Dict[str, Any] = {
                 "status": "success",
@@ -1067,6 +1072,20 @@ class SessionService:
             trimmed.append(msg)
             total_chars += msg_len
         return list(reversed(trimmed))
+
+    @staticmethod
+    def _normalize_channel_output(text: str, channel: str) -> str:
+        """Apply narrow channel-specific cleanup to final assistant output."""
+        if not text or str(channel or "").strip().lower() != "feishu":
+            return text
+
+        def _replace_plain_fence(match: re.Match[str]) -> str:
+            body = match.group(1)
+            if not _BOX_DRAWING_RE.search(body):
+                return match.group(0)
+            return body.strip("\n")
+
+        return _PLAIN_CODE_FENCE_RE.sub(_replace_plain_fence, text)
 
     @staticmethod
     def _load_metrics(run_dir: Path) -> Optional[Dict[str, Any]]:

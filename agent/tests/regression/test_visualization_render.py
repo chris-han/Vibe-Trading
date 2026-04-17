@@ -30,6 +30,11 @@ from src.runtime_prompt_policy import OUTPUT_FORMAT_PROMPT  # noqa: E402
 
 
 _FEISHU_ADAPTER = get_feishu_visualization_adapter()
+_REPORT_GENERATE_SKILL = AGENT_ROOT / "src" / "skills" / "report-generate" / "SKILL.md"
+_VALUATION_SKILL = AGENT_ROOT / "src" / "skills" / "valuation-model" / "SKILL.md"
+_BULL_REPORT_SKILL = AGENT_ROOT / ".hermes" / "skills" / "research" / "bull-side-research" / "SKILL.md"
+_BEAR_REPORT_SKILL = AGENT_ROOT / ".hermes" / "skills" / "research" / "bear-side-research" / "SKILL.md"
+_WEB_OUTPUT_FORMAT_SKILL = AGENT_ROOT / "src" / "skills" / "output-format-web" / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------
@@ -518,3 +523,21 @@ class TestOutputFormatPrompt:
     def test_prompt_forbids_ansi_art(self):
         p = OUTPUT_FORMAT_PROMPT
         assert "ANSI" in p or "ASCII" in p
+
+
+class TestReportSkillActionPlanFormatting:
+    def test_shared_report_skill_forbids_ascii_action_cards(self):
+        text = _REPORT_GENERATE_SKILL.read_text(encoding="utf-8")
+        assert "操作策略 / Action Plan" in text
+        assert "Never render this section as an ASCII card" in text
+
+    def test_research_and_valuation_skills_require_markdown_action_plans(self):
+        for skill_file in (_BULL_REPORT_SKILL, _BEAR_REPORT_SKILL, _VALUATION_SKILL):
+            text = skill_file.read_text(encoding="utf-8")
+            assert "操作策略 / Action Plan" in text
+            assert "plain fenced code block" in text or "Markdown pipe-table" in text
+
+    def test_web_output_format_forbids_ascii_strategy_layouts(self):
+        text = _WEB_OUTPUT_FORMAT_SKILL.read_text(encoding="utf-8")
+        assert "recommendation, action-plan, and `操作策略` sections" in text
+        assert "ASCII cards" in text
