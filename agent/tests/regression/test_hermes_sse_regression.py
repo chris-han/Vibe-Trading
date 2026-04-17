@@ -655,6 +655,8 @@ class TestHermesSessionEvents:
         assert stored_attempt.run_dir == str(actual_run_dir)
         assert stored_attempt.metrics is not None
         assert stored_attempt.metrics["final_value"] == 1211710.73
+        assert (actual_run_dir / "report.md").read_text(encoding="utf-8") == "completed"
+        assert not (placeholder_run_dir / "report.md").exists()
 
         messages = svc.store.get_messages(session.session_id)
         assistant = [m for m in messages if m.role == "assistant"][-1]
@@ -691,6 +693,157 @@ class TestHermesSessionEvents:
 
                 assert result["has_run_artifact"] is False
                 assert not (run_dir / "report.md").exists()
+
+        _run(_t())
+
+    def test_document_analysis_run_persists_report_and_marks_artifact(self, tmp_path):
+        """A read_document-backed analysis should persist report.md and surface a run artifact."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="summarize uploaded earnings report")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "document-analysis"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        final_response = "# Full report\n\nRevenue increased 17% year over year."
+
+        def _agent_factory(*args, **kwargs):
+            cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                if cb:
+                    cb(
+                        "tool.started",
+                        "read_document",
+                        "reading...",
+                        {"file_path": "/tmp/earnings.pdf", "pages": "1-15"},
+                    )
+                    cb(
+                        "tool.completed",
+                        "read_document",
+                        json.dumps({"status": "ok", "file": "earnings.pdf", "text": "Revenue increased 17%."}),
+                        {},
+                        is_error=False,
+                    )
+                return {"final_response": final_response, "status": "success"}
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["has_run_artifact"] is True
+                assert (run_dir / "report.md").read_text(encoding="utf-8") == final_response
+
+        _run(_t())
+
+    def test_setup_backtest_run_only_persists_report_to_prepared_run_dir(self, tmp_path):
+        """A setup_backtest_run-only workflow should write report.md to the prepared run dir."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="prepare a backtest run")
+        svc.store.create_attempt(attempt)
+
+        placeholder_run_dir = tmp_path / "runs" / "placeholder"
+        placeholder_run_dir.mkdir(parents=True, exist_ok=True)
+        prepared_run_dir = tmp_path / "runs" / "prepared-run"
+        prepared_run_dir.mkdir(parents=True, exist_ok=True)
+        final_response = "# Prepared run\n\nConfig and signal engine are ready."
+        setup_payload = json.dumps({
+            "status": "ok",
+            "run_dir": str(prepared_run_dir),
+            "files_written": ["config.json", "code/signal_engine.py"],
+        })
+
+        def _agent_factory(*args, **kwargs):
+            cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                assert cb is not None
+                cb("tool.started", "setup_backtest_run", "", {})
+                cb("tool.completed", "setup_backtest_run", setup_payload, {}, is_error=False)
+                return {"final_response": final_response, "status": "success"}
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = placeholder_run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["run_dir"] == str(prepared_run_dir)
+                assert result["has_run_artifact"] is True
+                assert (prepared_run_dir / "report.md").read_text(encoding="utf-8") == final_response
+                assert not (placeholder_run_dir / "report.md").exists()
+
+        _run(_t())
+
+    def test_run_swarm_persists_report_and_marks_artifact(self, tmp_path):
+        """A run_swarm workflow should persist the final report and surface a run artifact."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="run the research swarm")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "swarm-placeholder"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        swarm_report = "# Swarm verdict\n\nAllocate 6% with tight risk controls."
+
+        def _agent_factory(*args, **kwargs):
+            cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                assert cb is not None
+                cb("tool.started", "run_swarm", "", {"preset_name": "research"})
+                cb(
+                    "tool.completed",
+                    "run_swarm",
+                    json.dumps({"status": "completed", "run_id": "swarm-123", "final_report": swarm_report}),
+                    {},
+                    is_error=False,
+                )
+                return {"final_response": "", "status": "success"}
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["run_dir"] == str(run_dir)
+                assert result["content"] == swarm_report
+                assert result["has_run_artifact"] is True
+                assert (run_dir / "report.md").read_text(encoding="utf-8") == swarm_report
 
         _run(_t())
 

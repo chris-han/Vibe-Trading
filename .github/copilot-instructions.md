@@ -47,7 +47,7 @@ Set secrets in `agent/.env` rather than hard-coding them. Common variables inclu
 
 ## Workflow Guidance
 
-Use the `systematic-debugging` skill for debugging work. Use the `ui-ux-pro-max` skill and [UI-DESIGN.md](UI-DESIGN.md) for UI design and implementation decisions. Treat [Architecture-Design.md](Architecture-Design.md) as the architecture design spec for repo changes.
+Use the `systematic-debugging` skill for debugging work. Use the `ui-ux-pro-max` skill and [DESIGN.md](DESIGN.md) for UI design and implementation decisions. Treat [Architecture-Design.md](Architecture-Design.md) as the architecture design spec for repo changes.
 
 ## Visual Testing
 

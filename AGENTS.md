@@ -24,7 +24,7 @@ Recent commits use short Conventional Commit prefixes such as `feat:` and `fix:`
 Set secrets in `agent/.env` rather than hard-coding them. Common variables include `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `LANGCHAIN_PROVIDER`, and `LANGCHAIN_MODEL_NAME`. Do not modify vendored or submodule directories like `hermes-agent/` or `hermes-webui/` unless the task explicitly requires it.
 
 ## Workflow Guidance
-Use the `systematic-debugging` skill for debugging work. Use the `ui-ux-pro-max` skill and [`UI-DESIGN.md`](/home/chris/repo/Vibe-Trading/UI-DESIGN.md) for UI design and implementation decisions. Treat [`Architecture-Design.md`](/home/chris/repo/Vibe-Trading/Architecture-Design.md) as the architecture design spec for repo changes.
+Use the `systematic-debugging` skill for debugging work. Use the `ui-ux-pro-max` skill and [`DESIGN.md`](/home/chris/repo/Vibe-Trading/DESIGN.md) for UI design and implementation decisions. Treat [`Architecture-Design.md`](/home/chris/repo/Vibe-Trading/Architecture-Design.md) as the architecture design spec for repo changes.
 
 ## Visual Testing
 For browser-based UI verification, run Chromium with remote debugging enabled on port `9222` and attach Chrome DevTools to that session. Use this path for visual regression checks, layout inspection, and interactive debugging instead of relying on screenshots alone.

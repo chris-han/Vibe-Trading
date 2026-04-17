@@ -49,6 +49,8 @@ class SessionService:
         runs_dir: Root runs directory.
     """
 
+    _REPORTABLE_TOOL_NAMES = frozenset({"read_document"})
+
     def __init__(
         self,
         store: SessionStore,
@@ -684,7 +686,7 @@ class SessionService:
             args: Optional[dict] = None,
             **kwargs,
         ) -> None:
-            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output
+            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output, saw_reportable_tool_run
             if event_type == "tool.started":
                 if tool_name == "backtest":
                     started_run_dir = str((args or {}).get("run_dir") or "").strip()
@@ -746,6 +748,8 @@ class SessionService:
                         if parsed_result.get("status") == "ok" and resolved:
                             latest_backtest_run_dir = str(resolved)
                     elif tool_name == "run_swarm":
+                        saw_reportable_tool_run = True
+                    elif self._is_reportable_tool_result(tool_name, parsed_result):
                         saw_reportable_tool_run = True
 
                 if not is_error:
@@ -942,11 +946,6 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
-            if final_text and saw_reportable_tool_run:
-                try:
-                    (run_dir / "report.md").write_text(final_text, encoding="utf-8")
-                except Exception:
-                    logger.warning("Failed to persist report.md for run_dir=%s", run_dir, exc_info=True)
             state_store.mark_success(run_dir)
             result: Dict[str, Any] = {
                 "status": "success",
@@ -990,6 +989,13 @@ class SessionService:
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics
+        if result.get("status") == "success" and final_text and saw_reportable_tool_run:
+            report_dir = Path(str(result.get("run_dir") or run_dir))
+            try:
+                report_dir.mkdir(parents=True, exist_ok=True)
+                (report_dir / "report.md").write_text(final_text, encoding="utf-8")
+            except Exception:
+                logger.warning("Failed to persist report.md for run_dir=%s", report_dir, exc_info=True)
         result["has_run_artifact"] = self._has_run_artifact(
             result.get("run_dir"),
             result.get("metrics"),
@@ -1118,6 +1124,19 @@ class SessionService:
             return clean_preview[:4000]
 
         return ""
+
+    @classmethod
+    def _is_reportable_tool_result(
+        cls,
+        tool_name: str,
+        parsed_result: Optional[Dict[str, Any]],
+    ) -> bool:
+        """Return whether a successful tool result should persist a report."""
+        if tool_name not in cls._REPORTABLE_TOOL_NAMES:
+            return False
+        if not isinstance(parsed_result, dict):
+            return False
+        return str(parsed_result.get("status") or "").strip().lower() == "ok"
 
     @staticmethod
     def _format_result_message(attempt: Attempt) -> str:

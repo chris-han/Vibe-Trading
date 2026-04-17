@@ -45,3 +45,15 @@ def test_has_run_artifact_accepts_metrics_without_report(tmp_path):
     run_dir.mkdir(parents=True)
 
     assert SessionService._has_run_artifact(str(run_dir), {"sharpe": 1.2}) is True
+
+
+def test_reportable_tool_result_accepts_successful_document_reads():
+    parsed = {"status": "ok", "file": "earnings.pdf", "text": "Revenue increased 17%."}
+
+    assert SessionService._is_reportable_tool_result("read_document", parsed) is True
+
+
+def test_reportable_tool_result_rejects_non_document_tools():
+    parsed = {"status": "ok", "message": "done"}
+
+    assert SessionService._is_reportable_tool_result("search_files", parsed) is False
