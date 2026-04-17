@@ -639,8 +639,10 @@ class SessionService:
                 last_attempt_id=attempt.attempt_id,
             )
             reply_metadata = {}
-            if attempt.run_dir:
+            has_run_artifact = bool(result.get("has_run_artifact"))
+            if attempt.run_dir and has_run_artifact:
                 reply_metadata["run_id"] = Path(attempt.run_dir).name
+                reply_metadata["has_run_artifact"] = True
             reply_metadata["status"] = attempt.status.value
             if attempt.metrics:
                 reply_metadata["metrics"] = attempt.metrics
@@ -673,6 +675,7 @@ class SessionService:
                     "summary": attempt.summary,
                     "error": attempt.error,
                     "run_dir": attempt.run_dir,
+                    "has_run_artifact": has_run_artifact,
                     "metrics": attempt.metrics,
                 },
             )
@@ -728,6 +731,7 @@ class SessionService:
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None
+        saw_reportable_tool_run = False
 
         state_store = RunStateStore()
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -802,11 +806,15 @@ class SessionService:
 
                 if not is_error and parsed_result:
                     if tool_name == "setup_backtest_run":
+                        saw_reportable_tool_run = True
                         latest_prepared_run_dir = str(parsed_result.get("run_dir") or "") or latest_prepared_run_dir
                     elif tool_name == "backtest":
+                        saw_reportable_tool_run = True
                         resolved = parsed_result.get("resolved_run_dir") or parsed_result.get("run_dir")
                         if parsed_result.get("status") == "ok" and resolved:
                             latest_backtest_run_dir = str(resolved)
+                    elif tool_name == "run_swarm":
+                        saw_reportable_tool_run = True
 
                 if not is_error:
                     useful_tool_output = self._extract_useful_tool_output(tool_name, parsed_result, str(preview or ""))
@@ -1004,7 +1012,7 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
-            if final_text:
+            if final_text and saw_reportable_tool_run:
                 try:
                     (run_dir / "report.md").write_text(final_text, encoding="utf-8")
                 except Exception:
@@ -1052,8 +1060,34 @@ class SessionService:
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics
+        result["has_run_artifact"] = self._has_run_artifact(
+            result.get("run_dir"),
+            result.get("metrics"),
+        )
 
         return result
+
+    @staticmethod
+    def _has_run_artifact(
+        run_dir: Optional[str],
+        metrics: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Return whether a run has a user-visible artifact worth linking."""
+        if metrics:
+            return True
+        if not run_dir:
+            return False
+
+        base = Path(run_dir)
+        artifact_paths = [
+            base / "report.md",
+            base / "summary.md",
+            base / "answer.md",
+            base / "final_report.md",
+            base / "final_report.txt",
+            base / "artifacts" / "metrics.csv",
+        ]
+        return any(path.exists() and path.is_file() for path in artifact_paths)
 
     @staticmethod
     def _convert_messages_to_history(messages: list) -> list[Dict[str, Any]]:

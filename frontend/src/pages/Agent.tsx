@@ -147,12 +147,13 @@ export function Agent() {
       for (const m of msgs) {
         const meta = m.metadata as Record<string, unknown> | undefined;
         const runId = meta?.run_id as string | undefined;
+        const hasRunArtifact = Boolean(meta?.has_run_artifact);
         const metrics = meta?.metrics as Record<string, number> | undefined;
         const status = String(meta?.status || "").toLowerCase();
         const ts = new Date(m.created_at).getTime();
         if (m.role === "user") {
           agentMsgs.push({ id: m.message_id, type: "user", content: m.content, timestamp: ts });
-        } else if (runId && status === "completed") {
+        } else if (runId && status === "completed" && (hasRunArtifact || !!metrics)) {
           // Show text answer first (if non-empty), then chart card
           if (m.content && m.content !== "Strategy execution completed.") {
             agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, timestamp: ts });
@@ -271,11 +272,12 @@ export function Agent() {
         // Add final answer
         const runDir = String(d.run_dir || "");
         const runId = runDir ? runDir.split(/[/\\]/).pop() : undefined;
+        const hasRunArtifact = Boolean(d.has_run_artifact);
         const summary = String(d.summary || "");
         const metrics = (d.metrics as Record<string, number> | undefined) || undefined;
         if (summary) s.addMessage({ id: "", type: "answer", content: summary, timestamp: Date.now() });
 
-        if (runId) {
+        if (runId && (hasRunArtifact || !!metrics)) {
           s.addMessage({
             id: "",
             type: "run_complete",

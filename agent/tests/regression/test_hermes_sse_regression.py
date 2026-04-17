@@ -664,6 +664,76 @@ class TestHermesSessionEvents:
         assert assistant.metadata["run_id"] == actual_run_dir.name
         assert assistant.metadata["metrics"]["trade_count"] == 57.0
 
+    def test_plain_chat_run_does_not_persist_report_or_mark_artifact(self, tmp_path):
+        """A plain chat reply should not create report.md or surface a run artifact."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="hi")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "plain-chat"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        def _agent_factory(*args, **kwargs):
+            inst = MagicMock()
+            inst.run_conversation.return_value = {"final_response": "hello there", "status": "success"}
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["has_run_artifact"] is False
+                assert not (run_dir / "report.md").exists()
+
+        _run(_t())
+
+    def test_plain_chat_attempt_completed_omits_run_id_without_artifact(self, tmp_path):
+        """Completed plain-chat attempts should not attach run_id metadata or a run card trigger."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="hi")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "plain-chat"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        async def _fake_run(att, messages=None):
+            return {
+                "status": "success",
+                "content": "hello there",
+                "run_dir": str(run_dir),
+                "run_id": run_dir.name,
+                "has_run_artifact": False,
+            }
+
+        async def _t():
+            with patch.object(svc, "_run_with_agent", side_effect=_fake_run):
+                await svc._run_attempt(session, attempt)
+
+        _run(_t())
+
+        messages = svc.store.get_messages(session.session_id)
+        assistant = [m for m in messages if m.role == "assistant"][-1]
+        assert assistant.metadata is not None
+        assert "run_id" not in assistant.metadata
+        assert "has_run_artifact" not in assistant.metadata
+
+        completed = cap.data_for("attempt.completed")[-1]
+        assert completed["has_run_artifact"] is False
+        assert completed["run_dir"] == str(run_dir)
+
     def test_cancel_calls_interrupt_not_cancel(self, tmp_path):
         """cancel_current() calls agent.interrupt(), not agent.cancel() (Migration Plan §2.2)."""
         cap = EventCapture()
