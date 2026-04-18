@@ -903,6 +903,7 @@ class SessionService:
                 display_artifacts_dir=SESSION_VIRTUAL_ARTIFACTS_DIR,
             ),
             skip_context_files=True,
+            ack_continuation="aggressive",
             **agent_kwargs,
         )
         self._active_loops[sid] = agent

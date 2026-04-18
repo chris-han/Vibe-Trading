@@ -33,6 +33,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "Do NOT assume .venv exists under the current run directory" in prompt
     assert "The terminal already starts inside the run artifacts directory" in prompt
     assert "Do NOT cd to /workspace" in prompt
+    assert "use the Hermes web_search tool first" in prompt
+    assert "use read_url to fetch the full page content" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
     assert prompt.endswith("skill-body-for:web\n")
 
