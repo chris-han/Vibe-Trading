@@ -1,7 +1,6 @@
 ---
 name: volatility
 description: Volatility strategy. Trades mean reversion based on percentile ranking of historical volatility (HV). Suitable for any OHLCV data.
-category: strategy
 ---
 # Volatility Strategy
 

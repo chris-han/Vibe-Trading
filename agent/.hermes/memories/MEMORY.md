@@ -1,0 +1,1 @@
+Session search is not available. Perform tasks that require historical context manually.

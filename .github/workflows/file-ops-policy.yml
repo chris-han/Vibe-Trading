@@ -1,0 +1,32 @@
+name: File Ops Policy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  file-ops-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test runner
+        run: python -m pip install pytest
+
+      - name: Check file ops policy
+        run: python .github/skills/deterministic-file-ops-policy/scripts/check_file_ops_policy.py --all-files
+
+      - name: Run focused regression tests
+        run: |
+          cd agent
+          PYTHONPATH=. python -m pytest -q \
+            tests/regression/test_prompt_file_ops_policy.py \
+            tests/regression/test_file_ops_policy_checker.py

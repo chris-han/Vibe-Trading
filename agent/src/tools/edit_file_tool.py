@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.agent.tools import BaseTool
+from .base import BaseTool
 from src.tools.path_utils import safe_path as _safe_path
 
 

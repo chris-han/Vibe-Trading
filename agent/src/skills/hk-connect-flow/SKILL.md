@@ -1,7 +1,6 @@
 ---
 name: hk-connect-flow
 description: Stock Connect (Shanghai/Shenzhen-Hong Kong) fund flow analysis — Northbound (foreign into A-shares), Southbound (mainland into HK), sector allocation tracking, and cross-border arbitrage signals.
-category: flow
 ---
 # Stock Connect Fund Flow Analysis
 

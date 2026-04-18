@@ -201,3 +201,4 @@ class WorkerResult(BaseModel):
     error: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    usage: dict | None = None

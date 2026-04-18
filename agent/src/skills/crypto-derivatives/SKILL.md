@@ -1,7 +1,6 @@
 ---
 name: crypto-derivatives
 description: Crypto-derivatives strategies — perpetual funding-rate arbitrage, futures term-structure contango/backwardation trading, and option volatility-smile / Greeks analysis.
-category: crypto
 ---
 
 # Crypto-Derivatives Strategies

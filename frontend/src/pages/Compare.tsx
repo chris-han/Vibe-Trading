@@ -3,9 +3,10 @@ import { GitCompare, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, type RunListItem, type RunData, type EquityPoint } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { echarts, CHART_GROUP, connectCharts } from "@/lib/echarts";
+import { VChart } from "@visactor/vchart";
 import { getChartTheme } from "@/lib/chart-theme";
 import { useDarkMode } from "@/hooks/useDarkMode";
+import { ensureRegistered } from "@/lib/vchart-register";
 
 interface MetricDef {
   key: string;
@@ -28,7 +29,7 @@ function diffClass(a: unknown, b: unknown, higherIsBetter: boolean): string {
   if (!Number.isFinite(na) || !Number.isFinite(nb)) return "";
   const better = higherIsBetter ? nb > na : nb < na;
   const worse = higherIsBetter ? nb < na : nb > na;
-  return better ? "text-green-600 dark:text-green-400" : worse ? "text-red-600 dark:text-red-400" : "";
+  return better ? "text-success" : worse ? "text-destructive" : "";
 }
 
 function diffStr(a: unknown, b: unknown, type: "pct" | "num" | "int" | "days"): string {
@@ -100,15 +101,15 @@ interface EquityChartOverlayProps {
 function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: EquityChartOverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { dark } = useDarkMode();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
     if (leftCurve.length === 0 && rightCurve.length === 0) return;
+    ensureRegistered();
 
     const t = getChartTheme();
-    const chart = echarts.init(ref.current);
-    chart.group = CHART_GROUP;
-    connectCharts();
+    let chart: VChart | null = null;
 
     // Merge dates from both curves and sort
     const dateSet = new Set<string>();
@@ -116,82 +117,107 @@ function EquityChartOverlay({ leftCurve, rightCurve, leftLabel, rightLabel }: Eq
     for (const p of rightCurve) dateSet.add(p.time);
     const dates = Array.from(dateSet).sort();
 
-    // Build lookup maps
+    // Build value arrays aligned to merged dates
     const leftMap = new Map(leftCurve.map((p) => [p.time, Number(p.equity)]));
     const rightMap = new Map(rightCurve.map((p) => [p.time, Number(p.equity)]));
+    const leftValues = dates.map((d) => ({ time: d, value: leftMap.get(d) ?? null }));
+    const rightValues = dates.map((d) => ({ time: d, value: rightMap.get(d) ?? null }));
 
-    const leftData = dates.map((d) => leftMap.get(d) ?? null);
-    const rightData = dates.map((d) => rightMap.get(d) ?? null);
+    const colorA = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-a").trim() || "#3b82f6";
+    const colorB = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-b").trim() || "#f59e0b";
 
-    const PRIMARY_COLOR = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-a").trim() || "#3b82f6";
-    const SECONDARY_COLOR = getComputedStyle(document.documentElement).getPropertyValue("--chart-compare-b").trim() || "#f59e0b";
-
-    chart.setOption({
-      backgroundColor: "transparent",
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-        backgroundColor: t.tooltipBg,
-        borderColor: t.tooltipBorder,
-        textStyle: { color: t.tooltipText, fontSize: 11 },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        formatter: (params: any) => {
-          if (!Array.isArray(params) || !params.length) return "";
-          let html = `<b>${params[0].axisValue}</b>`;
-          for (const p of params) {
-            if (p.value == null) continue;
-            html += `<br/>${p.marker} ${p.seriesName}: <b>${Number(p.value).toLocaleString()}</b>`;
-          }
-          return html;
-        },
-      },
-      legend: {
-        data: [leftLabel, rightLabel],
-        textStyle: { color: t.textColor, fontSize: 11 },
-        right: 8,
-        top: 4,
-      },
-      grid: { left: 8, right: 8, top: 36, bottom: 40, containLabel: true },
-      xAxis: {
-        type: "category",
-        data: dates,
-        axisLine: { lineStyle: { color: t.axisColor } },
-        axisLabel: { color: t.textColor, fontSize: 10 },
-      },
-      yAxis: {
-        type: "value",
-        splitLine: { lineStyle: { color: t.gridColor } },
-        axisLabel: { color: t.textColor, fontSize: 10 },
-      },
-      dataZoom: [{ type: "inside" }, { type: "slider", height: 20, bottom: 4 }],
+    const spec = {
+      type: "common",
+      background: "transparent",
+      padding: { top: 8, right: 8, bottom: 8, left: 8 },
+      data: [
+        { id: "leftData", values: leftValues },
+        { id: "rightData", values: rightValues },
+      ],
       series: [
         {
-          name: leftLabel,
           type: "line",
-          data: leftData,
-          smooth: false,
-          symbol: "none",
-          lineStyle: { color: PRIMARY_COLOR, width: 2 },
-          connectNulls: true,
+          dataIndex: 0,
+          xField: "time",
+          yField: "value",
+          name: leftLabel,
+          line: { style: { stroke: colorA, lineWidth: 2 } },
+          point: { visible: false },
         },
         {
-          name: rightLabel,
           type: "line",
-          data: rightData,
-          smooth: false,
-          symbol: "none",
-          lineStyle: { color: SECONDARY_COLOR, width: 2 },
-          connectNulls: true,
+          dataIndex: 1,
+          xField: "time",
+          yField: "value",
+          name: rightLabel,
+          line: { style: { stroke: colorB, lineWidth: 2 } },
+          point: { visible: false },
         },
       ],
-    });
+      axes: [
+        {
+          orient: "bottom",
+          type: "band",
+          label: { style: { fill: t.textColor, fontSize: 10 } },
+          domainLine: { style: { stroke: t.axisColor } },
+          tick: { visible: false },
+          sampling: true,
+        },
+        {
+          orient: "left",
+          type: "linear",
+          label: { style: { fill: t.textColor, fontSize: 10 } },
+          grid: { style: { stroke: t.gridColor } },
+        },
+      ],
+      legends: [
+        {
+          visible: true,
+          position: "top",
+          orient: "horizontal",
+          item: { label: { style: { fill: t.textColor, fontSize: 11 } } },
+        },
+      ],
+      tooltip: {
+        mark: { visible: true },
+        dimension: { visible: true },
+        style: {
+          panel: { padding: 8, background: { fill: t.tooltipBg } },
+          titleLabel: { fill: t.tooltipText },
+          keyLabel: { fill: t.tooltipText },
+          valueLabel: { fill: t.tooltipText },
+        },
+      },
+      scrollBar: [
+        {
+          orient: "bottom",
+          start: 0,
+          end: 1,
+          roamZoom: { enable: true },
+        },
+      ],
+    };
 
-    const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(ref.current!);
-    return () => { ro.disconnect(); chart.dispose(); };
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      chart = new VChart(spec as any, { dom: ref.current });
+      chart.renderSync();
+      setError(null);
+    } catch (e) {
+      chart?.release();
+      setError(e instanceof Error ? e.message : "Chart failed to render");
+      return;
+    }
+
+    const ro = new ResizeObserver(() => {
+      if (ref.current) chart.resize(ref.current.clientWidth, ref.current.clientHeight);
+    });
+    ro.observe(ref.current);
+    return () => { ro.disconnect(); chart.release(); };
   }, [leftCurve, rightCurve, leftLabel, rightLabel, dark]);
 
   if (leftCurve.length === 0 && rightCurve.length === 0) return null;
+  if (error) return <div className="text-sm text-muted-foreground p-4">Comparison chart unavailable</div>;
 
   return <div ref={ref} style={{ height: 320 }} />;
 }
@@ -243,15 +269,15 @@ export function Compare() {
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
-      <h1 className="text-xl font-bold flex items-center gap-2">
-        <GitCompare className="h-5 w-5" /> {t.strategyComparison}
+      <h1 className="text-xl font-bold flex items-center gap-2 text-foreground">
+        <GitCompare className="h-5 w-5 text-primary" /> {t.strategyComparison}
       </h1>
 
       {/* Selectors */}
       <div className="flex gap-4 items-end">
         <div className="flex-1">
           <label className="text-xs text-muted-foreground block mb-1">{t.baseline}</label>
-          <select value={leftId} onChange={(e) => setLeftId(e.target.value)} className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" title={leftRun?.prompt || leftId}>
+          <select value={leftId} onChange={(e) => setLeftId(e.target.value)} className="w-full px-3 py-2 rounded-button border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground" title={leftRun?.prompt || leftId}>
             <option value="">{t.selectRun}</option>
             {runs.map((r) => <option key={r.run_id} value={r.run_id}>{runLabel(r)} ({r.status})</option>)}
           </select>
@@ -259,7 +285,7 @@ export function Compare() {
         <ArrowRight className="h-5 w-5 text-muted-foreground mb-2 shrink-0" />
         <div className="flex-1">
           <label className="text-xs text-muted-foreground block mb-1">{t.compareTo}</label>
-          <select value={rightId} onChange={(e) => setRightId(e.target.value)} className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" title={rightRun?.prompt || rightId}>
+          <select value={rightId} onChange={(e) => setRightId(e.target.value)} className="w-full px-3 py-2 rounded-button border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-foreground" title={rightRun?.prompt || rightId}>
             <option value="">{t.selectRun}</option>
             {runs.map((r) => <option key={r.run_id} value={r.run_id}>{runLabel(r)} ({r.status})</option>)}
           </select>
@@ -268,7 +294,7 @@ export function Compare() {
 
       {/* Equity curve overlay */}
       {(leftCurve.length > 0 || rightCurve.length > 0) && (
-        <div className="border rounded-xl p-4">
+        <div className="border border-border rounded-card p-4 bg-card">
           <h2 className="text-sm font-medium text-muted-foreground mb-2">{t.equityDrawdown}</h2>
           <EquityChartOverlay
             leftCurve={leftCurve}
@@ -281,10 +307,10 @@ export function Compare() {
 
       {/* Metrics table */}
       {(leftData || rightData) && (
-        <div className="border rounded-xl overflow-hidden">
+        <div className="border border-border rounded-card overflow-hidden bg-card">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b bg-muted/40">
+              <tr className="border-b border-border bg-muted/30">
                 <th className="text-left px-4 py-2.5 text-muted-foreground font-medium">{t.metric}</th>
                 <th className="text-right px-4 py-2.5 text-muted-foreground font-medium">{t.baseline}</th>
                 <th className="text-right px-4 py-2.5 text-muted-foreground font-medium">{t.compareTo}</th>
@@ -296,10 +322,10 @@ export function Compare() {
                 const lv = resolveMetric(leftData, key);
                 const rv = resolveMetric(rightData, key);
                 return (
-                  <tr key={key} className="border-b last:border-0 hover:bg-muted/20">
-                    <td className="px-4 py-2.5 font-medium">{label}</td>
-                    <td className="px-4 py-2.5 text-right font-mono tabular-nums">{fmt(lv, type)}</td>
-                    <td className="px-4 py-2.5 text-right font-mono tabular-nums">{fmt(rv, type)}</td>
+                  <tr key={key} className="border-b border-border/50 last:border-0 hover:bg-muted/20">
+                    <td className="px-4 py-2.5 font-medium text-foreground">{label}</td>
+                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-muted-foreground">{fmt(lv, type)}</td>
+                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-muted-foreground">{fmt(rv, type)}</td>
                     <td className={cn("px-4 py-2.5 text-right font-mono tabular-nums font-semibold", diffClass(lv, rv, higherIsBetter))}>{diffStr(lv, rv, type)}</td>
                   </tr>
                 );

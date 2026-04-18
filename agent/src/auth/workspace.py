@@ -1,0 +1,135 @@
+"""Workspace provisioning helpers."""
+
+from __future__ import annotations
+
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class WorkspacePaths:
+    workspace_slug: str
+    workspace_root: Path
+    agent_root: Path
+    hermes_home: Path
+    sessions_dir: Path
+    runs_dir: Path
+    uploads_dir: Path
+    swarm_dir: Path
+
+
+def workspace_swarm_dir(agent_root: Path) -> Path:
+    """Return the canonical swarm storage root for a workspace agent dir."""
+    return agent_root / ".swarm"
+
+
+def workspace_sessions_dir(agent_root: Path) -> Path:
+    """Return the canonical session storage directory for a workspace agent dir."""
+    return agent_root / "sessions"
+
+
+def workspace_runs_dir(agent_root: Path) -> Path:
+    """Return the canonical run storage directory for a workspace agent dir."""
+    return agent_root / "runs"
+
+
+def workspace_uploads_dir(agent_root: Path) -> Path:
+    """Return the canonical uploads storage directory for a workspace agent dir."""
+    return agent_root / "uploads"
+
+
+def workspace_swarm_runs_dir(agent_root: Path) -> Path:
+    """Return the canonical swarm runs directory for a workspace agent dir."""
+    return workspace_swarm_dir(agent_root) / "runs"
+
+
+def legacy_workspace_swarm_dir(agent_root: Path) -> Path:
+    """Return the pre-refactor swarm storage root for a workspace agent dir."""
+    return agent_root / "swarm"
+
+
+def _merge_directory_contents(source_dir: Path, target_dir: Path) -> None:
+    """Recursively merge source contents into target without overwriting existing files."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for child in source_dir.iterdir():
+        destination = target_dir / child.name
+        if child.is_dir():
+            if destination.exists() and destination.is_dir():
+                _merge_directory_contents(child, destination)
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+                continue
+            shutil.move(str(child), str(destination))
+            continue
+
+        if destination.exists():
+            continue
+        shutil.move(str(child), str(destination))
+
+
+def migrate_workspace_swarm_dir(agent_root: Path) -> Path:
+    """Move legacy workspace swarm data from swarm/ into the canonical .swarm/."""
+    target_swarm_dir = workspace_swarm_dir(agent_root)
+    legacy_swarm_dir = legacy_workspace_swarm_dir(agent_root)
+    if not legacy_swarm_dir.exists() or legacy_swarm_dir == target_swarm_dir:
+        return
+
+    if not target_swarm_dir.exists():
+        legacy_swarm_dir.rename(target_swarm_dir)
+        return target_swarm_dir
+
+    _merge_directory_contents(legacy_swarm_dir, target_swarm_dir)
+
+    try:
+        legacy_swarm_dir.rmdir()
+    except OSError:
+        pass
+
+    return target_swarm_dir
+
+
+def workspace_paths(base_dir: Path, workspace_slug: str) -> WorkspacePaths:
+    workspace_root = base_dir / workspace_slug
+    agent_root = workspace_root / "agent"
+    return WorkspacePaths(
+        workspace_slug=workspace_slug,
+        workspace_root=workspace_root,
+        agent_root=agent_root,
+        hermes_home=agent_root / ".hermes",
+        sessions_dir=workspace_sessions_dir(agent_root),
+        runs_dir=workspace_runs_dir(agent_root),
+        uploads_dir=workspace_uploads_dir(agent_root),
+        swarm_dir=workspace_swarm_dir(agent_root),
+    )
+
+
+def ensure_workspace(base_dir: Path, workspace_slug: str, template_hermes_home: Path) -> WorkspacePaths:
+    paths = workspace_paths(base_dir, workspace_slug)
+    migrate_workspace_swarm_dir(paths.agent_root)
+    for directory in (
+        paths.agent_root,
+        paths.hermes_home,
+        paths.sessions_dir,
+        paths.runs_dir,
+        paths.uploads_dir,
+        paths.swarm_dir,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    config_src = template_hermes_home / "config.yaml"
+    config_dest = paths.hermes_home / "config.yaml"
+    if config_src.exists() and not config_dest.exists():
+        shutil.copy2(config_src, config_dest)
+
+    env_src = template_hermes_home / ".env"
+    env_dest = paths.hermes_home / ".env"
+    if env_src.exists() and not env_dest.exists():
+        shutil.copy2(env_src, env_dest)
+
+    for child in ("skills", "plugins", "memories", "logs", "home", "profiles"):
+        (paths.hermes_home / child).mkdir(parents=True, exist_ok=True)
+
+    return paths

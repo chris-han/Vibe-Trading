@@ -1,12 +1,12 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode, useMemo, useState, useCallback } from "react";
 
-const messages = {
+const messagesEn = {
   home: "Home", agent: "Agent", runs: "Runs", settings: "Settings",
   startResearch: "Start Research", describeStrategy: "Describe a trading strategy to get started.",
   prompt: "e.g. Create a dual MA crossover strategy for 000001.SZ, backtest 2024",
   send: "Send", loading: "Loading...", noRuns: "No runs yet. Go to Agent to create one.",
   runHistory: "Run History", status: "Status", elapsed: "Elapsed",
-  chart: "Chart", trades: "Trades", code: "Code", trace: "Trace",
+  chart: "Chart", report: "Report", trades: "Trades", code: "Code", trace: "Trace",
   noData: "No data available", noTrades: "No trades recorded.", noCode: "No code files.",
   noTrace: "No trace data.", priceAndTrades: "Price & Trades", equityAndDrawdown: "Equity & Drawdown",
   examples: "Try an example:", bye: "Goodbye",
@@ -48,8 +48,10 @@ const messages = {
   toolWriteFile: "Generate code",
   toolEditFile: "Edit code",
   toolReadFile: "Read file",
+  toolSearchFiles: "Search files",
   toolRunBacktest: "Run backtest",
   toolBash: "Run command",
+  toolTerminal: "Run command",
   toolReadUrl: "Read webpage",
   toolReadDocument: "Read document",
   toolCompact: "Compact context",
@@ -75,7 +77,6 @@ const messages = {
   metricBenchmarkReturn: "Benchmark",
   metricExcessReturn: "Excess Return",
   metricIR: "IR",
-  validation: "Validation",
   overlayMA: "Moving Avg",
   overlayChannel: "Channel",
   overlayIndicators: "Indicators",
@@ -91,6 +92,8 @@ const messages = {
   exportChat: "Export chat",
   stopGeneration: "Stop generation",
   newMessages: "New messages",
+  loadMoreHistory: "Load more history",
+  loadingMoreHistory: "Loading more history...",
   stepN: "Step {n}",
   exportTitle: "# Chat Export",
   exportTime: "Export time",
@@ -104,15 +107,76 @@ const messages = {
   example1: "Dual MA crossover on 000001.SZ (5/20 day), backtest 2024",
   example2: "Build a dual MA crossover strategy for 000001.SZ, backtest 2024",
   example3: "Bollinger band mean-reversion on 600519.SH, backtest last 3 years",
-} as const;
+};
 
-type Messages = typeof messages;
+const messagesZh: Partial<Record<keyof typeof messagesEn, string>> = {
+  home: "首页", agent: "代理", runs: "运行", settings: "设置",
+  startResearch: "开始研究", describeStrategy: "用自然语言描述交易策略以开始。",
+  send: "发送", loading: "加载中...", noRuns: "尚无运行。请到代理页面创建。",
+  runHistory: "运行历史", chart: "图表", report: "报告", trades: "交易", code: "代码",
+  heroTitle: "AI 驱动的量化策略研究",
+  heroDesc: "用自然语言描述交易策略。代理会生成代码、运行回测并优化 —— 实时反馈。",
+  darkMode: "暗色", lightMode: "亮色", language: "语言",
+  sessions: "会话", newChat: "新会话", deleteConfirm: "删除？",
+  fullReport: "完整报告 →",
+  noSessions: "暂无会话",
+  viewDetails: "查看详情",
+  confirmDelete: "确认", cancelDelete: "取消",
+  loadMoreHistory: "加载更多历史消息",
+  loadingMoreHistory: "正在加载更多历史消息...",
+};
 
-const I18nCtx = createContext<{ t: Messages }>({ t: messages });
+type Messages = typeof messagesEn;
+
+type Lang = "en" | "zh";
+
+const I18nCtx = createContext<{ t: Messages; lang: Lang; setLang: (l: Lang) => void; detectAndSetLangFromContent: (text: string) => void }>({ t: messagesEn, lang: "en", setLang: () => {}, detectAndSetLangFromContent: () => {} });
 
 export function I18nProvider({ children }: { children: ReactNode }) {
+  const [lang, setLang] = useState<Lang>(() => {
+    try {
+      const stored = localStorage.getItem("app.lang");
+      if (stored === "zh") return "zh";
+    } catch {}
+    return navigator.language?.startsWith("zh") ? "zh" : "en";
+  });
+
+  const setLangAndStore = useCallback((l: Lang) => {
+    try { localStorage.setItem("app.lang", l); } catch {}
+    setLang(l);
+    // set html lang attribute for CSS selectors
+    try {
+      document.documentElement.lang = l === "zh" ? "zh" : "en";
+      // Update CSS font variable so English uses Autaut Grotesk, Chinese uses Noto Sans SC
+      if (l === "zh") {
+        document.documentElement.style.setProperty("--font-ui", "'Noto Sans SC', 'Autaut Grotesk', -apple-system, system-ui, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif");
+      } else {
+        document.documentElement.style.setProperty("--font-ui", "'Autaut Grotesk', 'Noto Sans SC', -apple-system, system-ui, 'Segoe UI', Roboto, Arial, sans-serif");
+      }
+    } catch {}
+  }, []);
+
+  const detectAndSetLangFromContent = useCallback((text: string) => {
+    const cjk = /[\u4E00-\u9FFF\u3400-\u4DBF\u3000-\u303F]/;
+    if (cjk.test(text)) setLangAndStore("zh");
+  }, [setLangAndStore]);
+
+  const t = useMemo(() => {
+    if (lang === "zh") return { ...(messagesEn as any), ...(messagesZh as any) } as Messages;
+    return messagesEn as Messages;
+  }, [lang]);
+
+  // Ensure CSS font variable matches initial lang on mount
+  try {
+    if (lang === "zh") {
+      document.documentElement.style.setProperty("--font-ui", "'Noto Sans SC', 'Autaut Grotesk', -apple-system, system-ui, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif");
+    } else {
+      document.documentElement.style.setProperty("--font-ui", "'Autaut Grotesk', 'Noto Sans SC', -apple-system, system-ui, 'Segoe UI', Roboto, Arial, sans-serif");
+    }
+  } catch {}
+
   return (
-    <I18nCtx.Provider value={{ t: messages }}>
+    <I18nCtx.Provider value={{ t, lang, setLang: setLangAndStore, detectAndSetLangFromContent }}>
       {children}
     </I18nCtx.Provider>
   );

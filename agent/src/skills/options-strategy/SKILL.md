@@ -1,7 +1,6 @@
 ---
 name: options-strategy
 description: Options strategy framework supporting Black-Scholes pricing, Greeks analysis, and multi-leg backtesting. Suitable for cryptocurrency and equity options.
-category: asset-class
 ---
 
 ## Purpose

@@ -1,7 +1,6 @@
 ---
 name: perp-funding-basis
 description: Perpetual futures funding rate analysis and cash-carry basis trading — funding rate regimes, annualized basis signals, carry trade construction, and funding rate arbitrage between exchanges.
-category: crypto
 ---
 # Perpetual Funding Rate & Basis Trading
 

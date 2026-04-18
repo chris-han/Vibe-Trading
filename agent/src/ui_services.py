@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DEFAULT_ANALYSIS_PERIODS = [5, 20]
+_ARTIFACT_MD_PATTERN = re.compile(r"artifacts/([A-Za-z0-9._/-]+\.md)\b")
 
 
 def format_run_date(date_str: Optional[str]) -> Optional[str]:
@@ -60,6 +62,32 @@ def load_json_file(path: Path) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return None
+
+
+def expand_artifact_markdown(text: str, run_dir: Path) -> str:
+    """Inline a referenced markdown artifact when the current text is only a pointer.
+
+    This supports assistant replies such as "saved to artifacts/chart_showcase.md"
+    so the web UI can render the actual markdown/chart content without a second
+    explicit fetch step.
+    """
+    if not text:
+        return text
+    if "```echarts" in text or "```mermaid" in text or "```chart" in text or "```vchart" in text:
+        return text
+
+    matches = _ARTIFACT_MD_PATTERN.findall(text)
+    for relative_path in matches:
+        artifact_path = run_dir / "artifacts" / Path(relative_path).name
+        if not artifact_path.exists():
+            continue
+        try:
+            artifact_text = artifact_path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            continue
+        if artifact_text:
+            return artifact_text
+    return text
 
 
 def load_csv_records(path: Path) -> List[Dict[str, Any]]:
@@ -144,6 +172,64 @@ def load_run_context(run_dir: Path) -> Dict[str, Any]:
         "end_date": end_date,
         "raw_context": context,
     }
+
+
+def load_run_report(run_dir: Path) -> Optional[str]:
+    """Load a saved narrative report for a run.
+
+    For historical session runs created before report persistence existed,
+    this falls back to the session event log and extracts the matching
+    assistant reply using the ``session_id`` saved in ``req.json``.
+
+    Args:
+        run_dir: The run directory under ``runs/``.
+
+    Returns:
+        Markdown/text report content when available.
+    """
+    for file_name in ("report.md", "summary.md", "answer.md", "final_report.md", "final_report.txt"):
+        path = run_dir / file_name
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            continue
+        if text:
+            return expand_artifact_markdown(text, run_dir)
+
+    request_data = load_json_file(run_dir / "req.json") or {}
+    context = request_data.get("context") or {}
+    session_id = str(context.get("session_id") or "").strip()
+    if not session_id:
+        return None
+
+    events_path = run_dir.parent.parent / "sessions" / session_id / "events.jsonl"
+    if not events_path.exists():
+        return None
+
+    fallback: Optional[str] = None
+    try:
+        for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if event.get("event_type") != "message.created" or event.get("role") != "assistant":
+                continue
+
+            content = str(event.get("content") or "").strip()
+            if not content or content == "Strategy execution completed.":
+                continue
+
+            metadata = event.get("metadata") or {}
+            inner_meta = metadata.get("metadata") or {}
+            if inner_meta.get("run_id") == run_dir.name:
+                return expand_artifact_markdown(content, run_dir)
+            fallback = expand_artifact_markdown(content, run_dir)
+    except Exception:
+        return None
+
+    return fallback
 
 
 def infer_indicator_periods(run_dir: Path) -> List[int]:
@@ -413,11 +499,10 @@ def reconstruct_price_series(run_dir: Path) -> List[Dict[str, Any]]:
     if not signal_path.exists():
         return []
 
-    agent_root = Path(__file__).resolve().parents[1]
     try:
-        from src.providers.llm import _ensure_dotenv
+        from runtime_env import ensure_runtime_env
 
-        _ensure_dotenv()
+        ensure_runtime_env()
     except Exception:
         pass
     fetch_start_date = _compute_fetch_start_date(run_dir, start_date)
@@ -503,6 +588,31 @@ def _compute_fetch_start_date(run_dir: Path, start_date: str) -> str:
     return (start_dt - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
 
 
+def _normalize_timestamp(ts: Any) -> Optional[str]:
+    """Normalize a timestamp, preserving intraday precision.
+
+    Unlike ``format_run_date``, this does NOT truncate datetime strings to the
+    date portion.  Intraday values like ``"2026-04-10 09:45:00"`` are kept as-is
+    so that the frontend chart can plot individual 5-minute (or other sub-daily)
+    bars without collapsing all intraday bars onto the same calendar date.
+
+    Args:
+        ts: Raw timestamp value from a CSV row or data frame.
+
+    Returns:
+        A normalised string, or ``None`` when the input is empty.
+    """
+    if not ts:
+        return None
+    value = str(ts).strip()
+    if not value:
+        return None
+    # YYYYMMDD → YYYY-MM-DD (compact daily format only)
+    if len(value) == 8 and value.isdigit():
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    return value
+
+
 def _normalize_price_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Normalize stored price rows for charting.
 
@@ -514,7 +624,7 @@ def _normalize_price_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     normalized: List[Dict[str, Any]] = []
     for row in rows:
-        timestamp = format_run_date(row.get("timestamp") or row.get("time"))
+        timestamp = _normalize_timestamp(row.get("timestamp") or row.get("time"))
         if not timestamp:
             continue
         normalized.append(

@@ -13,7 +13,7 @@ from src.swarm.models import (
     WorkerResult,
 )
 from src.swarm.presets import build_run_from_preset, list_presets, load_preset
-from src.swarm.runtime import SwarmRuntime
+from src.swarm.runtime import WorkflowRuntime
 from src.swarm.store import SwarmStore
 from src.swarm.worker import run_worker
 
@@ -23,7 +23,7 @@ __all__ = [
     "SwarmEvent",
     "SwarmMessage",
     "SwarmRun",
-    "SwarmRuntime",
+    "WorkflowRuntime",
     "SwarmStore",
     "SwarmTask",
     "TaskStatus",

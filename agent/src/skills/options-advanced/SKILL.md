@@ -1,7 +1,6 @@
 ---
 name: options-advanced
 description: "Advanced options strategies: volatility-surface modeling (SABR / Local Vol), dynamic Greeks rebalancing, calendar spreads, volatility arbitrage and skew trading, and option market-making basics."
-category: asset-class
 ---
 
 # Advanced Options Strategies

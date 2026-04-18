@@ -34,7 +34,6 @@ export function EquityChart({ data, height = 300 }: Props) {
         backgroundColor: t.tooltipBg,
         borderColor: t.tooltipBorder,
         textStyle: { color: t.tooltipText, fontSize: 11 },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         formatter: (params: any) => {
           if (!Array.isArray(params) || !params.length) return "";
           let html = `<b>${params[0].axisValue}</b>`;
@@ -101,7 +100,7 @@ export function EquityChart({ data, height = 300 }: Props) {
     });
 
     const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(ref.current!);
+    ro.observe(ref.current);
     return () => { ro.disconnect(); chart.dispose(); };
   }, [data, dark]);
 

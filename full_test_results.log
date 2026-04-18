@@ -1,0 +1,550 @@
+........................................................................ [  0%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  2%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 12%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 14%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+..................................................................s..s.. [ 16%]
+....s........................s.......................................... [ 16%]
+........................................................................ [ 17%]
+........................................................................ [ 17%]
+........................................................................ [ 18%]
+........................................................................ [ 18%]
+........................................................................ [ 19%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 21%]
+...................................................................FFFFF [ 21%]
+FFFFFFFFFFFFFF.......................................................... [ 22%]
+.F
+=================================== FAILURES ===================================
+_________________ test_safe_defaults_block_everyone_and_roles __________________
+
+    def test_safe_defaults_block_everyone_and_roles():
+        am = _build_allowed_mentions()
+>       assert am.everyone is False, "default must NOT allow @everyone/@here pings"
+E       AssertionError: default must NOT allow @everyone/@here pings
+E       assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:105: AssertionError
+_____________________ test_env_var_opts_back_into_everyone _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafad3b4890>
+
+    def test_env_var_opts_back_into_everyone(monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", "true")
+        am = _build_allowed_mentions()
+>       assert am.everyone is True
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:114: AssertionError
+________________________ test_env_var_can_disable_users ________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafad3b5760>
+
+    def test_env_var_can_disable_users(monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_USERS", "false")
+        am = _build_allowed_mentions()
+>       assert am.users is False
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().users' id='140392502353968'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().users' id='140392502353968'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.users
+
+tests/gateway/test_discord_allowed_mentions.py:124: AssertionError
+___________________ test_everyone_boolean_parsing[true-True] ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc6214bc0>
+raw = 'true', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+___________________ test_everyone_boolean_parsing[True-True] ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc62148c0>
+raw = 'True', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+___________________ test_everyone_boolean_parsing[TRUE-True] ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc6216540>
+raw = 'TRUE', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+____________________ test_everyone_boolean_parsing[1-True] _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc6214d10>
+raw = '1', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+___________________ test_everyone_boolean_parsing[yes-True] ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc62159d0>
+raw = 'yes', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+___________________ test_everyone_boolean_parsing[YES-True] ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc5fd11c0>
+raw = 'YES', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+____________________ test_everyone_boolean_parsing[on-True] ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc5fd2870>
+raw = 'on', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+__________________ test_everyone_boolean_parsing[false-False] __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc5fd3200>
+raw = 'false', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+__________________ test_everyone_boolean_parsing[False-False] __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc6217b60>
+raw = 'False', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+____________________ test_everyone_boolean_parsing[0-False] ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc6217530>
+raw = '0', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+___________________ test_everyone_boolean_parsing[no-False] ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc6216210>
+raw = 'no', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+___________________ test_everyone_boolean_parsing[off-False] ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc62172f0>
+raw = 'off', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+____________________ test_everyone_boolean_parsing[-False] _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafad3b5520>
+raw = '', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+_________________ test_everyone_boolean_parsing[garbage-False] _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc5d90770>
+raw = 'garbage', expected = False
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+__________________ test_everyone_boolean_parsing[ true -True] __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafad33da60>
+raw = ' true ', expected = True
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("true", True), ("True", True), ("TRUE", True),
+        ("1", True), ("yes", True), ("YES", True), ("on", True),
+        ("false", False), ("False", False), ("0", False),
+        ("no", False), ("off", False),
+        ("", False),                 # empty falls back to default (False for everyone)
+        ("garbage", False),          # unknown falls back to default
+        (" true ", True),            # whitespace tolerated
+    ])
+    def test_everyone_boolean_parsing(monkeypatch, raw, expected):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", raw)
+        am = _build_allowed_mentions()
+>       assert am.everyone is expected
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:143: AssertionError
+_________________________ test_all_four_knobs_together _________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafc5fd11f0>
+
+    def test_all_four_knobs_together(monkeypatch):
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_EVERYONE", "true")
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_ROLES", "true")
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_USERS", "false")
+        monkeypatch.setenv("DISCORD_ALLOW_MENTION_REPLIED_USER", "false")
+        am = _build_allowed_mentions()
+>       assert am.everyone is True
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is True
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_allowed_mentions.py:152: AssertionError
+_ test_connect_only_requests_members_intent_when_needed[769524422783664158-False] _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fafad37c620>
+allowed_users = '769524422783664158', expected_members_intent = False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("allowed_users", "expected_members_intent"),
+        [
+            ("769524422783664158", False),
+            ("abhey-gupta", True),
+            ("769524422783664158,abhey-gupta", True),
+        ],
+    )
+    async def test_connect_only_requests_members_intent_when_needed(monkeypatch, allowed_users, expected_members_intent):
+        adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
+    
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", allowed_users)
+        monkeypatch.setattr("gateway.status.acquire_scoped_lock", lambda scope, identity, metadata=None: (True, None))
+        monkeypatch.setattr("gateway.status.release_scoped_lock", lambda scope, identity: None)
+    
+        intents = SimpleNamespace(message_content=False, dm_messages=False, guild_messages=False, members=False, voice_states=False)
+        monkeypatch.setattr(discord_platform.Intents, "default", lambda: intents)
+    
+        created = {}
+    
+        def fake_bot_factory(*, command_prefix, intents, proxy=None, allowed_mentions=None, **_):
+            created["bot"] = FakeBot(intents=intents, allowed_mentions=allowed_mentions)
+            return created["bot"]
+    
+        monkeypatch.setattr(discord_platform.commands, "Bot", fake_bot_factory)
+        monkeypatch.setattr(adapter, "_resolve_allowed_usernames", AsyncMock())
+    
+        ok = await adapter.connect()
+    
+        assert ok is True
+        assert created["bot"].intents.members is expected_members_intent
+        # Safe-default AllowedMentions must be applied on every connect so the
+        # bot cannot @everyone from LLM output.  Granular overrides live in the
+        # dedicated test_discord_allowed_mentions.py module.
+        am = created["bot"].allowed_mentions
+        assert am is not None, "connect() must pass an AllowedMentions to commands.Bot"
+>       assert am.everyone is False
+E       AssertionError: assert <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> is False
+E        +  where <MagicMock name='mock.AllowedMentions().everyone' id='140392921402832'> = <MagicMock name='mock.AllowedMentions()' id='140392921402784'>.everyone
+
+tests/gateway/test_discord_connect.py:158: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     gateway.platforms.discord:discord.py:607 [Discord] Using proxy for Discord: http://127.0.0.1:12334
+WARNING  gateway.platforms.discord:discord.py:2161 Discord auto-register from COMMAND_REGISTRY failed: 'types.SimpleNamespace' object has no attribute 'Command'
+WARNING  gateway.platforms.discord:discord.py:2286 [Discord] Failed to register /skill command: 'types.SimpleNamespace' object has no attribute 'autocomplete'
+INFO     gateway.platforms.discord:discord.py:625 [Discord] Connected as namespace(id=999, name='Hermes')
+INFO     gateway.platforms.discord:discord.py:795 [Discord] Synced 0 slash command(s)
+=============================== warnings summary ===============================
+tests/tools/test_file_sync_perf.py:82
+  /home/chris/repo/Vibe-Trading/hermes-agent/tests/tools/test_file_sync_perf.py:82: PytestUnknownMarkWarning: Unknown pytest.mark.ssh - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.ssh
+
+tests/acp/test_auth.py::TestHasProvider::test_has_provider_with_resolved_runtime
+  /home/chris/repo/Vibe-Trading/hermes-agent/tests/conftest.py:307: DeprecationWarning: There is no current event loop
+    loop = asyncio.get_event_loop_policy().get_event_loop()
+
+tests/acp/test_events.py::TestToolProgressCallback::test_duplicate_same_name_tool_calls_use_fifo_ids
+tests/acp/test_events.py::TestStepCallback::test_step_callback_passes_arguments_and_snapshot
+  /home/chris/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/importlib/__init__.py:90: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    return _bootstrap._gcd_import(name[level:], package, level)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/acp/test_events.py::TestThinkingCallback::test_emits_thought_chunk
+tests/acp/test_events.py::TestStepCallback::test_completes_tracked_tool_calls
+tests/acp/test_events.py::TestStepCallback::test_none_result_passed_through
+tests/acp/test_events.py::TestStepCallback::test_tool_progress_captures_snapshot_metadata
+tests/acp/test_mcp_e2e.py::TestMcpRegistrationE2E::test_session_with_mcp_servers_registers_tools
+  /home/chris/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/unittest/mock.py:2217: RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/cli/test_reasoning_command.py::TestReasoningCallback::test_callback_invoked_with_reasoning
+  /home/chris/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/unittest/mock.py:2217: RuntimeWarning: coroutine 'Process.communicate' was never awaited
+    def __init__(self, name, parent):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/gateway/test_api_server.py: 75 warnings
+  /home/chris/repo/Vibe-Trading/hermes-agent/tests/gateway/test_api_server.py:222: NotAppKeyWarning: It is recommended to use web.AppKey instances for keys.
+  https://docs.aiohttp.org/en/stable/web_advanced.html#application-s-config
+    app["api_server_adapter"] = adapter
+
+tests/gateway/test_api_server_bind_guard.py::TestConnectBindGuard::test_refuses_ipv4_wildcard_without_key
+tests/gateway/test_api_server_bind_guard.py::TestConnectBindGuard::test_refuses_ipv6_wildcard_without_key
+  /home/chris/repo/Vibe-Trading/hermes-agent/gateway/platforms/api_server.py:2315: NotAppKeyWarning: It is recommended to use web.AppKey instances for keys.
+  https://docs.aiohttp.org/en/stable/web_advanced.html#application-s-config
+    self._app["api_server_adapter"] = self
+
+tests/gateway/test_api_server_jobs.py: 35 warnings
+  /home/chris/repo/Vibe-Trading/hermes-agent/tests/gateway/test_api_server_jobs.py:52: NotAppKeyWarning: It is recommended to use web.AppKey instances for keys.
+  https://docs.aiohttp.org/en/stable/web_advanced.html#application-s-config
+    app["api_server_adapter"] = adapter
+
+tests/gateway/test_discord_channel_prompts.py::test_run_agent_appends_channel_prompt_to_ephemeral_system_prompt
+  /home/chris/repo/Vibe-Trading/hermes-agent/tools/tirith_security.py:355: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    tar.extract(member, tmpdir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_safe_defaults_block_everyone_and_roles
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_env_var_opts_back_into_everyone
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_env_var_can_disable_users
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[true-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[True-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[TRUE-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[1-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[yes-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[YES-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[on-True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[false-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[False-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[0-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[no-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[off-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[garbage-False]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_everyone_boolean_parsing[ true -True]
+FAILED tests/gateway/test_discord_allowed_mentions.py::test_all_four_knobs_together
+FAILED tests/gateway/test_discord_connect.py::test_connect_only_requests_members_intent_when_needed[769524422783664158-False]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 20 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+20 failed, 2858 passed, 9 skipped, 23 deselected, 123 warnings in 135.93s (0:02:15)

@@ -1,0 +1,68 @@
+# Repo-local Hermes configuration for the Vibe-Trading backend.
+# This is the active runtime source of truth because `HERMES_HOME` points at `agent/.hermes`.
+
+model:
+  provider: alibaba
+  default: qwen3.5-plus
+  model_id: qwen3.5-plus
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # Prefer reading the key from environment: DASHSCOPE_API_KEY
+  # api_key is intentionally omitted here — read from DASHSCOPE_API_KEY env var
+  # Use the Responses (Codex-style) API
+  api_mode: codex_responses
+  # Generation defaults for kimi-k2.5 via DashScope
+  max_tokens: 65536
+  temperature: 0.0
+  top_p: 1.0
+  # Model capacity / context for kimi-k2.5
+  context_length: 1000000
+  # # Rate limits / quotas (as provided by model marketplace)
+  # rpm: 30000
+  # tpm: 5000000
+  # # Input / output size limits (units: tokens/characters depending on provider)
+  # max_input_length: 991000
+  # max_input_length_thinking: 983000
+  # max_output_length: 64000
+  # max_output_length_thinking: 64000
+  # # Maximum thinking/chain-of-thought length
+  # max_chain_of_thought_length: 80000
+  # Do not force provider-specific extra_body defaults here.
+  # Hermes' runtime/provider handling is authoritative for DashScope requests.
+
+agent:
+  reasoning_effort: medium
+  # Disable inactivity timeout: run_swarm blocks for up to 30 min with no
+  # intermediate tool calls, so the default 1800s inactivity timer always
+  # fires before the swarm finishes. Set to 0 = unlimited, or raise to 3600+.
+  gateway_timeout: 0
+
+skills:
+  external_dirs:
+    - ${VIBE_TRADING_ROOT}/agent/src/skills
+    - ${VIBE_TRADING_ROOT}/hermes-agent/skills
+
+fallback_model:
+  provider: dashscope
+  model: qwen3.5-plus
+
+web:
+  backend: tavily
+  tavily_api_key: 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
+
+vibe_trading:
+  # azure_openai:
+  #   endpoint: https://mtcbj003.openai.azure.com/
+  #   deployment_name: gpt-4o
+  #   api_version: 2025-01-01-preview
+
+  kimi:
+    api_key: sk-kimi-AucIhM3j6Ggv63XEKr63JZunCU7Ye65wg7GAWsanQnwqp4dDzoj0SPbqQXdhBYRv
+    base_url: https://api.kimi.com/coding/v1
+    user_agent: RooCode/1.0.0
+
+  data_providers:
+    tushare_token: 6522910c853faf7bbcf81705668dd1b126dbc578256cea7477a88114
+
+  runtime:
+    timeout_seconds: 2400
+    max_retries: 5

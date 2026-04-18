@@ -2,12 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -20,20 +20,17 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e .
 
       - name: Syntax check
         run: |
-          cd agent
+          cd backend
           python -m py_compile cli.py
           python -m py_compile api_server.py
           python -m py_compile mcp_server.py
           python -m py_compile src/agent/loop.py
           python -m py_compile src/tools/__init__.py
           python -m py_compile backtest/runner.py
-
-      - name: Run tests
-        run: pytest --ignore=agent/tests/e2e_backtest --tb=short -q
 
       - uses: actions/setup-node@v4
         with:

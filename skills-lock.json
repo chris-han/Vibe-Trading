@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "git-rebase-sync": {
+      "source": "0xbigboss/claude-code",
+      "sourceType": "github",
+      "computedHash": "de90831d69dcfc19181172ac6dedd7b3321adb800e746bd370fd3c313455c686"
+    }
+  }
+}

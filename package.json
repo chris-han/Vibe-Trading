@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "chrome-remote-interface": "^0.34.0",
+    "imagetracerjs": "^1.2.6"
+  }
+}

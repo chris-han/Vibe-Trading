@@ -9,6 +9,7 @@ interface AgentState {
   sessionId: string | null;
   status: "idle" | "streaming" | "error";
   streamingText: string;
+  reasoningText: string;
 
   toolCalls: ToolCallEntry[];
 
@@ -17,6 +18,7 @@ interface AgentState {
 
   addMessage: (msg: Omit<AgentMessage, "id"> & { id?: string }) => void;
   appendDelta: (delta: string) => void;
+  appendReasoningDelta: (delta: string) => void;
   setStatus: (s: AgentState["status"]) => void;
   setSessionId: (id: string | null) => void;
   loadHistory: (msgs: AgentMessage[]) => void;
@@ -28,6 +30,7 @@ interface AgentState {
   getCachedSession: (sid: string) => AgentMessage[] | undefined;
 
   clearStreaming: () => void;
+  clearReasoning: () => void;
 
   setSseStatus: (s: AgentState["sseStatus"], retryAttempt?: number) => void;
 
@@ -46,6 +49,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   sessionId: null,
   status: "idle",
   streamingText: "",
+  reasoningText: "",
   toolCalls: [],
   sseStatus: "disconnected",
   sseRetryAttempt: 0,
@@ -56,6 +60,9 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   appendDelta: (delta) =>
     set((s) => ({ streamingText: s.streamingText + delta })),
+
+  appendReasoningDelta: (delta) =>
+    set((s) => ({ reasoningText: s.reasoningText + delta })),
 
   setStatus: (status) => set({ status }),
   setSessionId: (sessionId) => set({ sessionId }),
@@ -79,6 +86,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   getCachedSession: (sid) => _sessionCache.get(sid),
 
   clearStreaming: () => set({ streamingText: "" }),
+  clearReasoning: () => set({ reasoningText: "" }),
 
   setSseStatus: (sseStatus, retryAttempt) =>
     set({ sseStatus, sseRetryAttempt: retryAttempt ?? 0 }),
@@ -90,6 +98,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       messages: msgs || [],
       status: "idle",
       streamingText: "",
+      reasoningText: "",
       toolCalls: [],
       sessionLoading: !msgs,
     });
@@ -101,6 +110,7 @@ export const useAgentStore = create<AgentState>((set) => ({
     _id = 0;
     set({
       messages: [], status: "idle", streamingText: "",
+      reasoningText: "",
       sessionId: null, toolCalls: [], sessionLoading: false,
     });
   },
