@@ -520,6 +520,11 @@ class TestOutputFormatPrompt:
         assert "echarts" in p.lower()
         assert "use echarts blocks for charts in the web ui." in p.lower()
 
+    def test_prompt_requires_mermaid_fallback_for_uncertain_syntax(self):
+        p = OUTPUT_FORMAT_PROMPT.lower()
+        assert "unsupported or uncertain syntax" in p
+        assert "fall back to markdown bullets or a markdown table" in p
+
     def test_prompt_forbids_ansi_art(self):
         p = OUTPUT_FORMAT_PROMPT
         assert "ANSI" in p or "ASCII" in p

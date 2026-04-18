@@ -60,9 +60,13 @@ OUTPUT_FORMAT_PROMPT = _format_rules(
         "Prefer Markdown, Mermaid, and structured chart blocks for rich visual output.",
         "Render tables as Markdown pipe-tables.",
         "Use Mermaid for diagrams and flowcharts.",
+        "For Mermaid, the first line inside the fence MUST be a supported diagram keyword such as graph TD, flowchart TD, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, pie, timeline, mindmap, or gitGraph.",
+        "Do not invent Mermaid openers like top-down or left-right, and do not guess unsupported diagram types.",
+        "If a Mermaid diagram would require unsupported or uncertain syntax, fall back to Markdown bullets or a Markdown table.",
         "Use echarts blocks for charts in the web UI.",
         "For Feishu or other constrained channels, follow the channel-specific chart rules instead of the web rule.",
         "If unsure, fall back to a Markdown table rather than emitting a chart fence.",
+        "Never use ANSI art or terminal box-drawing characters.",
         "Keep visual output Markdown-native so it renders cleanly across channels.",
     ),
 )

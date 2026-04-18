@@ -183,6 +183,7 @@ class TestVChartRegistration:
 # ---------------------------------------------------------------------------
 
 MARKDOWN_RENDERER_FILE = FRONTEND_SRC / "components" / "common" / "MarkdownRenderer.tsx"
+MERMAID_BLOCK_FILE = FRONTEND_SRC / "components" / "common" / "MermaidBlock.tsx"
 
 
 class TestMarkdownPreStripLogic:
@@ -237,6 +238,37 @@ class TestMarkdownPreStripLogic:
         src = self._source()
         assert "code: MarkdownCode" in src, "MarkdownCode not wired into ReactMarkdown"
         assert "pre: MarkdownPre" in src, "MarkdownPre not wired into ReactMarkdown"
+
+
+class TestMermaidBlockErrorHandling:
+    """MermaidBlock must treat Mermaid's built-in error SVG as a render failure
+    so the UI can fall back instead of showing a broken diagram card."""
+
+    def _source(self) -> str:
+        assert MERMAID_BLOCK_FILE.exists(), (
+            f"MermaidBlock.tsx not found at {MERMAID_BLOCK_FILE}"
+        )
+        return _read(MERMAID_BLOCK_FILE)
+
+    def test_mermaid_block_detects_error_svg_markers(self):
+        src = self._source()
+        assert "Syntax error in text" in src
+        assert "error-icon" in src
+        assert "error-text" in src
+
+    def test_mermaid_block_throws_on_error_svg(self):
+        src = self._source()
+        assert "Mermaid returned an error diagram instead of a rendered chart" in src, (
+            "MermaidBlock must convert Mermaid's built-in error SVG into a thrown "
+            "render failure so the component can fall back cleanly."
+        )
+
+    def test_mermaid_block_recognizes_radar_openers(self):
+        src = self._source()
+        assert "radar(?:-beta)?" in src, (
+            "MermaidBlock DIAGRAM_START_RE should recognize radar openers so it "
+            "does not prepend 'graph TD' to otherwise valid radar diagrams."
+        )
 
 
 # ---------------------------------------------------------------------------

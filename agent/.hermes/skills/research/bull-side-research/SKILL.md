@@ -345,28 +345,91 @@ if profit_margin and profit_margin > 0.3:
 1. **yfinance MultiIndex**: Always check `isinstance(df.columns, pd.MultiIndex)` and drop level before accessing columns
 2. **Calculation Order**: Calculate ALL technical indicators BEFORE extracting values from `latest` row
 3. **None Handling**: Use `info.get()` with conditional checks; don't assume metrics exist
-4. **Scalar Extraction from DataFrame**: `df['Close'].iloc[-1]` may return a Series instead of scalar in some yfinance versions. Use `float(df['Close'].iloc[-1])` or `df['Close'].iloc[-1].item()` to force scalar. If still failing, check if dataframe has unexpected structure: `print(type(df['Close']), df['Close'].shape)`
-4. **Sector Context**: P/E of 40x may be cheap for 60% growth stock, expensive for 10% growth
-5. **Volume Interpretation**: High volume on down days = distribution; high volume on up days = accumulation
-6. **RSI Extremes**: RSI >70 can persist in strong trends; don't automatically sell overbought
-7. **Forward P/E Trap**: Low forward P/E may imply unrealistic growth expectations
-8. **Catalyst Timing**: Verify earnings dates via web search; yfinance `earningsDate` often None
-9. **Calendar Dict vs DataFrame**: `ticker.calendar` may return a dict OR DataFrame — check `isinstance(calendar, dict)` before calling `.to_string()`
-10. **News Format Variations**: `ticker.news` items may be dicts with missing keys or non-dict objects — check `isinstance(item, dict)` before accessing `.get()`
-11. **Recommendations Mean Calculation**: `recommendations.tail(4).mean()` fails on string columns — use `select_dtypes(include=[np.number])` first
-12. **major_holders Shape**: `major_holders.iloc[0, 1]` may fail if DataFrame has only 1 column — use `info.get('institutionsPercentHeld')` as fallback
-13. **Earnings History Index**: `earnings_history` uses quarter dates as index — access via `.loc[]` or iterate carefully
-14. **earnings_dates Column Names**: Column names vary — dynamically detect: `for col in earnings_dates.columns: if 'date' in col.lower() or 'earnings' in col.lower(): date_col = col`
-15. **recommendations_summary Attribute**: Use `ticker.recommendations_summary` (plural), NOT `recommendation_summary` — AttributeError otherwise
-16. **major_holders Iteration**: Use `row.iloc[0]` and `row.iloc[1]` with try/except, not `row[0]` — KeyError if index is string-based
-17. **Recommendations Type Handling**: `recommendations` DataFrame may contain string values (e.g., "Strong Buy" as column name with string counts). Always validate with `pd.api.types.is_number()` or wrap in `try/except` before calling `.sum()`. Safe pattern:
+4. **Scalar Extraction from DataFrame**: `df['Close'].iloc[-1]` may return a Series instead of scalar in some yfinance versions. Use `df['Close'].iloc[-1].item()` to force scalar (preferred over `float()` which can fail on Series). If still failing, check if dataframe has unexpected structure: `print(type(df['Close']), df['Close'].shape)`
+5. **Sector Context**: P/E of 40x may be cheap for 60% growth stock, expensive for 10% growth
+6. **Volume Interpretation**: High volume on down days = distribution; high volume on up days = accumulation
+7. **RSI Extremes**: RSI >70 can persist in strong trends; don't automatically sell overbought
+8. **Forward P/E Trap**: Low forward P/E may imply unrealistic growth expectations
+9. **Catalyst Timing**: Verify earnings dates via web search; yfinance `earningsDate` often None
+10. **Calendar Dict vs DataFrame**: `ticker.calendar` may return a dict OR DataFrame — check `isinstance(calendar, dict)` before calling `.to_string()`
+11. **News Format Variations**: `ticker.news` items may be dicts with missing keys or non-dict objects — check `isinstance(item, dict)` before accessing `.get()`
+12. **Recommendations Mean Calculation**: `recommendations.tail(4).mean()` fails on string columns — use `select_dtypes(include=[np.number])` first
+13. **major_holders Shape**: `major_holders.iloc[0, 1]` may fail if DataFrame has only 1 column — use `info.get('institutionsPercentHeld')` as fallback
+14. **Earnings History Index**: `earnings_history` uses quarter dates as index — access via `.loc[]` or iterate carefully
+15. **earnings_dates Column Names**: Column names vary — dynamically detect: `for col in earnings_dates.columns: if 'date' in col.lower() or 'earnings' in col.lower(): date_col = col`
+16. **recommendations_summary Attribute**: Use `ticker.recommendations_summary` (plural), NOT `recommendation_summary` — AttributeError otherwise
+17. **major_holders Iteration**: Use `row.iloc[0]` and `row.iloc[1]` with try/except, not `row[0]` — KeyError if index is string-based
+18. **Recommendations Type Handling**: `recommendations` DataFrame may contain string values (e.g., "Strong Buy" as column name with string counts). Always validate with `pd.api.types.is_number()` or wrap in `try/except` before calling `.sum()`. Safe pattern:
 ```python
 try:
     strong_buy = int(latest_rec.get('Strong Buy', 0)) if pd.api.types.is_number(latest_rec.get('Strong Buy', 0)) or str(latest_rec.get('Strong Buy', 0)).isdigit() else 0
 except:
     strong_buy = 0
 ```
-18. **yfinance MultiIndex Column Flattening**: After `yf.download()`, always flatten columns immediately: `if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)`. This prevents "Cannot set a DataFrame with multiple columns to the single column" errors when adding calculated columns.
+19. **yfinance MultiIndex Column Flattening**: After `yf.download()`, always flatten columns immediately: `if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)`. This prevents "Cannot set a DataFrame with multiple columns to the single column" errors when adding calculated columns.
+
+## Workflow Pattern (Recommended Approach)
+
+For comprehensive bull-side research, use this multi-source workflow:
+
+### Phase 1: yfinance Data Fetching
+```python
+# Get fundamental snapshot + 1-2 years OHLCV
+ticker = yf.Ticker("NVDA")
+info = ticker.info
+df = yf.download("NVDA", start="2024-01-01", progress=False)
+# Handle MultiIndex immediately
+if isinstance(df.columns, pd.MultiIndex):
+    df.columns = df.columns.droplevel(1)
+```
+
+### Phase 2: Web Search for Data Gaps
+yfinance doesn't provide everything. Use `web_search` for:
+- **Analyst targets/upgrades**: Recent price target changes, consensus revisions
+- **Earnings dates**: Confirm next earnings date (yfinance often returns None)
+- **TAM/market size**: Industry analyst estimates, management guidance
+- **Sentiment data**: Put/call ratios, short interest trends, institutional 13F flows
+- **Catalyst calendar**: GTC events, product launches, competitor earnings
+
+```python
+# Example searches to run in parallel:
+web_search("NVDA stock price target analyst upgrades 2026")
+web_search("NVDA earnings date Q1 FY2027 May 2026")
+web_search("NVDA put call ratio options sentiment April 2026")
+web_search("NVDA AI data center TAM total addressable market 2027 2030")
+```
+
+### Phase 3: Technical Analysis Script
+Write a standalone Python script for technicals (avoids inline terminal issues):
+```python
+# Write to current directory, run with python3
+write_file("./analysis.py", '''
+import yfinance as yf
+import pandas as pd
+# ... calculate EMA, MACD, RSI, BB, Volume ...
+# Use .item() for scalar extraction: latest["Close"].item()
+''')
+terminal("python3 analysis.py")
+```
+
+### Phase 4: Synthesis
+Combine all sources into structured report:
+- Technicals from script output
+- Fundamentals from yfinance `info` + `financials`
+- Sentiment/catalysts from web search results
+- Analyst targets from web search + yfinance `targetMeanPrice`
+
+## Environment Constraints
+
+### Terminal/Execution Limitations
+- **No venv paths**: Use `python3` directly, not `./.venv/bin/python` (sandbox restrictions)
+- **Write directory**: Files must be written to current working directory (`./`) or subdirectories — arbitrary paths like `/workspace/run/` will fail with "Write denied"
+- **Script approach preferred**: For complex analysis (3+ tool calls with processing), write a `.py` script and run via `terminal()` rather than inline heredoc
+
+### Web Search Integration
+- Run 3-5 targeted `web_search` queries in parallel for comprehensive coverage
+- Search queries should include: ticker + metric + current year (e.g., "NVDA short interest April 2026")
+- Extract key numbers from search snippets; use `web_extract` for full articles if needed
 
 ## Dependencies
 

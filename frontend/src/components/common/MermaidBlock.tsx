@@ -4,6 +4,8 @@ import mermaid from "mermaid";
 let mermaidInitialized = false;
 let renderCounter = 0;
 
+const MERMAID_ERROR_SVG_RE = /(Syntax error in text|class="error-icon"|class="error-text")/i;
+
 // Serialize mermaid.render() calls — mermaid uses global state and breaks under concurrency.
 let renderQueue: Promise<void> = Promise.resolve();
 function enqueueRender<T>(fn: () => Promise<T>): Promise<T> {
@@ -14,7 +16,7 @@ function enqueueRender<T>(fn: () => Promise<T>): Promise<T> {
   return p;
 }
 
-const DIAGRAM_START_RE = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|timeline|mindmap|gitGraph|quadrantChart|xychart|sankey-beta|block-beta|architecture-beta|radar-beta)\b/i;
+const DIAGRAM_START_RE = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|journey|timeline|mindmap|gitGraph|quadrantChart|xychart(?:-beta)?|sankey-beta|block-beta|architecture-beta|radar(?:-beta)?)\b/i;
 
 function ensureMermaidInitialized() {
   if (mermaidInitialized) {
@@ -37,6 +39,10 @@ function stripFences(source: string): string {
     .replace(/^\s*```\s*mermaid\s*\n?/i, "")
     .replace(/\n?\s*```\s*$/i, "")
     .trim();
+}
+
+function isMermaidErrorSvg(svg: string): boolean {
+  return MERMAID_ERROR_SVG_RE.test(svg);
 }
 
 function trimToDiagramBody(source: string): string {
@@ -192,6 +198,10 @@ export function MermaidBlock({ chart }: { chart: string }) {
           const { svg, bindFunctions } = await enqueueRender(() =>
             mermaid.render(renderId, current),
           );
+
+          if (isMermaidErrorSvg(svg)) {
+            throw new Error("Mermaid returned an error diagram instead of a rendered chart");
+          }
 
           // Clean up the temp element mermaid may leave behind.
           document.getElementById(renderId)?.remove();

@@ -23,12 +23,12 @@ Systematic multi-dimensional bear-side research methodology for identifying down
 
 | Dimension | Key Metrics | Bearish Signals |
 |-----------|-------------|-----------------|
-| **1. Technical** | RSI, Bollinger, EMA, ADX, Volume, Divergences | RSI >70, Price >95% BB Upper, EMA bearish crossover, Volume divergence, RSI/MACD divergences |
-| **2. Valuation** | P/E, P/B, P/S, EV/EBITDA vs sector/historical | P/E premium >50% vs sector, P/B >3x historical, P/S >2x sector avg |
-| **3. Fundamental** | Margin trends, Revenue growth, Balance sheet | Gross margin compression, Decelerating growth, Deteriorating cash flow |
-| **4. Risk Metrics** | VaR, CVaR, Beta, Volatility, Drawdown | Beta >1.5, VaR(95%) >5%, Max DD >30%, Fat tails (kurtosis >4) |
+| **1. Technical** | RSI, Bollinger, EMA, ADX, Volume, Divergences | RSI >70 (extreme >90), Price >95% BB Upper, EMA bearish crossover, Volume divergence, RSI/MACD divergences |
+| **2. Valuation** | P/E, P/B, P/S, EV/EBITDA vs sector/historical | P/E premium >50% vs sector, P/B >3x historical, P/S >2x sector avg, P/S >20x = bubble territory |
+| **3. Fundamental** | Margin trends, Revenue growth, Balance sheet, Customer concentration | Gross margin compression, Decelerating growth, Deteriorating cash flow, Top 4 customers >40% revenue |
+| **4. Risk Metrics** | VaR, CVaR, Beta, Volatility, Drawdown | Beta >1.5, VaR(95%) >5%, Max DD >30%, Fat tails (kurtosis >4), Annual vol >40% |
 | **5. Tail Risk** | GPD shape parameter, Monte Carlo worst cases | GPD ξ >0.5, Worst 5% scenario <-30% |
-| **6. Catalysts** | Insider activity, Institutional flows, Competitive threats | Insider selling, Institutional reduction, Competitive share loss |
+| **6. Catalysts** | Insider activity, Institutional flows, Competitive threats | Insider selling >$1B with 0 buys, Institutional reduction, Competitive share loss, Geopolitical risks |
 
 ## Implementation Steps
 
@@ -270,7 +270,9 @@ worst_1pct = np.percentile(final_returns, 1)
    if isinstance(df.columns, pd.MultiIndex):
        df.columns = df.columns.droplevel(1)  # Remove ticker level, keeps metric names
    ```
-2. **Series formatting in f-strings**: Pandas Series cannot be directly formatted — explicitly convert to float first: `float(df['Close'].iloc[-1])` not `df['Close'].iloc[-1]`
+2. **Avoid CSV save/reload for yfinance data**: Saving to CSV and reloading introduces parsing issues (Ticker/Date rows). Work with live DataFrame instead.
+3. **String formatting robustness**: Avoid f-strings with pandas types entirely. Use concatenation: `str(round(value, 2))` instead of `f'{value:.2f}'` or `.iloc[-1]` formatting.
+4. **Series formatting in f-strings**: Pandas Series cannot be directly formatted — explicitly convert to float first: `float(df['Close'].iloc[-1])` not `df['Close'].iloc[-1]`
 3. **File paths**: Use absolute paths or `.` for current directory, not nested paths that may not exist. In swarm contexts, write to `artifacts/<agent_name>/` subdirectory.
 4. **Beta calculation failures**: Covariance/correlation can fail with dimensionality errors. Wrap in try/except and use defensive checks:
    ```python
@@ -310,8 +312,20 @@ if 'C' in df.columns:
 ```
 24. **Revenue growth iteration**: When iterating quarterly revenue for growth calculation, use `revenue.pct_change()` on the Series directly — don't try to iterate over columns
 25. **Earnings can be None**: `ticker.earnings` may return `None` (not just empty DataFrame) — check `if earnings is not None and not earnings.empty`
+26. **yfinance data persistence**: After fetching with yfinance, work directly with the DataFrame. Avoid saving to CSV and reloading unless necessary for persistence across sessions.
+27. **Defensive type conversion**: When extracting single values from pandas, always use `.iloc[-1]` then `float()` before any arithmetic or formatting operations.
 
 ## Enhanced Analysis: Insider & Institutional Flows
+
+**Key Bear Signal: Insider Selling Pattern**
+- Track total insider sales over trailing 12-18 months via SEC Form 4 filings
+- **Critical red flag**: $1B+ in executive sales with ZERO open-market buys
+- CEO/CFO systematic selling via 10b5-1 plans still signals distribution at peak valuations
+- Use web_search to supplement yfinance (which may not capture all insider data):
+  ```python
+  # Search for recent insider selling news
+  web_search(f"{ticker} insider selling CEO stock sales 2025 2026")
+  ```
 
 Add this section for catalyst identification:
 

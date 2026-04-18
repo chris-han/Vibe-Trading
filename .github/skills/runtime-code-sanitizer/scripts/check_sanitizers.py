@@ -28,6 +28,14 @@ REQUIRED_PROMPT_PHRASES: list[tuple[str, str]] = [
     ("ECharts charts", "Use echarts blocks for charts in the web UI."),
     ("Markdown tables", "Render tables as Markdown pipe-tables."),
     ("Mermaid diagrams", "Use Mermaid for diagrams and flowcharts."),
+    (
+        "Mermaid syntax opener",
+        "For Mermaid, the first line inside the fence MUST be a supported diagram keyword such as graph TD, flowchart TD, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, pie, timeline, mindmap, or gitGraph.",
+    ),
+    (
+        "Mermaid fallback",
+        "If a Mermaid diagram would require unsupported or uncertain syntax, fall back to Markdown bullets or a Markdown table.",
+    ),
 ]
 
 FORBIDDEN_PROMPT_PHRASES = [
