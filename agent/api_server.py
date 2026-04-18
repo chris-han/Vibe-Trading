@@ -51,10 +51,9 @@ for _s in ("stdout", "stderr"):
 ensure_runtime_env()
 
 # ---------------------------------------------------------------------------
-# Data root: all runtime-generated files (sessions, runs, uploads, swarm) live
-# under a single configurable root derived from TERMINAL_CWD.  A relative
-# value is resolved against the agent/ directory (e.g. 'chris' ->
-# agent/chris/).  Defaults to agent/ when unset.
+# Data root: unauthenticated runtime files live under the shared public
+# workspace root at workspaces/public/agent. Authenticated users are routed to
+# workspaces/<user_id>/agent via ensure_workspace().
 # ---------------------------------------------------------------------------
 _AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = _AGENT_DIR.parent
@@ -78,8 +77,8 @@ def _candidate_runs_dirs(
 ) -> List[Path]:
     """Return run roots in lookup order.
 
-    Keep backward compatibility with runs written under agent/runs even when
-    DATA_ROOT points at a nested directory such as agent/chris.
+    Keep backward compatibility with older runs written under agent/runs while
+    the canonical root lives under workspaces/<workspace_id>/agent.
     """
     if runs_dir is not None:
         roots = [runs_dir]
@@ -432,7 +431,7 @@ def _get_auth_store() -> AuthStore:
 
 def _get_public_workspace() -> WorkspacePaths:
     slug = (os.getenv("DEFAULT_WORKSPACE_SLUG") or "public").strip() or "public"
-    return ensure_workspace(WORKSPACES_DIR, slug, _TEMPLATE_HERMES_HOME)
+    return ensure_workspace(WORKSPACES_DIR, slug, _TEMPLATE_HERMES_HOME, workspace_slug=slug)
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -488,7 +487,13 @@ def _resolve_request_context(request: Request, *, require_login: bool = False) -
         if session_payload:
             user = _get_auth_store().get_user_by_id(str(session_payload.get("user_id") or ""))
             if user is not None:
-                workspace = ensure_workspace(WORKSPACES_DIR, user.workspace_slug, _TEMPLATE_HERMES_HOME)
+                workspace = ensure_workspace(
+                    WORKSPACES_DIR,
+                    user.user_id,
+                    _TEMPLATE_HERMES_HOME,
+                    workspace_slug=user.workspace_slug,
+                    legacy_workspace_slug=user.workspace_slug,
+                )
                 return RequestContext(authenticated=True, user=user, workspace=workspace)
         if require_login:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -958,7 +963,13 @@ async def auth_feishu_callback(code: str, state: Optional[str] = None):
         email=profile.get("email"),
         avatar_url=profile.get("avatar_url"),
     )
-    ensure_workspace(WORKSPACES_DIR, user.workspace_slug, _TEMPLATE_HERMES_HOME)
+    ensure_workspace(
+        WORKSPACES_DIR,
+        user.user_id,
+        _TEMPLATE_HERMES_HOME,
+        workspace_slug=user.workspace_slug,
+        legacy_workspace_slug=user.workspace_slug,
+    )
     response = RedirectResponse(url="/", status_code=307)
     response.set_cookie(
         AUTH_SESSION_COOKIE,
@@ -997,7 +1008,7 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
     from src.session.service import SessionService
 
     if workspace is not None:
-        key = workspace.workspace_slug
+        key = workspace.workspace_id
         if key in _session_service_by_workspace:
             return _session_service_by_workspace[key]
         store = SessionStore(base_dir=workspace.sessions_dir)
@@ -1025,7 +1036,7 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         swarm_dir=swarm_dir,
     )
     if workspace is not None:
-        _session_service_by_workspace[workspace.workspace_slug] = svc
+        _session_service_by_workspace[workspace.workspace_id] = svc
         return svc
     _session_service = svc
     return svc
@@ -2218,8 +2229,10 @@ async def _feishu_route_message(
             return
         resolved_workspace = ensure_workspace(
             WORKSPACES_DIR,
-            resolved_user.workspace_slug,
+            resolved_user.user_id,
             _TEMPLATE_HERMES_HOME,
+            workspace_slug=resolved_user.workspace_slug,
+            legacy_workspace_slug=resolved_user.workspace_slug,
         )
         svc = _get_session_service(resolved_workspace)
 
@@ -2354,7 +2367,7 @@ def _get_swarm_runtime(workspace: Optional[WorkspacePaths] = None):
     from src.swarm.store import SwarmStore
     from src.swarm.runtime import WorkflowRuntime
     if workspace is not None:
-        key = workspace.workspace_slug
+        key = workspace.workspace_id
         if key in _swarm_runtime_by_workspace:
             return _swarm_runtime_by_workspace[key]
         swarm_dir = workspace_swarm_runs_dir(workspace.agent_root)

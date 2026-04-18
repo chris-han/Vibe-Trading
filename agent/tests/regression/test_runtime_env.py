@@ -187,6 +187,17 @@ model:
     assert os.getenv("OPENAI_BASE_URL") is None
 
 
+def test_ensure_runtime_env_ignores_configured_terminal_cwd(monkeypatch):
+    monkeypatch.setenv("TERMINAL_CWD", "chris")
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
+
+    runtime_env.ensure_runtime_env()
+
+    expected = str((runtime_env.AGENT_DIR.parent / "workspaces" / "public" / "agent").resolve())
+    assert os.getenv("TERMINAL_CWD") == expected
+    assert runtime_env.get_data_root() == runtime_env.AGENT_DIR.parent / "workspaces" / "public" / "agent"
+
+
 def test_prepare_hermes_project_context_sets_repo_root(monkeypatch):
   monkeypatch.delenv("VIBE_TRADING_ROOT", raising=False)
 

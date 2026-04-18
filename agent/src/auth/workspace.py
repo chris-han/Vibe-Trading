@@ -9,6 +9,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class WorkspacePaths:
+    workspace_id: str
     workspace_slug: str
     workspace_root: Path
     agent_root: Path
@@ -91,11 +92,34 @@ def migrate_workspace_swarm_dir(agent_root: Path) -> Path:
     return target_swarm_dir
 
 
-def workspace_paths(base_dir: Path, workspace_slug: str) -> WorkspacePaths:
-    workspace_root = base_dir / workspace_slug
+def _migrate_workspace_root(base_dir: Path, workspace_id: str, legacy_workspace_slug: str | None) -> None:
+    """Move or merge a legacy slug-keyed workspace into the user-id workspace."""
+    legacy_slug = (legacy_workspace_slug or "").strip()
+    if not legacy_slug or legacy_slug == workspace_id:
+        return
+
+    target_root = base_dir / workspace_id
+    legacy_root = base_dir / legacy_slug
+    if not legacy_root.exists() or legacy_root == target_root:
+        return
+
+    if not target_root.exists():
+        legacy_root.rename(target_root)
+        return
+
+    _merge_directory_contents(legacy_root, target_root)
+    try:
+        legacy_root.rmdir()
+    except OSError:
+        pass
+
+
+def workspace_paths(base_dir: Path, workspace_id: str, workspace_slug: str | None = None) -> WorkspacePaths:
+    workspace_root = base_dir / workspace_id
     agent_root = workspace_root / "agent"
     return WorkspacePaths(
-        workspace_slug=workspace_slug,
+        workspace_id=workspace_id,
+        workspace_slug=(workspace_slug or workspace_id),
         workspace_root=workspace_root,
         agent_root=agent_root,
         hermes_home=agent_root / ".hermes",
@@ -106,8 +130,16 @@ def workspace_paths(base_dir: Path, workspace_slug: str) -> WorkspacePaths:
     )
 
 
-def ensure_workspace(base_dir: Path, workspace_slug: str, template_hermes_home: Path) -> WorkspacePaths:
-    paths = workspace_paths(base_dir, workspace_slug)
+def ensure_workspace(
+    base_dir: Path,
+    workspace_id: str,
+    template_hermes_home: Path,
+    *,
+    workspace_slug: str | None = None,
+    legacy_workspace_slug: str | None = None,
+) -> WorkspacePaths:
+    _migrate_workspace_root(base_dir, workspace_id, legacy_workspace_slug)
+    paths = workspace_paths(base_dir, workspace_id, workspace_slug)
     migrate_workspace_swarm_dir(paths.agent_root)
     for directory in (
         paths.agent_root,

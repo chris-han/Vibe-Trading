@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
+
+from runtime_env import get_data_root
 
 from .base import BaseTool
 
-_AGENT_DIR = Path(__file__).resolve().parents[2]
-_raw_cwd = __import__("os").getenv("TERMINAL_CWD", "")
-if _raw_cwd and not Path(_raw_cwd).is_absolute():
-    TASKS_DIR = (_AGENT_DIR / _raw_cwd / ".tasks").resolve()
-elif _raw_cwd:
-    TASKS_DIR = Path(_raw_cwd) / ".tasks"
-else:
-    TASKS_DIR = _AGENT_DIR / ".tasks"
+TASKS_DIR = get_data_root() / ".tasks"
 
 
 class TaskManager:

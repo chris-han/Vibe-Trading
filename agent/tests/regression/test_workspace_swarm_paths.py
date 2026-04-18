@@ -79,3 +79,24 @@ def test_ensure_workspace_merges_legacy_and_hidden_swarm_runs(tmp_path: Path):
     assert (paths.swarm_dir / "runs" / "swarm-hidden" / "run.json").read_text(encoding="utf-8") == '{"status":"hidden"}\n'
     assert (paths.swarm_dir / "runs" / "swarm-legacy" / "run.json").read_text(encoding="utf-8") == '{"status":"legacy"}\n'
     assert not legacy_workspace_swarm_dir(workspace_root).exists()
+
+
+def test_ensure_workspace_migrates_legacy_slug_workspace_to_user_id(tmp_path: Path):
+    legacy_agent_root = tmp_path / "alice_zhang" / "agent"
+    (legacy_agent_root / "runs" / "run-1").mkdir(parents=True)
+    (legacy_agent_root / "runs" / "run-1" / "state.json").write_text('{"status":"ok"}\n', encoding="utf-8")
+
+    template_hermes_home = tmp_path / "template-hermes"
+    template_hermes_home.mkdir(parents=True)
+
+    paths = ensure_workspace(
+        tmp_path,
+        "user-123",
+        template_hermes_home,
+        workspace_slug="alice_zhang",
+        legacy_workspace_slug="alice_zhang",
+    )
+
+    assert paths.workspace_root == tmp_path / "user-123"
+    assert not (tmp_path / "alice_zhang").exists()
+    assert (paths.runs_dir / "run-1" / "state.json").read_text(encoding="utf-8") == '{"status":"ok"}\n'

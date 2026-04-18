@@ -20,25 +20,32 @@ except ImportError:
 AGENT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = AGENT_DIR.parent
 _DEFAULT_HERMES_HOME = AGENT_DIR / ".hermes"
+_WORKSPACES_DIR = _REPO_ROOT / "workspaces"
+_DEFAULT_WORKSPACE_ID = "public"
 _ENV_BOOTSTRAPPED = False
 
 
-def get_data_root() -> Path:
-    """Return the user-scoped data root derived from TERMINAL_CWD.
+def get_data_root(workspace_id: str | None = None) -> Path:
+    """Return the canonical runtime data root for a workspace agent dir.
 
-    A relative TERMINAL_CWD is resolved against AGENT_DIR (e.g. 'chris' →
-    agent/chris/).  Falls back to AGENT_DIR when the variable is unset.
+    Runtime state is stored under ``workspaces/<workspace_id>/agent``.
+    When no workspace id is provided, the shared ``public`` workspace is used.
     The directory is created on first call.
     """
-    _raw = os.getenv("TERMINAL_CWD", "").strip()
-    if _raw and not os.path.isabs(_raw):
-        root = (AGENT_DIR / _raw).resolve()
-    elif _raw:
-        root = Path(_raw).resolve()
-    else:
-        root = AGENT_DIR
+    normalized_workspace_id = (workspace_id or _DEFAULT_WORKSPACE_ID).strip() or _DEFAULT_WORKSPACE_ID
+    root = (_WORKSPACES_DIR / normalized_workspace_id / "agent").resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _sync_terminal_cwd_env() -> None:
+    """Export the canonical data root for Hermes tool compatibility.
+
+    ``TERMINAL_CWD`` is not a user-configurable input anymore; it mirrors the
+    deterministic workspace root so Hermes tools that still consult the env var
+    stay aligned with runtime storage.
+    """
+    os.environ["TERMINAL_CWD"] = str(get_data_root())
 
 
 def get_runs_dir(data_root: Path | None = None) -> Path:
@@ -326,6 +333,7 @@ def ensure_runtime_env() -> None:
         return
 
     prepare_hermes_project_context(chdir=False)
+    _sync_terminal_cwd_env()
     config = _load_hermes_config()
     _seed_env_from_hermes_config(config)
     _bridge_azure_env_to_hermes_defaults()
