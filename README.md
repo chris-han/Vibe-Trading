@@ -620,7 +620,20 @@ uv run python cli.py serve --port 8899
 
 ## In dev mode
 
-For live frontend changes, use **two processes**:
+For live frontend changes, you can use a single shell command that starts both processes and keeps the current port split:
+
+```bash
+cd /home/chris/repo/Vibe-Trading && \
+  (cd agent && ./.venv/bin/python api_server.py --port 8899) & \
+  (cd frontend && bun install && bun run dev)
+```
+
+This keeps:
+
+- Frontend dev UI: `http://localhost:5899`
+- Backend API: `http://localhost:8899`
+
+If you prefer, the same setup can still be started in two terminals:
 
 ```bash
 # terminal 1

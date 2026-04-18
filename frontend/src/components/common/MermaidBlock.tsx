@@ -191,9 +191,9 @@ export function MermaidBlock({ chart }: { chart: string }) {
 
       for (let index = 0; index < candidates.length; index += 1) {
         if (cancelled) return;
+        const renderId = `mermaid-${id}-${token}-${index}`;
         try {
           const current = candidates[index];
-          const renderId = `mermaid-${id}-${token}-${index}`;
 
           const { svg, bindFunctions } = await enqueueRender(() =>
             mermaid.render(renderId, current),
@@ -216,6 +216,10 @@ export function MermaidBlock({ chart }: { chart: string }) {
           setError(null);
           return;
         } catch (e) {
+          // Clean up orphaned temp elements that mermaid leaves in <body> when it throws
+          // on parse or render errors (removeTempElements() is not called on the throw path).
+          document.getElementById(renderId)?.remove();
+          document.getElementById(`d${renderId}`)?.remove();
           lastError = e;
         }
       }

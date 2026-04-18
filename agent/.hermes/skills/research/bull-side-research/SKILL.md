@@ -342,10 +342,31 @@ if profit_margin and profit_margin > 0.3:
 
 ## Common Pitfalls
 
-1. **yfinance MultiIndex**: Always check `isinstance(df.columns, pd.MultiIndex)` and drop level before accessing columns
+1. **yfinance MultiIndex (CRITICAL)**: Recent yfinance versions return MultiIndex columns by default. ALWAYS flatten immediately after download:
+   ```python
+   df = yf.download("NVDA", start="2024-01-01", progress=False)
+   if isinstance(df.columns, pd.MultiIndex):
+       df.columns = df.columns.droplevel(1)  # Drop ticker level
+   # OR use parameter: yf.download(..., multi_level_index=False)
+   ```
+   Without this, adding calculated columns fails with "Cannot set a DataFrame with multiple columns" error.
+
 2. **Calculation Order**: Calculate ALL technical indicators BEFORE extracting values from `latest` row
+
 3. **None Handling**: Use `info.get()` with conditional checks; don't assume metrics exist
-4. **Scalar Extraction from DataFrame**: `df['Close'].iloc[-1]` may return a Series instead of scalar in some yfinance versions. Use `df['Close'].iloc[-1].item()` to force scalar (preferred over `float()` which can fail on Series). If still failing, check if dataframe has unexpected structure: `print(type(df['Close']), df['Close'].shape)`
+
+4. **Scalar Extraction from DataFrame**: `df['Close'].iloc[-1]` may return a Series instead of scalar. Use `.item()` method (preferred) or check type first:
+   ```python
+   val = df['Close'].iloc[-1]
+   if hasattr(val, 'item'):
+       val = val.item()  # Force scalar conversion
+   ```
+   Avoid `float()` on Series — it fails with "float() argument must be a string or a real number, not 'Series'"
+
+5. **yfinance Column Order Quirk**: After `droplevel(1)`, verify columns are as expected:
+   ```python
+   print(f"Columns: {df.columns.tolist()}")  # Should be ['Close', 'High', 'Low', 'Open', 'Volume']
+   ```
 5. **Sector Context**: P/E of 40x may be cheap for 60% growth stock, expensive for 10% growth
 6. **Volume Interpretation**: High volume on down days = distribution; high volume on up days = accumulation
 7. **RSI Extremes**: RSI >70 can persist in strong trends; don't automatically sell overbought
@@ -365,9 +386,6 @@ try:
     strong_buy = int(latest_rec.get('Strong Buy', 0)) if pd.api.types.is_number(latest_rec.get('Strong Buy', 0)) or str(latest_rec.get('Strong Buy', 0)).isdigit() else 0
 except:
     strong_buy = 0
-```
-19. **yfinance MultiIndex Column Flattening**: After `yf.download()`, always flatten columns immediately: `if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)`. This prevents "Cannot set a DataFrame with multiple columns to the single column" errors when adding calculated columns.
-
 ## Workflow Pattern (Recommended Approach)
 
 For comprehensive bull-side research, use this multi-source workflow:
@@ -377,8 +395,11 @@ For comprehensive bull-side research, use this multi-source workflow:
 # Get fundamental snapshot + 1-2 years OHLCV
 ticker = yf.Ticker("NVDA")
 info = ticker.info
-df = yf.download("NVDA", start="2024-01-01", progress=False)
-# Handle MultiIndex immediately
+
+# CRITICAL: Use multi_level_index=False to avoid MultiIndex issues
+df = yf.download("NVDA", start="2024-01-01", progress=False, multi_level_index=False)
+
+# Fallback if multi_level_index parameter not supported in your yfinance version:
 if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.droplevel(1)
 ```
@@ -400,7 +421,7 @@ web_search("NVDA AI data center TAM total addressable market 2027 2030")
 ```
 
 ### Phase 3: Technical Analysis Script
-Write a standalone Python script for technicals (avoids inline terminal issues):
+Write a standalone Python script for technicals (avoids inline heredoc issues):
 ```python
 # Write to current directory, run with python3
 write_file("./analysis.py", '''
