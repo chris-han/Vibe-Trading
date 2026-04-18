@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
+import { RouteErrorElement } from "@/components/common/ErrorBoundary";
 import { Skeleton } from "@/components/common/Skeleton";
 
 const Home = lazy(() => import("@/pages/Home").then(m => ({ default: m.Home })));
@@ -20,6 +21,7 @@ const PageLoader = () => (
 export const router = createBrowserRouter([
   {
     element: <Layout />,
+    errorElement: <RouteErrorElement />,
     children: [
       { path: "/", element: <Suspense fallback={<PageLoader />}><Home /></Suspense> },
       { path: "/agent", element: <Suspense fallback={<PageLoader />}><Agent /></Suspense> },

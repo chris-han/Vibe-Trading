@@ -27,6 +27,9 @@ export default defineConfig({
     },
   },
   build: {
+    // Keep prior hashed assets so already-open tabs can still finish lazy imports
+    // after a newer build is written to the same dist directory.
+    emptyOutDir: false,
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {

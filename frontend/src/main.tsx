@@ -10,7 +10,7 @@ import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ErrorBoundary>
+    <ErrorBoundary layout="page">
       <I18nProvider>
         <RouterProvider router={router} />
         <Toaster position="bottom-right" richColors closeButton duration={3500} />

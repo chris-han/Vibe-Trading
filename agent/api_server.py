@@ -193,9 +193,18 @@ _SPA_EXCLUDED_PREFIXES = (
 class SPAStaticFiles(StaticFiles):
     """Serve SPA assets and fall back to index.html for client-side routes."""
 
+    @staticmethod
+    def _apply_html_cache_headers(response: FileResponse, path: str) -> FileResponse:
+        normalized = path.strip("/")
+        if normalized == "" or normalized.endswith(".html"):
+            response.headers["Cache-Control"] = "no-cache"
+            response.headers["Vary"] = "Accept"
+        return response
+
     async def get_response(self, path: str, scope: Any):  # pragma: no cover - exercised through ASGI mount
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
+            return self._apply_html_cache_headers(response, path)
         except StarletteHTTPException as exc:
             normalized = path.strip("/")
             first_segment = normalized.split("/", 1)[0] if normalized else ""
@@ -207,7 +216,8 @@ class SPAStaticFiles(StaticFiles):
                 or first_segment in _SPA_EXCLUDED_PREFIXES
             ):
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+            return self._apply_html_cache_headers(response, "index.html")
 
 
 class Artifact(BaseModel):

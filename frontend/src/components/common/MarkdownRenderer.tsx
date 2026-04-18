@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { cn } from "@/lib/utils";
+import { ErrorBoundary, ErrorPanel } from "@/components/common/ErrorBoundary";
 
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];
@@ -20,6 +21,33 @@ const LazyEChartsBlock = lazy(async () => {
   const module = await import("./EChartsBlock");
   return { default: module.EChartsBlock };
 });
+
+function RichBlockFallback({
+  title,
+  message,
+  source,
+  onRetry,
+  onReload,
+}: {
+  title: string;
+  message: string;
+  source: string;
+  onRetry?: () => void;
+  onReload?: () => void;
+}) {
+  return (
+    <div className="my-4">
+      <ErrorPanel
+        title={title}
+        message={message}
+        detail={source}
+        onRetry={onRetry}
+        onReload={onReload}
+        reloadLabel="Reload page"
+      />
+    </div>
+  );
+}
 
 type CodeProps = React.ComponentPropsWithoutRef<"code"> & {
   inline?: boolean;
@@ -44,43 +72,91 @@ function MarkdownCode({ inline, className, children, ...props }: CodeProps) {
 
   if (!inline && typeof className === "string" && /(?:^|\s)language-mermaid(?:\s|$)/.test(className)) {
     return (
-      <Suspense
-        fallback={
-          <div className="my-4 overflow-hidden rounded-2xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-            Loading Mermaid diagram...
-          </div>
-        }
+      <ErrorBoundary
+        fallback={({ isChunkLoadError, reset }) => (
+          <RichBlockFallback
+            title={isChunkLoadError ? "Mermaid renderer is out of date" : "Mermaid diagram failed to load"}
+            message={
+              isChunkLoadError
+                ? "This page is referencing an older Mermaid bundle. Reload the page to fetch the current frontend assets."
+                : "The diagram renderer crashed while loading. You can retry this block without losing the rest of the page."
+            }
+            source={source}
+            onRetry={isChunkLoadError ? undefined : reset}
+            onReload={() => window.location.reload()}
+          />
+        )}
       >
-        <LazyMermaidBlock chart={source} />
-      </Suspense>
+        <Suspense
+          fallback={
+            <div className="my-4 overflow-hidden rounded-2xl border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+              Loading Mermaid diagram...
+            </div>
+          }
+        >
+          <LazyMermaidBlock chart={source} />
+        </Suspense>
+      </ErrorBoundary>
     );
   }
 
   if (!inline && typeof className === "string" && /(?:^|\s)language-(?:vchart|chart)(?:\s|$)/.test(className)) {
     return (
-      <Suspense
-        fallback={
-          <div className="my-4 overflow-hidden rounded-card border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-            Loading chart...
-          </div>
-        }
+      <ErrorBoundary
+        fallback={({ isChunkLoadError, reset }) => (
+          <RichBlockFallback
+            title={isChunkLoadError ? "Chart bundle is out of date" : "Chart failed to load"}
+            message={
+              isChunkLoadError
+                ? "The current page shell no longer matches the chart bundle on the server. Reload to resync the app."
+                : "This chart renderer failed, but the rest of the report is still available."
+            }
+            source={source}
+            onRetry={isChunkLoadError ? undefined : reset}
+            onReload={() => window.location.reload()}
+          />
+        )}
       >
-        <LazyVChartBlock config={source} />
-      </Suspense>
+        <Suspense
+          fallback={
+            <div className="my-4 overflow-hidden rounded-card border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+              Loading chart...
+            </div>
+          }
+        >
+          <LazyVChartBlock config={source} />
+        </Suspense>
+      </ErrorBoundary>
     );
   }
 
   if (!inline && typeof className === "string" && /(?:^|\s)language-echarts(?:\s|$)/.test(className)) {
     return (
-      <Suspense
-        fallback={
-          <div className="my-4 overflow-hidden rounded-card border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-            Loading chart...
-          </div>
-        }
+      <ErrorBoundary
+        fallback={({ isChunkLoadError, reset }) => (
+          <RichBlockFallback
+            title={isChunkLoadError ? "Chart bundle is out of date" : "Chart failed to load"}
+            message={
+              isChunkLoadError
+                ? "This page references a stale chart chunk. Reload to fetch the latest build."
+                : "The chart renderer crashed while loading. Retry this block or reload the page if the problem persists."
+            }
+            source={source}
+            onRetry={isChunkLoadError ? undefined : reset}
+            onReload={() => window.location.reload()}
+          />
+        )}
       >
-        <LazyEChartsBlock config={source} />
-      </Suspense>
+        <Suspense
+          fallback={
+            <div className="my-4 overflow-hidden rounded-card border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+              Loading chart...
+            </div>
+          }
+        >
+          <LazyEChartsBlock config={source} />
+        </Suspense>
+      </ErrorBoundary>
     );
   }
 
