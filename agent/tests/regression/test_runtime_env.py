@@ -193,9 +193,9 @@ def test_ensure_runtime_env_ignores_configured_terminal_cwd(monkeypatch):
 
     runtime_env.ensure_runtime_env()
 
-    expected = str((runtime_env.AGENT_DIR.parent / "workspaces" / "public" / "agent").resolve())
+    expected = str((runtime_env.AGENT_DIR.parent / "workspaces" / "public").resolve())
     assert os.getenv("TERMINAL_CWD") == expected
-    assert runtime_env.get_data_root() == runtime_env.AGENT_DIR.parent / "workspaces" / "public" / "agent"
+    assert runtime_env.get_data_root() == runtime_env.AGENT_DIR.parent / "workspaces" / "public"
 
 
 def test_prepare_hermes_project_context_sets_repo_root(monkeypatch):

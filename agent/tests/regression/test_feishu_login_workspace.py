@@ -87,7 +87,7 @@ def test_feishu_callback_bootstraps_workspace_and_sets_session_cookie(tmp_path, 
     assert body["user"]["workspace_slug"] == "alice_zhang"
     user_id = body["user"]["user_id"]
 
-    workspace_root = workspaces_dir / user_id / "agent"
+    workspace_root = workspaces_dir / user_id
     assert workspace_root.exists()
     assert (workspace_root / ".hermes").exists()
     assert (workspace_root / ".hermes" / "config.yaml").exists()
@@ -134,8 +134,8 @@ def test_sessions_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch
     assert [s["title"] for s in alice_sessions] == ["Alice Session"]
     assert [s["title"] for s in bob_sessions] == ["Bob Session"]
 
-    assert (workspaces_dir / alice_user_id / "agent" / "sessions").exists()
-    assert (workspaces_dir / bob_user_id / "agent" / "sessions").exists()
+    assert (workspaces_dir / alice_user_id / "sessions").exists()
+    assert (workspaces_dir / bob_user_id / "sessions").exists()
 
 
 def test_workspace_session_ids_cannot_be_used_across_workspaces(tmp_path, monkeypatch):
@@ -206,8 +206,8 @@ def test_runs_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch):
     alice_user_id = alice.get("/auth/me").json()["user"]["user_id"]
     bob_user_id = bob.get("/auth/me").json()["user"]["user_id"]
 
-    alice_run = workspaces_dir / alice_user_id / "agent" / "runs" / "20260415_120000_aa1111"
-    bob_run = workspaces_dir / bob_user_id / "agent" / "runs" / "20260415_120000_bb2222"
+    alice_run = workspaces_dir / alice_user_id / "runs" / "20260415_120000_aa1111"
+    bob_run = workspaces_dir / bob_user_id / "runs" / "20260415_120000_bb2222"
     for run_dir, prompt in ((alice_run, "Alice strategy"), (bob_run, "Bob strategy")):
         (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
         (run_dir.parent.parent / "uploads").mkdir(parents=True, exist_ok=True)

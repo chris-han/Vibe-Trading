@@ -52,8 +52,8 @@ ensure_runtime_env()
 
 # ---------------------------------------------------------------------------
 # Data root: unauthenticated runtime files live under the shared public
-# workspace root at workspaces/public/agent. Authenticated users are routed to
-# workspaces/<user_id>/agent via ensure_workspace().
+# workspace root at workspaces/public. Authenticated users are routed to
+# workspaces/<user_id> via ensure_workspace().
 # ---------------------------------------------------------------------------
 _AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = _AGENT_DIR.parent
@@ -78,7 +78,7 @@ def _candidate_runs_dirs(
     """Return run roots in lookup order.
 
     Keep backward compatibility with older runs written under agent/runs while
-    the canonical root lives under workspaces/<workspace_id>/agent.
+    the canonical root lives under workspaces/<workspace_id>.
     """
     if runs_dir is not None:
         roots = [runs_dir]

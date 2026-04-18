@@ -9,11 +9,11 @@ from src.auth.workspace import ensure_workspace, legacy_workspace_swarm_dir, wor
 def test_workspace_paths_use_hidden_swarm_dir(tmp_path: Path):
     paths = workspace_paths(tmp_path, "alice_zhang")
 
-    assert paths.swarm_dir == workspace_swarm_dir(tmp_path / "alice_zhang" / "agent")
+    assert paths.swarm_dir == workspace_swarm_dir(tmp_path / "alice_zhang")
 
 
 def test_swarm_helpers_use_hidden_runs_dir(tmp_path: Path):
-    agent_root = tmp_path / "alice_zhang" / "agent"
+    agent_root = tmp_path / "alice_zhang"
 
     assert get_runs_dir(tmp_path) == tmp_path / "runs"
     assert get_sessions_dir(tmp_path) == tmp_path / "sessions"
@@ -27,7 +27,7 @@ def test_swarm_helpers_use_hidden_runs_dir(tmp_path: Path):
 
 
 def test_ensure_workspace_migrates_legacy_swarm_directory(tmp_path: Path):
-    workspace_root = tmp_path / "alice_zhang" / "agent"
+    workspace_root = tmp_path / "alice_zhang"
     legacy_swarm_runs = legacy_workspace_swarm_dir(workspace_root) / "runs" / "swarm-123"
     legacy_swarm_runs.mkdir(parents=True)
     legacy_run_file = legacy_swarm_runs / "run.json"
@@ -45,7 +45,7 @@ def test_ensure_workspace_migrates_legacy_swarm_directory(tmp_path: Path):
 
 
 def test_ensure_workspace_preserves_existing_hidden_swarm_dir(tmp_path: Path):
-    workspace_root = tmp_path / "alice_zhang" / "agent"
+    workspace_root = tmp_path / "alice_zhang"
     hidden_swarm_runs = workspace_swarm_dir(workspace_root) / "runs" / "swarm-123"
     hidden_swarm_runs.mkdir(parents=True)
     hidden_run_file = hidden_swarm_runs / "run.json"
@@ -61,7 +61,7 @@ def test_ensure_workspace_preserves_existing_hidden_swarm_dir(tmp_path: Path):
 
 
 def test_ensure_workspace_merges_legacy_and_hidden_swarm_runs(tmp_path: Path):
-    workspace_root = tmp_path / "alice_zhang" / "agent"
+    workspace_root = tmp_path / "alice_zhang"
     hidden_run_file = workspace_swarm_dir(workspace_root) / "runs" / "swarm-hidden" / "run.json"
     hidden_run_file.parent.mkdir(parents=True)
     hidden_run_file.write_text('{"status":"hidden"}\n', encoding="utf-8")
@@ -82,7 +82,7 @@ def test_ensure_workspace_merges_legacy_and_hidden_swarm_runs(tmp_path: Path):
 
 
 def test_ensure_workspace_migrates_legacy_slug_workspace_to_user_id(tmp_path: Path):
-    legacy_agent_root = tmp_path / "alice_zhang" / "agent"
+    legacy_agent_root = tmp_path / "alice_zhang"
     (legacy_agent_root / "runs" / "run-1").mkdir(parents=True)
     (legacy_agent_root / "runs" / "run-1" / "state.json").write_text('{"status":"ok"}\n', encoding="utf-8")
 

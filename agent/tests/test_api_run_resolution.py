@@ -44,7 +44,7 @@ def test_collect_run_dirs_prefers_primary_root_on_duplicates(tmp_path: Path, mon
 
 
 def test_workspace_run_lookup_falls_back_to_global_runs_root(tmp_path: Path, monkeypatch):
-    workspace_runs = tmp_path / "workspaces" / "chris_han" / "agent" / "runs"
+    workspace_runs = tmp_path / "workspaces" / "chris_han" / "runs"
     global_runs = tmp_path / "chris" / "runs"
 
     expected = global_runs / "20260415_203540_20_cbe68a"
@@ -59,8 +59,8 @@ def test_workspace_run_lookup_falls_back_to_global_runs_root(tmp_path: Path, mon
 
 
 def test_get_run_result_returns_report_from_fallback_global_run(tmp_path: Path, monkeypatch):
-    workspace_runs = tmp_path / "workspaces" / "chris_han" / "agent" / "runs"
-    workspace_sessions = tmp_path / "workspaces" / "chris_han" / "agent" / "sessions"
+    workspace_runs = tmp_path / "workspaces" / "chris_han" / "runs"
+    workspace_sessions = tmp_path / "workspaces" / "chris_han" / "sessions"
     global_runs = tmp_path / "chris" / "runs"
 
     run_dir = global_runs / "20260415_203540_20_cbe68a"

@@ -116,7 +116,7 @@ def _migrate_workspace_root(base_dir: Path, workspace_id: str, legacy_workspace_
 
 def workspace_paths(base_dir: Path, workspace_id: str, workspace_slug: str | None = None) -> WorkspacePaths:
     workspace_root = base_dir / workspace_id
-    agent_root = workspace_root / "agent"
+    agent_root = workspace_root
     return WorkspacePaths(
         workspace_id=workspace_id,
         workspace_slug=(workspace_slug or workspace_id),

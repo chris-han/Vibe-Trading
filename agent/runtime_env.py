@@ -26,14 +26,13 @@ _ENV_BOOTSTRAPPED = False
 
 
 def get_data_root(workspace_id: str | None = None) -> Path:
-    """Return the canonical runtime data root for a workspace agent dir.
+    """Return the canonical runtime data root for a workspace.
 
-    Runtime state is stored under ``workspaces/<workspace_id>/agent``.
+    Runtime state is stored under ``workspaces/<workspace_id>``.
     When no workspace id is provided, the shared ``public`` workspace is used.
-    The directory is created on first call.
     """
     normalized_workspace_id = (workspace_id or _DEFAULT_WORKSPACE_ID).strip() or _DEFAULT_WORKSPACE_ID
-    root = (_WORKSPACES_DIR / normalized_workspace_id / "agent").resolve()
+    root = (_WORKSPACES_DIR / normalized_workspace_id).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
