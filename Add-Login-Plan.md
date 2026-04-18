@@ -428,6 +428,36 @@ The plan should assume a workspace Hermes provisioner that can:
 
 This provisioner is the right place to implement future paid skill/plugin subscriptions.
 
+## Backlog
+
+### Shared Skill Publication
+
+Design a deterministic backend function for promoting a workspace-local user skill into an approved shared skill location.
+
+Proposed shape:
+
+- `publish_workspace_skill(workspace_hermes_home, skill_name, actor, destination, approval_context)`
+
+Required behavior:
+
+- read only from the caller's workspace-local `HERMES_HOME`
+- verify the actor is authorized to publish into the target shared scope
+- require an explicit approval or moderation record before any copy occurs
+- reuse deterministic path validation and security scanning from skill install/edit flows
+- record provenance metadata: source workspace, publisher, approval record, publish time, source content hash
+- reject prompt-driven direct file publication; the publish path must live in backend code
+- support future scopes such as publish-to-org, publish-to-tenant, and publish-to-global without changing the call contract
+
+### Hermes Runtime Isolation Follow-Up
+
+Fix remaining import-time `HERMES_HOME` snapshots in the authenticated Hermes runtime so each request consistently uses `workspaces/<workspace_slug>/agent/.hermes`.
+
+Priority areas:
+
+- modules that cache `HERMES_HOME` or derived paths at import time
+- `run_agent` startup that loads `.env` from `HERMES_HOME` before workspace context is applied
+- authenticated session and swarm execution paths that isolate run/session directories but still rely on a process-wide Hermes home
+
 ### V3 Option: Federated Custom Memory Provider
 
 Explicit v3 option:
