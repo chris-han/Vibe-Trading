@@ -18,6 +18,17 @@ import { MarkdownRenderer } from "@/components/common/MarkdownRenderer";
 import { markdownProseClass } from "@/components/common/markdownStyles";
 
 const SESSION_MESSAGES_PAGE_SIZE = 100;
+const SWARM_TEAM_MODE_MARKER = "[Swarm Team Mode]";
+const SWARM_BADGE = { name: "auto", title: "Agent Swarm" } as const;
+
+function normalizeSwarmPrompt(rawInput: string) {
+  const hasSwarmMarker = rawInput.includes(SWARM_TEAM_MODE_MARKER);
+  const nextInput = hasSwarmMarker
+    ? rawInput.replace(/\s*\[Swarm Team Mode\]\s*/g, "").trimStart()
+    : rawInput;
+
+  return { hasSwarmMarker, nextInput };
+}
 
 /* ---------- Message grouping ---------- */
 type MsgGroup =
@@ -83,6 +94,25 @@ export function Agent() {
   const deferredStreamingText = useDeferredValue(streamingText);
 
   const urlSessionId = searchParams.get("session");
+
+  const syncInputHeight = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, []);
+
+  const applyComposerInput = useCallback((rawInput: string, options?: { clearSwarmWhenAbsent?: boolean }) => {
+    const { hasSwarmMarker, nextInput } = normalizeSwarmPrompt(rawInput);
+
+    if (hasSwarmMarker) {
+      setSwarmPreset(prev => prev ?? { ...SWARM_BADGE });
+    } else if (options?.clearSwarmWhenAbsent) {
+      setSwarmPreset(null);
+    }
+
+    setInput(nextInput);
+  }, []);
 
   /* Smart scroll — only auto-scroll when near bottom */
   const isNearBottom = useCallback(() => {
@@ -621,7 +651,7 @@ export function Agent() {
     if (swarmPreset) {
       setSwarmPreset(null);
       // Don't double-wrap if the user pasted a prompt that already has the prefix
-      if (!prompt.startsWith("[Swarm Team Mode]")) {
+      if (!prompt.startsWith(SWARM_TEAM_MODE_MARKER)) {
         finalPrompt = `[Swarm Team Mode] Call \`list_swarm_presets\` to see available presets, then call \`run_swarm\` with the most appropriate preset for this task. Do NOT use delegate_task or load_skill.\n\n${prompt}`;
       }
     }
@@ -654,6 +684,38 @@ export function Agent() {
       act().addMessage({ id: "", type: "error", content: errorMsg, timestamp: Date.now() });
     }
   };
+
+  const handleExampleSelect = useCallback((prompt: string) => {
+    applyComposerInput(prompt, { clearSwarmWhenAbsent: true });
+    requestAnimationFrame(() => {
+      syncInputHeight();
+      inputRef.current?.focus();
+      const length = inputRef.current?.value.length ?? 0;
+      inputRef.current?.setSelectionRange(length, length);
+    });
+  }, [applyComposerInput, syncInputHeight]);
+
+  const handleInputPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = e.clipboardData.getData("text");
+    if (!pastedText) return;
+
+    const el = e.currentTarget;
+    const selectionStart = el.selectionStart ?? input.length;
+    const selectionEnd = el.selectionEnd ?? selectionStart;
+    const mergedInput = `${input.slice(0, selectionStart)}${pastedText}${input.slice(selectionEnd)}`;
+    const { hasSwarmMarker } = normalizeSwarmPrompt(mergedInput);
+
+    if (!hasSwarmMarker && !swarmPreset) return;
+
+    e.preventDefault();
+    applyComposerInput(mergedInput, { clearSwarmWhenAbsent: true });
+    requestAnimationFrame(() => {
+      syncInputHeight();
+      inputRef.current?.focus();
+      const length = inputRef.current?.value.length ?? 0;
+      inputRef.current?.setSelectionRange(length, length);
+    });
+  }, [applyComposerInput, input, swarmPreset, syncInputHeight]);
 
   const handleSubmit = (e: FormEvent) => { e.preventDefault(); runPrompt(input.trim()); };
 
@@ -782,7 +844,7 @@ export function Agent() {
               ))}
             </div>
           )}
-          {!sessionLoading && messages.length === 0 && <WelcomeScreen onExample={runPrompt} />}
+          {!sessionLoading && messages.length === 0 && <WelcomeScreen onExampleSelect={handleExampleSelect} />}
 
           {groups.map((g, i) => {
             if (g.kind === "timeline") {
@@ -931,7 +993,7 @@ export function Agent() {
                     type="button"
                     onClick={() => {
                       setShowUploadMenu(false);
-                      setSwarmPreset({ name: "auto", title: "Agent Swarm" });
+                      setSwarmPreset({ ...SWARM_BADGE });
                       inputRef.current?.focus();
                     }}
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
@@ -953,7 +1015,8 @@ export function Agent() {
               ref={inputRef}
               value={input}
               rows={1}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => applyComposerInput(e.target.value)}
+              onPaste={handleInputPaste}
               onInput={(e) => {
                 const el = e.target as HTMLTextAreaElement;
                 el.style.height = "auto";

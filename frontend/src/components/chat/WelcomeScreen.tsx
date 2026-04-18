@@ -24,7 +24,7 @@ const CATEGORIES: Category[] = [
       {
         title: "Cross-Market Portfolio",
         desc: "A-shares + crypto + US equities with risk-parity optimizer",
-        prompt: "Backtest a risk-parity portfolio of MSFT, BTC-USDT, and AAPL for full-year 2024, compare against equal-weight baseline",
+        prompt: "Backtest a risk-parity portfolio of MSFT, BTC-USDT, and AAPL for full-year 2025, compare against equal-weight baseline",
       },
       {
         title: "BTC 5-Min MACD Strategy",
@@ -105,12 +105,12 @@ const CAPABILITY_CHIPS = [
 ];
 
 interface Props {
-  onExample: (s: string) => void;
+  onExampleSelect: (s: string) => void;
 }
 
 const SHORT_VIEWPORT_HEIGHT = 760;
 
-export function WelcomeScreen({ onExample }: Props) {
+export function WelcomeScreen({ onExampleSelect }: Props) {
   const { t } = useI18n();
   const [isShortViewport, setIsShortViewport] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
@@ -175,7 +175,7 @@ export function WelcomeScreen({ onExample }: Props) {
                 {cat.examples.map((ex) => (
                   <button
                     key={ex.title}
-                    onClick={() => onExample(ex.prompt)}
+                    onClick={() => onExampleSelect(ex.prompt)}
                     className={`block w-full rounded-button border bg-card px-3 py-1.5 text-left transition-colors hover:shadow-sm ${cat.color}`}
                   >
                     <span className="text-[13px] font-medium leading-snug text-foreground md:text-sm">
