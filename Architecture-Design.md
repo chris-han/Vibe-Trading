@@ -2440,6 +2440,76 @@ session.created
 - `LANGCHAIN_TEMPERATURE` - Temperature setting
 - Provider-specific API keys
 
+#### 6.8.1 Provider-Native Tool Parity
+
+Provider-agnostic capability does not come from assuming all model backends expose the same tool surface. It comes from enforcing a stable Hermes capability layer even when providers emit different native tool items, different argument shapes, or different built-in tool names for the same user intent.
+
+This matters because a Responses-compatible provider can legally return a native item such as `web_search_call`, `shell_call`, or `file_search_call` even when Hermes exposed only Hermes-managed tools to the model. If the runtime treats those items as opaque provider details, the harness can misclassify the turn as `stop`, drop the intended action, and produce empty or partial final responses. The failure mode looks like “the model answered nothing,” but the root cause is tool-call parity drift at the provider boundary.
+
+Hermes therefore treats provider-native tool items as an adapter problem, not a prompt problem.
+
+**Required invariants:**
+
+- Hermes-managed tools are the authoritative capability contract.
+- Provider-native tool items must never execute directly against the host environment.
+- Native tool items must be normalized into Hermes internal tool semantics before normal tool execution.
+- If Hermes cannot prove a safe translation, it must fail closed, log the mismatch, and avoid silent drops.
+- The same user task should produce equivalent Hermes tool execution regardless of whether the provider emits OpenAI-style function calls or provider-native built-ins.
+
+**Normalization pipeline:**
+
+1. Detect the provider-native item type at the Responses boundary.
+2. Attempt a deterministic translator for that item type.
+3. Validate the translated Hermes tool name and arguments against Hermes' registered tool schema.
+4. If deterministic translation is unavailable but the capability family is explicitly allowlisted, attempt a structured fallback proposal.
+5. Accept the fallback only if it passes confidence, allowlist, and schema validation.
+6. Log the translation or rejection with provider, model, and item metadata for parity debugging.
+7. Feed the normalized Hermes tool call into the standard execution loop so downstream behavior remains identical.
+
+**Deterministic translators first:**
+
+Deterministic adapters are the preferred path for common parity cases such as provider-native web search or shell execution. The adapter owns field mapping, ID normalization, and argument shaping. This keeps capability behavior testable and avoids teaching prompt text to simulate protocol translation.
+
+Examples:
+
+- `web_search_call` -> Hermes `web_search`
+- `shell_call` or `local_shell_call` -> Hermes `terminal`
+
+These mappings are valid only because Hermes already has a bounded equivalent capability. A native built-in that has no Hermes semantic equivalent must not be forced into the wrong tool just to keep the loop moving.
+
+**Structured self-healing, not runtime-generated code:**
+
+Hermes may use a bounded self-healing step when a deterministic translator cannot recover a safe Hermes call shape. That self-healing step must be data-only.
+
+The runtime may ask the model for a structured translation proposal, but it must not generate and execute translator code at runtime. Runtime code generation would move safety-critical behavior out of deterministic runtime paths and reintroduce the same provider-specific fragility at a harder-to-audit layer.
+
+The structured fallback contract is:
+
+- The model may propose only from an explicit allowlist of Hermes tools for that native item family.
+- The output format is fixed JSON, not executable code.
+- Hermes validates the proposal against the destination tool schema before execution.
+- Hermes rejects extra fields, missing required fields, and low-confidence mappings.
+- Hermes never uses structured fallback for destructive capability families unless a deterministic adapter exists and policy explicitly allows it.
+
+In practice, this means fallback healing is acceptable for bounded parity cases, but not as a generic “translate anything into any tool” mechanism.
+
+**Observability requirements:**
+
+- Successful translations log the native item type, Hermes tool name, provider, model, and item ID.
+- Unsupported native items log a warning instead of being silently ignored.
+- Self-healed translations log that fallback was used so parity issues can be tracked and eventually replaced with deterministic adapters.
+- Regression tests must cover every supported native translator and every fail-closed path.
+
+**Anti-patterns:**
+
+- Do not execute provider-native built-ins directly and bypass Hermes tooling.
+- Do not rely on prompt instructions alone to coerce providers into identical tool behavior.
+- Do not silently drop unknown native tool items.
+- Do not map native tools to “closest looking” Hermes tools without a capability-level semantic match.
+- Do not allow runtime-generated Python or patch code to implement translation logic.
+
+This pattern preserves provider-agnostic behavior where it belongs: at the runtime normalization boundary, with deterministic adapters first and bounded, validated fallback only where Hermes already owns the capability.
+
 ---
 
 ### 6.9 Filesystem & File I/O Specification
