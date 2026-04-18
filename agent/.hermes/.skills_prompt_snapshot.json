@@ -1,0 +1,365 @@
+{
+  "version": 1,
+  "manifest": {
+    "data-science/multi-asset-backtest/SKILL.md": [
+      1776328202960735921,
+      13398
+    ],
+    "data-science/yfinance-fx-data/SKILL.md": [
+      1776328202960735921,
+      5360
+    ],
+    "data-science/yfinance-multiindex-workaround/SKILL.md": [
+      1776503476745126011,
+      5071
+    ],
+    "data_inconsistency_resolution/SKILL.md": [
+      1776328202960735921,
+      2869
+    ],
+    "detailed-risk-analysis/SKILL.md": [
+      1776328202960735921,
+      13463
+    ],
+    "productivity/feishu-card-charts/SKILL.md": [
+      1776328202960735921,
+      4648
+    ],
+    "quant/backtest-risk-audit/SKILL.md": [
+      1776505758254807912,
+      16215
+    ],
+    "quant/factor-backtest-troubleshooting/SKILL.md": [
+      1776505299094903541,
+      6257
+    ],
+    "quant/factor-ic-validation/SKILL.md": [
+      1776493135336787128,
+      5778
+    ],
+    "quant/factor-mining-benchmarks/SKILL.md": [
+      1776504484674976534,
+      6220
+    ],
+    "quant/macd-backtest-lessons/SKILL.md": [
+      1776328202960735921,
+      6248
+    ],
+    "quant/macro-factor-correlation/SKILL.md": [
+      1776328202960735921,
+      12492
+    ],
+    "quant/momentum-stock-screening/SKILL.md": [
+      1776505237234860534,
+      7626
+    ],
+    "quant/multi-factor-alpha/SKILL.md": [
+      1776328202960735921,
+      20020
+    ],
+    "quant/portfolio-backtest-optimizer-limitations/SKILL.md": [
+      1776502732295253102,
+      6409
+    ],
+    "quant/portfolio-optimizer-comparison/SKILL.md": [
+      1776328202970374657,
+      7069
+    ],
+    "quant/tactical-macro-commodity-report/SKILL.md": [
+      1776328202970374657,
+      6042
+    ],
+    "research/bear-side-research/SKILL.md": [
+      1776503279995167256,
+      18574
+    ],
+    "research/bull-side-research/SKILL.md": [
+      1776484160498840450,
+      18899
+    ],
+    "research/earnings-options-analysis/SKILL.md": [
+      1776328202970374657,
+      5579
+    ],
+    "research/semiconductor-analysis/SKILL.md": [
+      1776350956984725815,
+      10356
+    ]
+  },
+  "skills": [
+    {
+      "skill_name": "multi-asset-backtest",
+      "category": "data-science",
+      "frontmatter_name": "multi-asset-backtest",
+      "description": "Backtest portfolios with mixed asset classes (stocks + cr...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "yfinance-fx-data",
+      "category": "data-science",
+      "frontmatter_name": "yfinance-fx-data",
+      "description": "Fetch and clean FX data using yfinance with proper multi-...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "yfinance-multiindex-workaround",
+      "category": "data-science",
+      "frontmatter_name": "yfinance-multiindex-workaround",
+      "description": "Handle MultiIndex column issue in recent yfinance version...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "data_inconsistency_resolution",
+      "category": "data_inconsistency_resolution",
+      "frontmatter_name": "data_inconsistency_resolution",
+      "description": "Resolving data inconsistencies and handling deprecated AP...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "detailed-risk-analysis",
+      "category": "detailed-risk-analysis",
+      "frontmatter_name": "detailed-risk-analysis",
+      "description": "Perform detailed risk analysis involving data fetching, c...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "feishu-card-charts",
+      "category": "productivity",
+      "frontmatter_name": "feishu-card-charts",
+      "description": "Feishu/Lark Card chart specifications and supported chart...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "backtest-risk-audit",
+      "category": "quant",
+      "frontmatter_name": "backtest-risk-audit",
+      "description": "Comprehensive risk audit framework for strategy backtests...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "factor-backtest-troubleshooting",
+      "category": "quant",
+      "frontmatter_name": "factor-backtest-troubleshooting",
+      "description": "Diagnose and fix failed multi-factor backtests — IC vs pe...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "factor-ic-validation",
+      "category": "quant",
+      "frontmatter_name": "factor-ic-validation",
+      "description": "Validate factor ICs empirically before deploying multi-fa...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "factor-mining-benchmarks",
+      "category": "quant",
+      "frontmatter_name": "factor-mining-benchmarks",
+      "description": "Empirical IC/IR benchmarks and factor correlation pattern...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "macd-backtest-lessons",
+      "category": "quant",
+      "frontmatter_name": "macd-backtest-lessons",
+      "description": "MACD strategy backtesting lessons — parameter selection, ...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "macro-factor-correlation",
+      "category": "quant",
+      "frontmatter_name": "macro-factor-correlation",
+      "description": "Macro factor correlation analysis for individual stocks —...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "momentum-stock-screening",
+      "category": "quant",
+      "frontmatter_name": "momentum-stock-screening",
+      "description": "Screen equity universes for momentum strategy candidates ...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "multi-factor-alpha",
+      "category": "quant",
+      "frontmatter_name": "multi-factor-alpha",
+      "description": "Build cross-sectional multi-factor equity strategies with...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "portfolio-backtest-optimizer-limitations",
+      "category": "quant",
+      "frontmatter_name": "portfolio-backtest-optimizer-limitations",
+      "description": "Critical limitations of the daily backtest engine when us...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "portfolio-optimizer-comparison",
+      "category": "quant",
+      "frontmatter_name": "portfolio-optimizer-comparison",
+      "description": "Compare portfolio optimizers (risk_parity, equal_volatili...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "tactical-macro-commodity-report",
+      "category": "quant",
+      "frontmatter_name": "tactical-macro-commodity-report",
+      "description": "Generate tactical macro environment and commodity analysi...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "bear-side-research",
+      "category": "research",
+      "frontmatter_name": "bear-side-research",
+      "description": "Systematic multi-dimensional bear-side stock research fra...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "bull-side-research",
+      "category": "research",
+      "frontmatter_name": "bull-side-research",
+      "description": "Systematic multi-dimensional bull-side stock research fra...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "earnings-options-analysis",
+      "category": "research",
+      "frontmatter_name": "earnings-options-analysis",
+      "description": "Comprehensive framework for analyzing options positioning...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "semiconductor-analysis",
+      "category": "research",
+      "frontmatter_name": "semiconductor-analysis",
+      "description": "Semiconductor and memory stock analysis framework — DRAM/...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    }
+  ],
+  "category_descriptions": {}
+}

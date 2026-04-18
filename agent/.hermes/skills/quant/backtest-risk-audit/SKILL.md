@@ -345,6 +345,73 @@ Structure findings as formal CRO review:
 - **Volatility clustering**: AC1 > 0.3 means GARCH-style modeling may improve risk forecasts.
 - **Overfitting flags**: Trade win rate <35% or OOS Sharpe degradation >0.5 are critical red flags.
 
+## Alternative: Audit from Summary Metrics Only
+
+When backtest artifact files (equity.csv, trades.csv) are unavailable due to sandbox restrictions or when only summary metrics are provided in upstream context:
+
+### Required Summary Metrics
+
+Minimum metrics needed for a meaningful audit:
+- Final equity value and initial cash
+- Total return (%) and annualized return (%)
+- Maximum drawdown (%) and peak/trough dates
+- Sharpe ratio (annualized)
+- Win rate (%) and profit factor
+- Number of trades and rebalancing frequency
+- Benchmark return (for excess return calculation)
+
+### Estimation Approach
+
+```python
+# Estimate daily volatility from Sharpe ratio
+# Sharpe = ann_ret / ann_vol  →  ann_vol = ann_ret / Sharpe
+ann_vol = abs(ann_ret) / abs(sharpe) if sharpe != 0 else 0.20  # Default 20%
+
+# Estimate VaR from volatility (normal approximation)
+var_95_daily = 1.645 * (ann_vol / np.sqrt(252))
+cvar_95_daily = var_95_daily * 1.25  # Typical CVaR/VaR ratio
+
+# Estimate overfitting risk from win rate and profit factor
+overfitting_flags = []
+if win_rate < 0.40:
+    overfitting_flags.append("Low win rate (<40%)")
+if profit_factor < 0.9:
+    overfitting_flags.append("Profit factor <1 (losing strategy)")
+if profit_factor < 0.8:
+    overfitting_flags.append("Severe alpha decay (PF <0.8)")
+
+# Critical: Check if factor mining period = backtest period
+if factor_mining_period == backtest_period:
+    overfitting_flags.append("CRITICAL: Same-period factor mining and backtesting")
+    overfitting_risk = 'HIGH'
+```
+
+### Limitations of Summary-Only Audit
+
+| Aspect | With Artifacts | Summary Only |
+|--------|----------------|--------------|
+| Drawdown timeline | Exact dates, recovery | Estimated from max DD |
+| Volatility clustering | AC1 calculation | Not available |
+| Tail risk (VaR/CVaR) | Historical simulation | Normal approximation |
+| Overfitting (IS/OOS) | Split-period analysis | Inferred from win rate |
+| Trade-level analysis | Win rate, P&L distribution | Aggregated metrics only |
+
+### Key Red Flags from Summary Metrics
+
+1. **Same-period factor mining + backtest** = Overfitting (CRITICAL)
+2. **Win rate <45%** = Weak or decaying alpha
+3. **Profit factor <1.0** = Losing strategy after costs
+4. **Excess return < -10%** = Systematic underperformance
+5. **Max DD >20%** = Insufficient risk controls
+6. **Sharpe < 0** = Negative risk-adjusted returns
+
+### CRO Decision from Summary Metrics
+
+Use the same threshold framework, but add:
+- **Automatic REJECT** if factor mining period equals backtest period (no OOS validation)
+- **Automatic REJECT** if profit factor < 0.8 (severe alpha decay)
+- **CONDITIONAL** only if all HIGH priority fixes are committed before deployment
+
 ## Output
 
 Save results to `RUN_DIR/artifacts/risk_audit.json`:

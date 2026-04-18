@@ -134,8 +134,27 @@ top_candidates = df_results.head(TOP_N)
 
 ### 1. Multi-Index Column Error
 **Symptom**: `KeyError: 'Close'` when accessing `df['Close']`
-**Cause**: yfinance returns MultiIndex columns for HK stocks, futures, some ADRs
-**Fix**: Flatten columns immediately after download (see `fetch_price_data` above)
+**Cause**: yfinance returns MultiIndex columns for HK stocks, A-shares (.SS/.SZ), futures, some ADRs
+**Fix**: Flatten columns immediately after download. For A-shares specifically, the Close column will be `('Close', 'SYMBOL')` — extract by finding columns containing 'Close':
+
+```python
+close_cols = [c for c in df.columns if 'Close' in str(c)]
+if close_cols:
+    close_col = close_cols[0]  # e.g., ('Close', '601318.SS')
+    close = df[close_col]
+```
+
+### 2. Insufficient Data for 12M Momentum
+**Symptom**: All 12M-1M momentum values are NaN
+**Cause**: yfinance A-share data typically has only ~250 days (1 year), not enough for 252 trading days
+**Fix**: Use 6M momentum as primary factor when 12M data unavailable. Adjust composite scoring:
+- If 12M available: 50%×(12M-1M) + 30%×(6M) + 20%×(3M)
+- If only 6M available: 60%×(6M) + 40%×(3M)
+
+### 3. Overly Strict Filters in Weak Markets
+**Symptom**: Zero candidates after momentum filter
+**Cause**: Absolute thresholds (e.g., >-60%) eliminate all stocks in bear markets
+**Fix**: Use percentile-based filtering (e.g., keep top 85% by momentum) instead of absolute thresholds
 
 ### 2. NaN Momentum Values
 **Symptom**: All 12-month momentum values are NaN

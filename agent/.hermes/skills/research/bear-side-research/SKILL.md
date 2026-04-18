@@ -23,12 +23,12 @@ Systematic multi-dimensional bear-side research methodology for identifying down
 
 | Dimension | Key Metrics | Bearish Signals |
 |-----------|-------------|-----------------|
-| **1. Technical** | RSI, Bollinger, EMA, ADX, Volume, Divergences | RSI >70 (extreme >90), Price >95% BB Upper, EMA bearish crossover, Volume divergence, RSI/MACD divergences |
-| **2. Valuation** | P/E, P/B, P/S, EV/EBITDA vs sector/historical | P/E premium >50% vs sector, P/B >3x historical, P/S >2x sector avg, P/S >20x = bubble territory |
-| **3. Fundamental** | Margin trends, Revenue growth, Balance sheet, Customer concentration | Gross margin compression, Decelerating growth, Deteriorating cash flow, Top 4 customers >40% revenue |
-| **4. Risk Metrics** | VaR, CVaR, Beta, Volatility, Drawdown | Beta >1.5, VaR(95%) >5%, Max DD >30%, Fat tails (kurtosis >4), Annual vol >40% |
-| **5. Tail Risk** | GPD shape parameter, Monte Carlo worst cases | GPD ξ >0.5, Worst 5% scenario <-30% |
-| **6. Catalysts** | Insider activity, Institutional flows, Competitive threats | Insider selling >$1B with 0 buys, Institutional reduction, Competitive share loss, Geopolitical risks |
+| **1. Technical** | RSI, Bollinger, EMA, ADX, Volume, Divergences, Pattern Detection | RSI >70 (extreme >90), Price >95% BB Upper, EMA bearish crossover, Volume divergence, RSI/MACD divergences, Double top/Head & Shoulders |
+| **2. Valuation** | P/E, P/B, P/S, EV/EBITDA vs sector/historical | P/E premium >50% vs sector, P/B >3x historical (PB >25x = bubble), P/S >2x sector avg (PS >20x = bubble), Forward PE << Trailing PE |
+| **3. Fundamental** | Margin trends, Revenue growth, Balance sheet, Customer concentration, Insider activity | Gross margin compression, Decelerating growth, Deteriorating cash flow, Top 4 customers >40% revenue, $1B+ insider selling w/ 0 buys |
+| **4. Risk Metrics** | VaR, CVaR, Beta, Volatility, Drawdown, Kurtosis | Beta >1.5, VaR(95%) >5%, Max DD >30%, Fat tails (kurtosis >4), Annual vol >40% |
+| **5. Tail Risk** | GPD shape parameter, Monte Carlo worst cases, Stress scenarios | GPD ξ >0.5, Worst 5% scenario <-30%, Hyperscaler capex -20% = -40% stock |
+| **6. Catalysts** | Insider activity, Institutional flows, Competitive threats, Capex cycle | Insider selling >$1B with 0 buys, Institutional reduction, Competitive share loss, Hyperscaler capex deceleration, Geopolitical risks |
 
 ## Implementation Steps
 
@@ -273,8 +273,8 @@ worst_1pct = np.percentile(final_returns, 1)
 2. **Avoid CSV save/reload for yfinance data**: Saving to CSV and reloading introduces parsing issues (Ticker/Date rows). Work with live DataFrame instead.
 3. **String formatting robustness**: Avoid f-strings with pandas types entirely. Use concatenation: `str(round(value, 2))` instead of `f'{value:.2f}'` or `.iloc[-1]` formatting.
 4. **Series formatting in f-strings**: Pandas Series cannot be directly formatted — explicitly convert to float first: `float(df['Close'].iloc[-1])` not `df['Close'].iloc[-1]`
-3. **File paths**: Use absolute paths or `.` for current directory, not nested paths that may not exist. In swarm contexts, write to `artifacts/<agent_name>/` subdirectory.
-4. **Beta calculation failures**: Covariance/correlation can fail with dimensionality errors. Wrap in try/except and use defensive checks:
+5. **File paths**: Use absolute paths or `.` for current directory, not nested paths that may not exist. In swarm contexts, write to `artifacts/<agent_name>/` subdirectory.
+6. **Beta calculation failures**: Covariance/correlation can fail with dimensionality errors. Wrap in try/except and use defensive checks:
    ```python
    try:
        beta = aligned_returns['NVDA'].cov(aligned_returns['SPY']) / aligned_returns['SPY'].var()
@@ -282,26 +282,26 @@ worst_1pct = np.percentile(final_returns, 1)
        beta = None  # Handle gracefully
    # Later: if beta is not None and beta > 1.5: ...
    ```
-5. **yfinance financials iteration**: `quarterly_financials.loc['Total Revenue']` returns a Series with dates as index — iterate over `series.items()` or `list(series.index)`, NOT `series.columns`
-4. **Sector benchmarks**: Use appropriate sector averages (tech ~22x P/E, utilities ~15x, etc.)
-5. **GPD fitting**: Requires sufficient tail data (>10 exceedances); handle fit failures gracefully
-6. **Beta calculation**: Align dates between stock and market returns before computing covariance
-7. **Margin trends**: Distinguish between cyclical compression and structural deterioration
-8. **Forward vs Trailing P/E**: Large gap implies aggressive growth expectations - any miss = multiple compression
-9. **yfinance None values**: Use defensive pattern `info.get('field', 0) or 0` to handle both missing keys AND None values in one line
-10. **Data availability**: yfinance may not provide all fundamental fields for all tickers — gracefully handle missing data with fallbacks or "N/A" messaging
-11. **yfinance API changes**: Yahoo Finance occasionally changes response structure — always test data fetching separately before full analysis
-12. **Insider transactions column names**: Use `'Transaction Start Date'` not `'Transaction Date'`; wrap in try/except as structure varies
-13. **Major holders parsing**: Values are numpy.float64, not strings — don't call `.replace()` on them; access via `.iloc[row, col]`
-14. **Earnings history columns**: Use `'epsEstimate'` and `'epsActual'` (lowercase), not `'EPS Estimate'`
-15. **Institutional holders change**: Column `'Change in Shares'` may be missing — check with `if 'Change in Shares' in df.columns`
-16. **yfinance earnings can be None**: `ticker.earnings` may return `None` (not just empty DataFrame) — check `if earnings is not None and not earnings.empty`
-17. **Quarterly financials iteration**: After `.loc['Total Revenue']`, result is a Series with dates as index — iterate over `list(revenue.index)` not `revenue.columns`
-19. **Institutional holders column variations**: Column name may be `'% Out'` or `'Pct Out'` — use `row.get('% Out', row.get('Pct Out', 0))`
-20. **Insider transactions returning N/A**: yfinance sometimes returns all 'N/A' values for insider data — this is a Yahoo limitation, not a bug
-21. **yfinance financials structure**: `quarterly_financials` and `financials` are DataFrames with metrics as rows and dates as columns — access via `.loc['Metric Name']`
-22. **yfinance abbreviated columns**: Recent yfinance versions may return abbreviated column names (`C`, `H`, `L`, `O`, `V`) — rename after fetching: `df = df.rename(columns={'C': 'Close', 'H': 'High', 'L': 'Low', 'O': 'Open', 'V': 'Volume'})`
-23. **Complete column handling pattern**: Combine MultiIndex flattening + column renaming in one block:
+7. **yfinance financials iteration**: `quarterly_financials.loc['Total Revenue']` returns a Series with dates as index — iterate over `series.items()` or `list(series.index)`, NOT `series.columns`
+8. **Sector benchmarks**: Use appropriate sector averages (tech ~22x P/E, utilities ~15x, etc.)
+9. **GPD fitting**: Requires sufficient tail data (>10 exceedances); handle fit failures gracefully
+10. **Beta calculation**: Align dates between stock and market returns before computing covariance
+11. **Margin trends**: Distinguish between cyclical compression and structural deterioration
+12. **Forward vs Trailing P/E**: Large gap implies aggressive growth expectations - any miss = multiple compression
+13. **yfinance None values**: Use defensive pattern `info.get('field', 0) or 0` to handle both missing keys AND None values in one line
+14. **Data availability**: yfinance may not provide all fundamental fields for all tickers — gracefully handle missing data with fallbacks or "N/A" messaging
+15. **yfinance API changes**: Yahoo Finance occasionally changes response structure — always test data fetching separately before full analysis
+16. **Insider transactions column names**: Use `'Transaction Start Date'` not `'Transaction Date'`; wrap in try/except as structure varies
+17. **Major holders parsing**: Values are numpy.float64, not strings — don't call `.replace()` on them; access via `.iloc[row, col]`
+18. **Earnings history columns**: Use `'epsEstimate'` and `'epsActual'` (lowercase), not `'EPS Estimate'`
+19. **Institutional holders change**: Column `'Change in Shares'` may be missing — check with `if 'Change in Shares' in df.columns`
+20. **yfinance earnings can be None**: `ticker.earnings` may return `None` (not just empty DataFrame) — check `if earnings is not None and not earnings.empty`
+21. **Quarterly financials iteration**: After `.loc['Total Revenue']`, result is a Series with dates as index — iterate over `list(revenue.index)` not `revenue.columns`
+22. **Institutional holders column variations**: Column name may be `'% Out'` or `'Pct Out'` — use `row.get('% Out', row.get('Pct Out', 0))`
+23. **Insider transactions returning N/A**: yfinance sometimes returns all 'N/A' values for insider data — this is a Yahoo limitation, not a bug
+24. **yfinance financials structure**: `quarterly_financials` and `financials` are DataFrames with metrics as rows and dates as columns — access via `.loc['Metric Name']`
+25. **yfinance abbreviated columns**: Recent yfinance versions may return abbreviated column names (`C`, `H`, `L`, `O`, `V`) — rename after fetching: `df = df.rename(columns={'C': 'Close', 'H': 'High', 'L': 'Low', 'O': 'Open', 'V': 'Volume'})`
+26. **Complete column handling pattern**: Combine MultiIndex flattening + column renaming in one block:
 ```python
 if isinstance(df.columns, pd.MultiIndex):
     df = df.droplevel(1, axis=1)
@@ -310,10 +310,16 @@ column_map = {'C': 'Close', 'H': 'High', 'L': 'Low', 'O': 'Open', 'V': 'Volume'}
 if 'C' in df.columns:
     df = df.rename(columns=column_map)
 ```
-24. **Revenue growth iteration**: When iterating quarterly revenue for growth calculation, use `revenue.pct_change()` on the Series directly — don't try to iterate over columns
-25. **Earnings can be None**: `ticker.earnings` may return `None` (not just empty DataFrame) — check `if earnings is not None and not earnings.empty`
-26. **yfinance data persistence**: After fetching with yfinance, work directly with the DataFrame. Avoid saving to CSV and reloading unless necessary for persistence across sessions.
-27. **Defensive type conversion**: When extracting single values from pandas, always use `.iloc[-1]` then `float()` before any arithmetic or formatting operations.
+27. **Revenue growth iteration**: When iterating quarterly revenue for growth calculation, use `revenue.pct_change()` on the Series directly — don't try to iterate over columns
+28. **yfinance data persistence**: After fetching with yfinance, work directly with the DataFrame. Avoid saving to CSV and reloading unless necessary for persistence across sessions.
+29. **Defensive type conversion**: When extracting single values from pandas, always use `.iloc[-1]` then `float()` before any arithmetic or formatting operations.
+30. **RSI extreme thresholds**: RSI >90 is EXTREME overbought (not just >70) — flag separately as critical warning
+31. **Double top detection**: Two peaks within 5% of each other = potential double top; confirm with volume divergence
+32. **Insider selling aggregation**: Sum ALL insider sales over 12-18 months; >$1B with zero buys = major red flag
+33. **Hyperscaler concentration**: If top 4 customers >50% of revenue, flag as concentration risk — search web for estimates if not disclosed
+34. **Circular capex loop thesis**: Track if hyperscaler capex growth is funding NVDA revenue which justifies valuation which drives more capex — this loop breaking = bear catalyst
+35. **PB bubble threshold**: PB >25x for semiconductors = unprecedented (exceeds Cisco 2000 peak); flag as extreme outlier
+36. **PS bubble threshold**: PS >20x implies perpetual 30%+ growth — unsustainable for any large-cap
 
 ## Enhanced Analysis: Insider & Institutional Flows
 
@@ -325,6 +331,20 @@ if 'C' in df.columns:
   ```python
   # Search for recent insider selling news
   web_search(f"{ticker} insider selling CEO stock sales 2025 2026")
+  ```
+
+**Hyperscaler Capex Sustainability Analysis**
+- Track hyperscaler (MSFT, GOOGL, AMZN, META) capex guidance quarterly
+- **Bear catalyst**: Any hyperscaler guiding capex growth <20% YoY
+- Search for circular capex loop evidence:
+  ```python
+  web_search(f"hyperscaler AI capex 2026 ROI concerns {ticker}")
+  ```
+
+**Competition Tracking**
+- Monitor AMD, Intel, and custom silicon progress via web search:
+  ```python
+  web_search(f"{ticker} competition AMD Intel custom AI chips 2026 market share")
   ```
 
 Add this section for catalyst identification:
