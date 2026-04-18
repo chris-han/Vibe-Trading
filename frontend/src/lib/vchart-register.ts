@@ -1,15 +1,6 @@
 /**
- * One-time VChart + vchart-extension registration for the web UI.
- * Registers ALL chart types available in @visactor/vchart.
- *
- * WHY EXPLICIT: Vite tree-shakes the VChart.useRegisters([...]) side-effect
- * call in @visactor/vchart/esm/vchart-all.js because the ESM index.js is NOT
- * listed in the package's "sideEffects" array.  Without explicit registration
- * every VChart constructor call fails with "init chart fail".
- *
- * NOTE: Feishu rendering is different — it uses VChart v1.x server-side via
- * the Feishu Card API and only supports a subset of chart types.
- * See agent/src/skills/output-format-feishu/SKILL.md for allowed types.
+ * One-time VChart registration for the web UI.
+ * Registers a subset of chart types supported by Feishu Card 2.0.
  */
 import { VChart } from "@visactor/vchart";
 import {
@@ -18,30 +9,19 @@ import {
   registerAreaChart,
   registerBarChart,
   registerScatterChart,
-  registerHistogramChart,
-  registerRangeColumnChart,
-  registerRangeAreaChart,
   registerWaterfallChart,
   registerBoxplotChart,
   registerHeatmapChart,
-  registerCorrelationChart,
-  registerSequenceChart,
   // ── Polar / circular chart types ──────────────────────────────────────────
   registerPieChart,
   registerRoseChart,
   registerRadarChart,
   registerFunnelChart,
   registerGaugeChart,
-  registerCircularProgressChart,
-  registerLinearProgressChart,
-  registerSunburstChart,
-  registerCirclePackingChart,
+  // ── Specialised chart types ───────────────────────────────────────────────
   registerTreemapChart,
   registerSankeyChart,
-  // ── Specialised chart types ───────────────────────────────────────────────
   registerWordCloudChart,
-  registerWordCloudShapeChart,
-  registerMapChart,
   // ── Combo ─────────────────────────────────────────────────────────────────
   registerCommonChart,
   // ── Axes ──────────────────────────────────────────────────────────────────
@@ -64,17 +44,7 @@ import {
   registerLabel,
   registerTotalLabel,
   registerTitle,
-  registerPlayer,
-  registerBrush,
-  registerMarkLine,
-  registerPolarMarkLine,
-  registerMarkArea,
-  registerPolarMarkArea,
-  registerMarkPoint,
-  registerPolarMarkPoint,
-  registerCustomMark,
   registerGridLayout,
-  registerPoptip,
   // ── Plugins & interactions ────────────────────────────────────────────────
   registerAllMarks,
   registerFormatPlugin,
@@ -83,15 +53,7 @@ import {
   registerElementActive,
   registerElementActiveByLegend,
   registerElementHighlightByLegend,
-  registerElementHighlightByName,
-  registerElementHighlightByGroup,
-  registerElementHighlightByKey,
 } from "@visactor/vchart";
-import {
-  registerCandlestickChart,
-  registerCandlestickSeries,
-  registerCombinationCandlestickChart,
-} from "@visactor/vchart-extension";
 
 let _registered = false;
 
@@ -104,30 +66,19 @@ export function ensureRegistered() {
     registerAreaChart,
     registerBarChart,
     registerScatterChart,
-    registerHistogramChart,
-    registerRangeColumnChart,
-    registerRangeAreaChart,
     registerWaterfallChart,
     registerBoxplotChart,
     registerHeatmapChart,
-    registerCorrelationChart,
-    registerSequenceChart,
     // Polar / circular
     registerPieChart,
     registerRoseChart,
     registerRadarChart,
     registerFunnelChart,
     registerGaugeChart,
-    registerCircularProgressChart,
-    registerLinearProgressChart,
-    registerSunburstChart,
-    registerCirclePackingChart,
+    // Specialised
     registerTreemapChart,
     registerSankeyChart,
-    // Specialised
     registerWordCloudChart,
-    registerWordCloudShapeChart,
-    registerMapChart,
     // Combo
     registerCommonChart,
     // Axes
@@ -150,17 +101,7 @@ export function ensureRegistered() {
     registerLabel,
     registerTotalLabel,
     registerTitle,
-    registerPlayer,
-    registerBrush,
-    registerMarkLine,
-    registerPolarMarkLine,
-    registerMarkArea,
-    registerPolarMarkArea,
-    registerMarkPoint,
-    registerPolarMarkPoint,
-    registerCustomMark,
     registerGridLayout,
-    registerPoptip,
     // Plugins & interactions
     registerAllMarks,
     registerFormatPlugin,
@@ -169,13 +110,6 @@ export function ensureRegistered() {
     registerElementActive,
     registerElementActiveByLegend,
     registerElementHighlightByLegend,
-    registerElementHighlightByName,
-    registerElementHighlightByGroup,
-    registerElementHighlightByKey,
-    // Candlestick (vchart-extension)
-    registerCandlestickSeries,
-    registerCandlestickChart,
-    registerCombinationCandlestickChart,
   ]);
 }
 
