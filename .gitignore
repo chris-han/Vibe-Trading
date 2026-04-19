@@ -59,3 +59,4 @@ auth.sqlite3
 *.pem
 workspaces/
 
+agent/.auth/auth.sqlite3
