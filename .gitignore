@@ -57,3 +57,5 @@ agent/.hermes/skills/
 /node_modules/
 auth.sqlite3
 *.pem
+workspaces/
+

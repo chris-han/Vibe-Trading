@@ -22,6 +22,7 @@ Relationship to [Add-Login-Plan.md](/home/chris/repo/Vibe-Trading/Add-Login-Plan
 - shared bootstrap skills should be delivered through `skills.external_dirs`
 - shared plugin capabilities should be delivered through app-managed installed plugin code
 - runtime-generated skills are private until explicitly published
+- runtime skill creation and mutation must go through `skill_manage`, not generic file writes in the session run sandbox
 - community sharing requires explicit publication with provenance, moderation, and entitlement checks
 
 ### Decisions still open
@@ -183,6 +184,8 @@ Required rules:
 - `HERMES_HOME` must resolve to the workspace-local Hermes home for that request context
 - process-global environment mutation must not be used to switch tenant credentials at runtime
 - no shared writable directory may be used for private user assets
+- runtime skill generation must use the dedicated skill-management path so writes resolve against workspace `HERMES_HOME/skills`
+- generic file-editing tools must not be treated as a valid write path for `.hermes/skills` during session runs, because their sandbox root is the active run directory
 - publication to shared scopes must go through deterministic backend code, never prompt instructions
 
 ### 7.2 Privacy boundaries
@@ -327,6 +330,7 @@ The user should experience:
 The product should make this mental model obvious:
 
 - generate skill -> private draft in your workspace
+- generate skill -> use `skill_manage`, which writes to workspace-local `HERMES_HOME/skills`
 - test skill -> still private
 - publish skill -> explicit review and promotion event
 
@@ -334,6 +338,7 @@ The product should not imply:
 
 - runtime generation means instant org-wide availability
 - editing a shared skill locally changes the global version
+- writing `.hermes/skills/...` with a generic file tool during a chat run updates the user's real skill store
 
 ### 10.4 Asset management experience
 
@@ -429,7 +434,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A[User asks agent to generate skill] --> B[Skill created in personal workspace HERMES_HOME/skills]
+    A[User asks agent to generate skill] --> B[skill_manage writes to personal workspace HERMES_HOME/skills]
     B --> C[Test and refine privately]
     C --> D{Publish?}
     D -->|No| E[Remain personal]
@@ -449,12 +454,15 @@ Recommended model:
 
 - shared bootstrap skills live in repo-managed directories and are surfaced through `skills.external_dirs`
 - personal generated skills live in workspace-local `HERMES_HOME/skills`
+- runtime creation, editing, patching, and deletion of personal skills use `skill_manage` as the authoritative write path
+- session-scoped generic file tools are for run artifacts and workspace files, not for mutating `.hermes/skills`
 - published skills move into explicit shared scopes only through backend publication flows
 
 Why:
 
 - avoids duplicating shared skills into every user home
 - keeps user edits local and unsurprising
+- prevents relative `.hermes/skills` writes from landing in the run or artifacts sandbox by mistake
 - makes platform rollouts immediate for shared skills
 - gives the marketplace model a clean publish boundary
 
