@@ -2,33 +2,21 @@ services:
   vibe-trading:
     container_name: vibe-trading
     working_dir: /app
+    env_file:
+      - agent/.env
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        - HTTP_PROXY=${HTTP_PROXY:-}
-        - HTTPS_PROXY=${HTTPS_PROXY:-}
-        - NO_PROXY=${NO_PROXY:-}
+        - HTTP_PROXY=${DOCKER_HTTP_PROXY:-}
+        - HTTPS_PROXY=${DOCKER_HTTPS_PROXY:-}
+        - NO_PROXY=${DOCKER_NO_PROXY:-}
     environment:
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      LANGCHAIN_PROVIDER: ${LANGCHAIN_PROVIDER:-}
-      LANGCHAIN_MODEL_NAME: ${LANGCHAIN_MODEL_NAME:-}
-      HERMES_INFERENCE_PROVIDER: ${HERMES_INFERENCE_PROVIDER:-}
-      HERMES_MODEL: ${HERMES_MODEL:-}
+      HTTP_PROXY: ${DOCKER_HTTP_PROXY:-}
+      HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      NO_PROXY: ${DOCKER_NO_PROXY:-}
       HERMES_HOME: /app/agent/.hermes
       VIBE_TRADING_ROOT: /app
-      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
-      KIMI_API_KEY: ${KIMI_API_KEY:-}
-      KIMI_BASE_URL: ${KIMI_BASE_URL:-}
-      KIMI_USER_AGENT: ${KIMI_USER_AGENT:-}
-      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
-      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
-      AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME:-}
-      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-}
     ports:
       - "8899:8899"
     expose:

@@ -1,30 +1,9 @@
 # ============================================================================
-# Stage 1: Build frontend
+# Stage 1: Use prebuilt frontend assets from the local repo context
 # ============================================================================
-FROM node:20-slim AS frontend-build
+FROM scratch AS frontend-build
 
-# System proxy configuration (uses build args for mirror/proxy support)
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG NO_PROXY
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY} \
-    http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY}
-
-WORKDIR /app/frontend
-
-# Configure npm to use system proxy
-RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi && \
-    if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi && \
-    if [ -n "$NO_PROXY" ]; then npm config set noproxy "$NO_PROXY"; fi
-
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --ignore-scripts
-COPY frontend/ ./
-RUN npm run build
+COPY frontend/dist/ /app/frontend/dist/
 
 # ============================================================================
 # Stage 2: Python runtime
@@ -35,9 +14,15 @@ FROM python:3.11-slim AS runtime
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
     NO_PROXY=${NO_PROXY} \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PIP_DEFAULT_TIMEOUT=1000 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     http_proxy=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
@@ -47,16 +32,10 @@ WORKDIR /app
 ENV VIRTUAL_ENV=/app/agent/.venv \
     PATH="/app/agent/.venv/bin:${PATH}"
 
-# System deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
 # Python deps (install before copying code for layer caching)
 RUN mkdir -p /app/agent && python -m venv /app/agent/.venv
 COPY agent/requirements.txt agent/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+RUN pip install --no-cache-dir --trusted-host ${PIP_TRUSTED_HOST} \
     $(if [ -n "$HTTP_PROXY" ]; then echo "--proxy=$HTTP_PROXY"; fi) \
     -r agent/requirements.txt
 

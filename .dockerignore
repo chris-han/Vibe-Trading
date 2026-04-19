@@ -5,7 +5,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 node_modules/
-frontend/dist/
 frontend/tsconfig.tsbuildinfo
 .env
 agent/.env
