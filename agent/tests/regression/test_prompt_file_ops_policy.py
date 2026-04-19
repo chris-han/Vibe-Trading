@@ -71,3 +71,11 @@ def test_session_and_swarm_runtime_prompts_share_common_policy_source():
 def test_output_format_prompt_lives_in_runtime_prompt_policy():
     assert "Markdown pipe-tables" in runtime_prompt_policy.OUTPUT_FORMAT_PROMPT
     assert "echarts blocks" in runtime_prompt_policy.OUTPUT_FORMAT_PROMPT
+
+
+def test_skill_writes_are_routed_through_skill_manage_policy():
+    prompt = runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT
+
+    assert "use skill_manage instead of general file-editing tools" in prompt
+    assert "active workspace HERMES_HOME/skills directory" in prompt
+    assert "relative .hermes/skills paths resolve inside the active run/artifacts sandbox" in prompt

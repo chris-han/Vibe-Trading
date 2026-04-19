@@ -199,9 +199,13 @@ def test_ensure_runtime_env_ignores_configured_terminal_cwd(monkeypatch):
 
 
 def test_prepare_hermes_project_context_sets_repo_root(monkeypatch):
-  monkeypatch.delenv("VIBE_TRADING_ROOT", raising=False)
+    monkeypatch.delenv("VIBE_TRADING_ROOT", raising=False)
+    monkeypatch.delenv("HERMES_DISABLE_USER_PLUGINS", raising=False)
+    monkeypatch.delenv("HERMES_DISABLE_PROJECT_PLUGINS", raising=False)
 
-  repo_root = runtime_env.prepare_hermes_project_context(chdir=False)
+    repo_root = runtime_env.prepare_hermes_project_context(chdir=False)
 
-  assert os.getenv("VIBE_TRADING_ROOT") == str(repo_root)
-  assert os.getenv("HERMES_ENABLE_PROJECT_PLUGINS") in (None, "")
+    assert os.getenv("VIBE_TRADING_ROOT") == str(repo_root)
+    assert os.getenv("HERMES_ENABLE_PROJECT_PLUGINS") in (None, "")
+    assert os.getenv("HERMES_DISABLE_USER_PLUGINS") == "1"
+    assert os.getenv("HERMES_DISABLE_PROJECT_PLUGINS") == "1"

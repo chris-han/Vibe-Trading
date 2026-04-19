@@ -6,6 +6,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 
 @dataclass(frozen=True)
 class WorkspacePaths:
@@ -69,6 +71,74 @@ def _merge_directory_contents(source_dir: Path, target_dir: Path) -> None:
         if destination.exists():
             continue
         shutil.move(str(child), str(destination))
+
+
+def _load_yaml_mapping(path: Path) -> dict:
+    """Load a YAML mapping file, returning an empty dict for invalid payloads."""
+    if not path.exists():
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _merge_external_skill_dirs(config_dest: Path, config_src: Path) -> None:
+    """Ensure workspace config keeps the shared template external skill dirs."""
+    if not config_src.exists():
+        return
+    if not config_dest.exists():
+        shutil.copy2(config_src, config_dest)
+        return
+
+    template_config = _load_yaml_mapping(config_src)
+    workspace_config = _load_yaml_mapping(config_dest)
+    template_skills = template_config.get("skills")
+    if not isinstance(template_skills, dict):
+        return
+
+    template_external_dirs = template_skills.get("external_dirs")
+    if isinstance(template_external_dirs, str):
+        template_external_dirs = [template_external_dirs]
+    if not isinstance(template_external_dirs, list):
+        return
+
+    normalized_template_dirs = []
+    seen = set()
+    for entry in template_external_dirs:
+        value = str(entry).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized_template_dirs.append(value)
+    if not normalized_template_dirs:
+        return
+
+    workspace_skills = workspace_config.get("skills")
+    if not isinstance(workspace_skills, dict):
+        workspace_skills = {}
+    workspace_external_dirs = workspace_skills.get("external_dirs")
+    if isinstance(workspace_external_dirs, str):
+        workspace_external_dirs = [workspace_external_dirs]
+    elif not isinstance(workspace_external_dirs, list):
+        workspace_external_dirs = []
+
+    merged_external_dirs = []
+    seen = set()
+    for entry in [*workspace_external_dirs, *normalized_template_dirs]:
+        value = str(entry).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        merged_external_dirs.append(value)
+
+    if merged_external_dirs == workspace_external_dirs:
+        return
+
+    workspace_skills["external_dirs"] = merged_external_dirs
+    workspace_config["skills"] = workspace_skills
+    config_dest.write_text(yaml.safe_dump(workspace_config, sort_keys=False), encoding="utf-8")
 
 
 def migrate_workspace_swarm_dir(agent_root: Path) -> Path:
@@ -153,15 +223,14 @@ def ensure_workspace(
 
     config_src = template_hermes_home / "config.yaml"
     config_dest = paths.hermes_home / "config.yaml"
-    if config_src.exists() and not config_dest.exists():
-        shutil.copy2(config_src, config_dest)
+    _merge_external_skill_dirs(config_dest, config_src)
 
     env_src = template_hermes_home / ".env"
     env_dest = paths.hermes_home / ".env"
     if env_src.exists() and not env_dest.exists():
         shutil.copy2(env_src, env_dest)
 
-    for child in ("skills", "plugins", "memories", "logs", "home", "profiles"):
+    for child in ("skills", "memories", "logs", "home", "profiles"):
         (paths.hermes_home / child).mkdir(parents=True, exist_ok=True)
 
     return paths

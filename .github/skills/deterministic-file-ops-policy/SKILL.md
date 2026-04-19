@@ -31,7 +31,7 @@ This repo enforces the policy in three places:
 - You are editing `agent/src/session/service.py`
 - You are editing `agent/src/swarm/worker.py`
 - You are changing runtime prompt text or agent skill text
-- You are adding a new skill under `agent/src/skills/`, `agent/.hermes/skills/`, or `.github/skills/`
+- You are adding a new shared skill under `agent/src/skills/` or `.github/skills/`
 - You are reviewing a PR for prompt-level file or path instructions
 
 ## Disallowed in Prompts or Skill Text

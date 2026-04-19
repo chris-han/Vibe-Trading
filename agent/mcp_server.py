@@ -68,22 +68,22 @@ def _get_skills_loader():
 
     class _Loader:
         def __init__(self):
-            skills_dir = AGENT_DIR / "src" / "skills"
+            skills_dir = AGENT_DIR / "src" / "skills" / "domain" / "vibe-trading"
             self.skills = []
             if not skills_dir.exists():
                 return
-            for p in sorted(skills_dir.iterdir()):
-                if not p.is_dir():
-                    continue
-                md = p / "SKILL.md"
-                if not md.exists():
+            for md in sorted(skills_dir.rglob("SKILL.md")):
+                p = md.parent
+                if any(part.startswith(".") for part in p.parts):
                     continue
                 text = md.read_text(encoding="utf-8", errors="ignore")
+                name_match = _re.search(r"^name:\s*(.+)$", text, _re.MULTILINE)
                 m = _re.search(r"^description:\s*(.+)$", text, _re.MULTILINE)
                 desc = m.group(1).strip().strip('"') if m else ""
+                name = name_match.group(1).strip().strip('"') if name_match else p.name
                 # get_content returns the full SKILL.md body
                 body = text
-                self.skills.append(_Skill(p.name, desc))
+                self.skills.append(_Skill(name, desc))
                 self.skills[-1]._body = body
 
         def get_content(self, name):

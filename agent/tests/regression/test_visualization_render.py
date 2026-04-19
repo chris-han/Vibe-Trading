@@ -30,11 +30,11 @@ from src.runtime_prompt_policy import OUTPUT_FORMAT_PROMPT  # noqa: E402
 
 
 _FEISHU_ADAPTER = get_feishu_visualization_adapter()
-_REPORT_GENERATE_SKILL = AGENT_ROOT / "src" / "skills" / "report-generate" / "SKILL.md"
-_VALUATION_SKILL = AGENT_ROOT / "src" / "skills" / "valuation-model" / "SKILL.md"
-_BULL_REPORT_SKILL = AGENT_ROOT / ".hermes" / "skills" / "research" / "bull-side-research" / "SKILL.md"
-_BEAR_REPORT_SKILL = AGENT_ROOT / ".hermes" / "skills" / "research" / "bear-side-research" / "SKILL.md"
-_WEB_OUTPUT_FORMAT_SKILL = AGENT_ROOT / "src" / "skills" / "output-format-web" / "SKILL.md"
+_REPORT_GENERATE_SKILL = AGENT_ROOT / "src" / "skills" / "domain" / "vibe-trading" / "report-generate" / "SKILL.md"
+_VALUATION_SKILL = AGENT_ROOT / "src" / "skills" / "domain" / "vibe-trading" / "valuation-model" / "SKILL.md"
+_BULL_REPORT_SKILL = AGENT_ROOT / "src" / "skills" / "app-infra" / "research" / "bull-side-research" / "SKILL.md"
+_BEAR_REPORT_SKILL = AGENT_ROOT / "src" / "skills" / "app-infra" / "research" / "bear-side-research" / "SKILL.md"
+_WEB_OUTPUT_FORMAT_SKILL = AGENT_ROOT / "src" / "skills" / "domain" / "vibe-trading" / "output-format-web" / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------

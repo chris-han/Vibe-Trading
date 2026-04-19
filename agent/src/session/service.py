@@ -666,8 +666,16 @@ class SessionService:
         _HERMES = Path(__file__).resolve().parents[3] / "hermes-agent"
         if str(_HERMES) not in sys.path:
             sys.path.insert(0, str(_HERMES))
-        from run_agent import AIAgent
-        from src.core.state import RunStateStore
+        from hermes_constants import reset_active_hermes_home, set_active_hermes_home
+
+        hermes_home = self.runs_dir.parent / ".hermes"
+        _hermes_home_token = set_active_hermes_home(hermes_home)
+        try:
+            from run_agent import AIAgent
+            from src.core.state import RunStateStore
+        except Exception:
+            reset_active_hermes_home(_hermes_home_token)
+            raise
 
         sid = attempt.session_id
         attempt_id = attempt.attempt_id
@@ -969,6 +977,7 @@ class SessionService:
                 "run_id": run_dir.name,
             }
         finally:
+            reset_active_hermes_home(_hermes_home_token)
             reset_session_runs_dir(_runs_token)
             if _swarm_token is not None:
                 reset_session_swarm_dir(_swarm_token)

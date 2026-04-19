@@ -212,7 +212,15 @@ def run_worker(
     _HERMES = Path(__file__).resolve().parents[3] / "hermes-agent"
     if str(_HERMES) not in sys.path:
         sys.path.insert(0, str(_HERMES))
-    from run_agent import AIAgent
+    from hermes_constants import reset_active_hermes_home, set_active_hermes_home
+
+    hermes_home = run_dir.parents[2] / ".hermes"
+    _hermes_home_token = set_active_hermes_home(hermes_home)
+    try:
+        from run_agent import AIAgent
+    except Exception:
+        reset_active_hermes_home(_hermes_home_token)
+        raise
 
     agent_id = agent_spec.id
     task_id = task.id
@@ -336,6 +344,7 @@ def run_worker(
             input_tokens=0, output_tokens=0,
         )
     finally:
+        reset_active_hermes_home(_hermes_home_token)
         if _hermes_overrides_set:
             try:
                 clear_task_env_overrides(str(task_id))

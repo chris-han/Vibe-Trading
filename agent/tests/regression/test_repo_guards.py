@@ -18,8 +18,8 @@ def test_target_file_selection_matches_guard_scope():
     assert MODULE.is_target_file("agent/src/session/service.py")
     assert MODULE.is_target_file("agent/src/swarm/worker.py")
     assert MODULE.is_target_file("agent/cli.py")
-    assert MODULE.is_target_file("agent/src/skills/strategy-generate/SKILL.md")
-    assert MODULE.is_target_file("agent/.hermes/skills/research/bear-side-research/SKILL.md")
+    assert MODULE.is_target_file("agent/src/skills/domain/vibe-trading/strategy-generate/SKILL.md")
+    assert MODULE.is_target_file("agent/src/skills/app-infra/research/bear-side-research/SKILL.md")
     assert not MODULE.is_target_file("frontend/src/pages/Agent.tsx")
 
 

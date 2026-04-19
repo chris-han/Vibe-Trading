@@ -100,3 +100,66 @@ def test_ensure_workspace_migrates_legacy_slug_workspace_to_user_id(tmp_path: Pa
     assert paths.workspace_root == tmp_path / "user-123"
     assert not (tmp_path / "alice_zhang").exists()
     assert (paths.runs_dir / "run-1" / "state.json").read_text(encoding="utf-8") == '{"status":"ok"}\n'
+
+
+def test_ensure_workspace_does_not_copy_template_skills_or_plugins(tmp_path: Path):
+    template_hermes_home = tmp_path / "template-hermes"
+    template_skill = template_hermes_home / "skills" / "research" / "starter-skill" / "SKILL.md"
+    template_plugin = template_hermes_home / "plugins" / "starter-plugin" / "plugin.yaml"
+    template_skill.parent.mkdir(parents=True)
+    template_plugin.parent.mkdir(parents=True)
+    template_skill.write_text("# starter\n", encoding="utf-8")
+    template_plugin.write_text("name: starter-plugin\n", encoding="utf-8")
+
+    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
+
+    assert not (paths.hermes_home / "skills" / "research" / "starter-skill" / "SKILL.md").exists()
+    assert not (paths.hermes_home / "plugins").exists()
+
+
+def test_ensure_workspace_preserves_existing_local_user_skills(tmp_path: Path):
+    template_hermes_home = tmp_path / "template-hermes"
+    template_skill = template_hermes_home / "skills" / "research" / "starter-skill" / "SKILL.md"
+    template_skill.parent.mkdir(parents=True)
+    template_skill.write_text("# starter\n", encoding="utf-8")
+
+    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
+    user_skill = paths.hermes_home / "skills" / "research" / "starter-skill" / "SKILL.md"
+    user_skill.parent.mkdir(parents=True, exist_ok=True)
+    user_skill.write_text("# user-customized\n", encoding="utf-8")
+
+    ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
+
+    assert user_skill.read_text(encoding="utf-8") == "# user-customized\n"
+
+
+def test_ensure_workspace_merges_template_external_skill_dirs(tmp_path: Path):
+    template_hermes_home = tmp_path / "template-hermes"
+    template_hermes_home.mkdir(parents=True)
+    (template_hermes_home / "config.yaml").write_text(
+        "skills:\n  external_dirs:\n    - ${VIBE_TRADING_ROOT}/agent/src/skills\n    - ${VIBE_TRADING_ROOT}/hermes-agent/skills\n",
+        encoding="utf-8",
+    )
+
+    workspace_home = tmp_path / "alice_zhang" / ".hermes"
+    workspace_home.mkdir(parents=True)
+    (workspace_home / "config.yaml").write_text(
+        "skills:\n  external_dirs:\n    - /custom/user/skills\n",
+        encoding="utf-8",
+    )
+
+    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
+    config_text = (paths.hermes_home / "config.yaml").read_text(encoding="utf-8")
+
+    assert "/custom/user/skills" in config_text
+    assert "${VIBE_TRADING_ROOT}/agent/src/skills" in config_text
+    assert "${VIBE_TRADING_ROOT}/hermes-agent/skills" in config_text
+
+
+def test_ensure_workspace_does_not_create_plugins_dir(tmp_path: Path):
+    template_hermes_home = tmp_path / "template-hermes"
+    template_hermes_home.mkdir(parents=True)
+
+    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
+
+    assert not (paths.hermes_home / "plugins").exists()

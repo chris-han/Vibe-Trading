@@ -34,6 +34,9 @@ _DOCUMENT_WORKFLOW_RULES = (
 
 _MARKET_DATA_WORKFLOW_RULES = (
     "For finance or research tasks, call load_skill first to get approved data access methods and symbol conventions.",
+    "For creating, editing, patching, or deleting skills, use skill_manage instead of general file-editing tools.",
+    "User-generated skills belong in the active workspace HERMES_HOME/skills directory, not in the current run or artifacts directory.",
+    "Do not create or modify files under .hermes/skills directly with general file-editing tools; relative .hermes/skills paths resolve inside the active run/artifacts sandbox.",
     "execute_code is forbidden in this runtime.",
     "Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.",
     "When you need current news, policy documents, or source pages and the exact URL is not already known, use the Hermes web_search tool first to find the canonical source.",

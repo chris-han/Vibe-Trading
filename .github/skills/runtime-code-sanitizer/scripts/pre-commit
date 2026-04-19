@@ -13,7 +13,7 @@ RELEVANT=$(git diff --cached --name-only | grep -E \
   'agent/src/session/service\.py|check_sanitizers\.py' || true)
 
 REPO_GUARD_RELEVANT=$(git diff --cached --name-only | grep -E \
-  'agent/src/session/service\.py|agent/src/swarm/worker\.py|agent/cli\.py|agent/src/skills/|agent/\.hermes/skills/|check_repo_guards\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit' || true)
+  'agent/src/session/service\.py|agent/src/swarm/worker\.py|agent/cli\.py|agent/src/skills/|check_repo_guards\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit' || true)
 
 FILE_OPS_RELEVANT=$(git diff --cached --name-only | grep -E \
   '\.github/skills/|check_file_ops_policy\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit' || true)

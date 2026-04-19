@@ -29,6 +29,9 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
+    assert "use skill_manage instead of general file-editing tools" in prompt
+    assert "active workspace HERMES_HOME/skills directory" in prompt
+    assert "relative .hermes/skills paths resolve inside the active run/artifacts sandbox" in prompt
     assert "use python3 from the preconfigured session environment" in prompt
     assert "Do NOT assume .venv exists under the current run directory" in prompt
     assert "The terminal already starts inside the run artifacts directory" in prompt

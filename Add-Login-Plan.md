@@ -11,6 +11,12 @@ This document defines the design for:
 - Postgres-backed SaaS identity and configuration
 - future per-user memory architecture
 
+Relationship to [Multi-Tenant-Design.md](/home/chris/repo/Vibe-Trading/Multi-Tenant-Design.md):
+
+- this document is the rollout and login integration plan
+- [Multi-Tenant-Design.md](/home/chris/repo/Vibe-Trading/Multi-Tenant-Design.md) is the source of truth for shared vs personal asset boundaries
+- implementation details here must stay consistent with that shared-vs-personal model
+
 Core decisions:
 
 - Feishu is the identity entry point for both web login and Feishu chat auto-provisioning.
@@ -23,72 +29,23 @@ Core decisions:
 - This means one `HERMES_HOME` per workspace, but not one Hermes CLI profile per end user.
 - Hermes built-in memory should therefore be isolated by workspace-local Hermes homes, without conflating that with Hermes CLI profiles.
 - Postgres is the long-term control-plane store.
-- Session/run metadata moves to Postgres only after login/profile rollout is stable and tested.
+- Session/run metadata moves to Postgres only after the login and workspace rollout is stable and tested.
 - Filesystem or object storage remains the data-plane store.
 - Hermes supports only one external memory provider at a time.
 - A federated custom memory provider is a v3 option only, but the architecture should be ready for it from day one.
 
-## Terminology
+## Terms
 
-Two different concepts must stay separate in both code and docs.
+Use these terms consistently:
 
-### 1. User Profile / Workspace
+- `user workspace`: the app-level tenant boundary under `workspaces/<workspace_id>/agent/`
+- `workspace-local HERMES_HOME`: the Hermes runtime home for one user workspace
+- `Hermes agent profile`: the Hermes CLI concept for multiple independent agent personas on one machine
 
-This is the Vibe-Trading SaaS concept.
+Implementation rule:
 
-- one workspace per authenticated app user
-- the strict isolation boundary for files, sessions, runs, uploads, and artifacts
-- app-owned
-- stored under `<workspace_root>/agent/`
-
-Examples:
-
-- `workspaces/chris/agent/`
-- `workspaces/new_user/agent/`
-
-This is where user work happens.
-
-### 2. Hermes Agent Profile
-
-This is the Hermes framework concept.
-
-- one fully isolated Hermes environment for running an independent Hermes agent
-- used by Hermes CLI as `hermes -p <name>` or alias commands like `coder chat`
-- framework-owned layout under `HERMES_HOME`
-- contains Hermes config, memories, installed skills, plugins, logs, and state
-- documented by Hermes as a way to run multiple independent agents on one machine
-- not the same thing as an app end-user identity
-
-Examples:
-
-- `~/.hermes/profiles/coder/`
-- `~/.hermes/profiles/research-bot/`
-
-This is where Hermes stores one agent's own state.
-
-### Required Rule
-
-Do not use the word `profile` by itself in implementation specs.
-
-Use one of these exact names instead:
-
-- `user profile` or `user workspace`
-- `Hermes agent profile`
-
-If a database field is needed:
-
-- app isolation field: `workspace_slug`
-- Hermes runtime field: `hermes_profile_name`
-
-There must be no assumption that a user workspace maps 1:1 to a Hermes profile.
-
-There may, however, be a deliberate 1:1 mapping between:
-
-- one user workspace
-- one isolated Hermes runtime instance
-- one workspace-local `HERMES_HOME`
-
-That is a Vibe-Trading tenancy decision, not a Hermes profile decision.
+- do not use Hermes agent profiles as the SaaS tenant primitive
+- avoid using `profile` by itself in specs when `workspace` is the intended meaning
 
 ## Current Repo State
 
@@ -99,334 +56,167 @@ The current implementation is mostly file-backed and single-profile oriented:
 - Feishu already exists as a messaging integration in [agent/api_server.py](/home/chris/repo/Vibe-Trading/agent/api_server.py), but not yet as the web login identity layer.
 - `POSTGRES_URL` already exists in [agent/.env](/home/chris/repo/Vibe-Trading/agent/.env), but active user/profile/session code is not using it yet.
 
-## Verified Hermes Findings
+## Rollout Assumptions
 
-### Hermes Agent Profiles
+The detailed boundary model lives in [Multi-Tenant-Design.md](/home/chris/repo/Vibe-Trading/Multi-Tenant-Design.md). This rollout plan assumes the following design decisions are already accepted:
 
-Hermes agent profiles are real isolated homes under `profiles/<name>`.
+- the app owns canonical user identity and workspace mapping
+- the tenant boundary is the user workspace, not a Hermes CLI profile
+- each authenticated workspace gets a workspace-local `HERMES_HOME`
+- built-in Hermes memory remains per user by scoping it to the active workspace-local `HERMES_HOME`
+- shared bootstrap skills are delivered through `skills.external_dirs`, not copied into every user home as the target model
+- shared plugin capabilities are app-managed code, typically via installed Hermes entry-point plugins
+- session and run artifacts remain in the filesystem or object storage data plane during the initial rollout
 
-Each profile has its own:
+## Storage And Ownership Model For Rollout
 
-- `config.yaml`
-- `.env`
-- `memories`
-- `sessions`
-- `skills`
-- `logs`
-- `plans`
-- `workspace`
-- `cron`
-- `home`
+During the login rollout:
 
-Verified in:
+- Postgres is the control-plane store for identity, workspace mapping, roles, entitlements, and future memory-provider configuration
+- filesystem or object storage remains the data-plane store for workspace-local Hermes state, runs, sessions, uploads, artifacts, and reports
+- session and run metadata should move to Postgres only after login and workspace isolation are stable
 
-- [hermes-agent/hermes_cli/profiles.py](/home/chris/repo/Vibe-Trading/hermes-agent/hermes_cli/profiles.py)
-- [hermes-agent/hermes_constants.py](/home/chris/repo/Vibe-Trading/hermes-agent/hermes_constants.py)
+### Current Provisioning Split
 
-Official docs:
+The current implementation provisions from the shared template home at `/home/chris/repo/Vibe-Trading/agent/.hermes`, not from the entire `/home/chris/repo/Vibe-Trading/agent` tree.
 
-- <https://hermes-agent.nousresearch.com/docs/reference/cli-commands?_highlight=memery#hermes-auth>
+Badge legend:
 
-### Built-in Memory
+- <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span> shared-by-reference; existing workspaces see changes when the updated backend code is running
+- <span style="color:#b91c1c; font-weight:600;">[COPIED]</span> copied or merged into workspace-local state; existing workspaces keep their local copy unless a migration updates it
 
-Hermes built-in memory is:
-
-- always file-backed
-- always profile-scoped
-- stored in `HERMES_HOME/memories/MEMORY.md` and `HERMES_HOME/memories/USER.md`
-- loaded as a frozen snapshot at session start
-- still active even when an external provider is enabled
-
-Verified in:
-
-- [hermes-agent/tools/memory_tool.py](/home/chris/repo/Vibe-Trading/hermes-agent/tools/memory_tool.py)
-- [hermes-agent/run_agent.py](/home/chris/repo/Vibe-Trading/hermes-agent/run_agent.py)
-
-Official docs:
-
-- <https://hermes-agent.nousresearch.com/docs/user-guide/features/memory?_highlight=memory>
-
-### External Memory Providers
-
-Hermes external memory providers:
-
-- implement the `MemoryProvider` ABC
-- are orchestrated through `MemoryManager`
-- allow only one external provider at a time
-- run alongside the built-in memory layer
-- receive runtime context such as `hermes_home`, `agent_identity`, `agent_workspace`, and optional `user_id`
-
-Verified in:
-
-- [hermes-agent/agent/memory_provider.py](/home/chris/repo/Vibe-Trading/hermes-agent/agent/memory_provider.py)
-- [hermes-agent/agent/memory_manager.py](/home/chris/repo/Vibe-Trading/hermes-agent/agent/memory_manager.py)
-- [hermes-agent/plugins/memory/__init__.py](/home/chris/repo/Vibe-Trading/hermes-agent/plugins/memory/__init__.py)
-- [hermes-agent/run_agent.py](/home/chris/repo/Vibe-Trading/hermes-agent/run_agent.py)
-
-Official docs:
-
-- <https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers?_highlight=memory&_highlight=viki#openviking>
-
-## Architecture Decisions
-
-### Identity And Tenancy
-
-- Feishu identity is the upstream external identity.
-- Postgres stores canonical app users, external identities, tenants, memberships, roles, and config.
-- Hermes does not own the SaaS user model.
-- Use display-name slugging for the app-level `workspace_slug`.
-- Example: `New User` -> `new_user`.
-- Resolve collisions with suffixes like `_2`, `_3`.
-- Persist a mapping from Feishu identity to app user and `workspace_slug` in Postgres.
-- Do not model Hermes CLI profiles as end-user records.
-
-### Multi-Tenant Directory Hierarchy And Boundaries
-
-```text
+<div style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; line-height: 1.45;">
 /home/chris/repo/Vibe-Trading/
-├── agent/                                  # source code / shared app runtime code
-├── workspaces/
-│   ├── chris/
-│   │   └── agent/                          # workspace runtime root, mirrors current layout
-│   │       ├── .hermes/                    # workspace-local Hermes runtime home
-│   │       │   ├── config.yaml
-│   │       │   ├── .env
-│   │       │   ├── memories/
-│   │       │   │   ├── MEMORY.md
-│   │       │   │   └── USER.md
-│   │       │   ├── skills/
-│   │       │   ├── plugins/
-│   │       │   ├── logs/
-│   │       │   ├── home/
-│   │       │   └── profiles/               # optional Hermes CLI multi-agent profiles
-│   │       │       ├── coder/
-│   │       │       └── research-bot/
-│   │       ├── sessions/                   # app-owned session data
-│   │       ├── runs/                       # app-owned run data
-│   │       ├── uploads/
-│   │       └── swarm/
-│   └── new_user/
-│       └── agent/
-│           └── ...
-├── frontend/
+├── agent/                                                     [shared repo code]
+│   ├── src/skills/                                             <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span>
+│   │   ├── app-infra/                                          <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span>
+│   │   └── domain/vibe-trading/                                <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span>
+│   ├── src/plugins/vibe_trading/                               <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span>
+│   └── .hermes/                                                [shared template source, not the tenant runtime]
+│       ├── config.yaml                                         <span style="color:#b91c1c; font-weight:600;">[COPIED]</span>
+│       ├── SOUL.md                                             [stays in shared template home; not copied]
+│       ├── auth.json                                           [stays in shared template home; not copied]
+│       ├── auth.lock                                           [stays in shared template home; not copied]
+│       ├── memories/                                           [stays in shared template home; not copied]
+│       ├── logs/                                               [stays in shared template home; not copied]
+│       ├── sessions/                                           [stays in shared template home; not copied]
+│       └── sandboxes/                                          [stays in shared template home; not copied]
 ├── hermes-agent/
-└── ...
+│   └── skills/                                                 <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span>
+│
+├── ============================================================
+├── WORKSPACE TENANCY BOUNDARY: per-user writable runtime state
+├── ============================================================
+│
+└── workspaces/
+    └── &lt;workspace_id&gt;/
+        └── agent/
+            ├── .hermes/                                        [workspace-local HERMES_HOME]
+            │   ├── config.yaml                                 [tenant-local copy/merge result]
+            │   ├── skills/                                     [private generated and user-curated local skills]
+            │   ├── memories/                                   [private per-user memory]
+            │   ├── logs/                                       [private runtime logs]
+            │   ├── home/
+            │   └── profiles/
+            ├── sessions/                                       [private workspace session data]
+            ├── runs/                                           [private workspace run data]
+            ├── uploads/                                        [private workspace uploads]
+            └── .swarm/                                         [private workspace swarm state]
+</div>
+
+Interpretation:
+
+- `agent/src/skills/app-infra`, `agent/src/skills/domain/vibe-trading`, and `hermes-agent/skills` are the intended shared-by-reference skill sources.
+- `agent/src/plugins/vibe_trading` is shared application capability, exposed through the installed Hermes entry-point plugin.
+- `agent/.hermes/config.yaml` is used as a template source, but the resulting workspace `config.yaml` is tenant-local after provisioning.
+- workspace-local `.hermes/skills` is tenant-private mutable runtime state, not a committed shared bootstrap library.
+- workspace-local plugin directories are not part of the supported tenant model and should not be provisioned, copied, discovered, or installed into user workspaces.
+- the workspace subtree under `workspaces/<workspace_id>/agent/` is the actual tenant boundary for writable runtime state.
+
+### Update Propagation Summary
+
+| Shared artifact | Source location | Delivery mode | Existing workspaces auto-update? | Why |
+| --- | --- | --- | --- | --- |
+| <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span> Vibe-Trading Hermes plugin tools | `agent/src/plugins/vibe_trading/` | loaded from shared repo code via installed entry-point plugin | yes | runtime imports the shared code directly rather than copying it into workspace homes |
+| <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span> Vibe-Trading tool schemas | `agent/src/plugins/vibe_trading/schemas.py` and `agent/src/vibe_trading_helper.py` | loaded from shared repo code | yes | schemas are imported from shared Python modules at runtime |
+| <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span> swarm preset configs | `agent/config/swarm/*.yaml` | loaded from shared repo files | yes | preset loader reads the repo config directory directly |
+| <span style="color:#15803d; font-weight:600;">[AUTO-UPDATED]</span> shared skill overlays | `agent/src/skills/app-infra/`, `agent/src/skills/domain/vibe-trading/`, and `hermes-agent/skills/` | referenced via `skills.external_dirs` | yes, as long as the workspace config already includes those overlay paths | Hermes discovers those directories dynamically from config |
+| <span style="color:#b91c1c; font-weight:600;">[COPIED]</span> template config defaults | `agent/.hermes/config.yaml` | copied on first provision, then partially merged | no, not generally | existing workspaces keep their tenant-local copy; only `skills.external_dirs` is currently merged forward |
+| personal workspace skills | `workspaces/<workspace_id>/agent/.hermes/skills/` | created and managed inside the tenant runtime | not shared | these are local mutable skills owned by that workspace |
+| policy decision | workspace-local `HERMES_HOME/plugins/` | banned | not applicable | application-level plugins are shared entry-point code, not tenant-installed artifacts |
+
+### Auto-Update Sequence
+
+```mermaid
+sequenceDiagram
+  participant Dev as Developer or deploy pipeline
+  participant Repo as Shared repo code/config
+  participant API as Running backend
+  participant Provisioner as ensure_workspace
+  participant Workspace as Existing user workspace
+  participant Runtime as Hermes runtime in request
+
+  Dev->>Repo: change shared plugin tool, schema, or preset
+  Repo->>API: deploy updated backend code
+  API->>Runtime: handle user request
+  Runtime->>Repo: import shared plugin code and read shared preset files
+  Runtime-->>Workspace: use current shared behavior without rewriting workspace files
+
+  Note over Repo,Workspace: Shared-by-reference path
+  Note over Runtime,Workspace: Existing workspaces see the change immediately after the updated code is running
+
+  Dev->>Repo: change agent/.hermes/config.yaml
+  Repo->>Provisioner: future workspace provisioning uses updated template
+  Provisioner->>Workspace: copy missing files and merge skills.external_dirs only
+  Note over Workspace: Existing tenant-local config copies remain in place
+  API->>Runtime: later user request in an existing workspace
+  Runtime->>Workspace: read workspace-local copied config and private local skills
+
+  Note over Repo,Workspace: Copied-template path
+  Note over Runtime,Workspace: Existing workspaces do not fully auto-update from template changes
 ```
 
-Boundary rules:
+Operational rule:
 
-- `<workspace_root>/agent/` is the strict app-level tenant workspace boundary.
-- `<workspace_root>/agent/.hermes/` is the recommended Hermes runtime home for that workspace.
-- the source-tree `agent/` directory is code, not tenant data.
-- `<workspace_root>/agent/.hermes/profiles/<name>/` is only for Hermes multi-agent profile use cases, not for SaaS end-user tenancy.
-- The app must never treat a Hermes profile directory as the user workspace.
-- Hermes-managed files and app-generated artifacts must not be mixed in the same root.
+- if an artifact is loaded from shared repo code or shared repo config at runtime, existing workspaces see updates when the backend is running the new code
+- if an artifact is copied into `workspaces/<workspace_id>/agent/.hermes/`, existing workspaces keep their local copy unless the provisioner or a migration explicitly updates it
 
-### Workspace Per App User
+## Login And Workspace Provisioning Flow
 
-For each app user:
+The delivery path for both web login and Feishu chat onboarding is:
 
-- create or reuse a user workspace root such as `workspaces/<workspace_slug>/`
-- create or reuse a workspace runtime root at `workspaces/<workspace_slug>/agent/`
-- create or reuse a workspace-local Hermes runtime home at `workspaces/<workspace_slug>/agent/.hermes/`
-- execute every request and background task inside that user workspace boundary
-- point `HERMES_HOME` at that workspace-local Hermes runtime home
+1. resolve external identity
+2. resolve or create app user and workspace mapping
+3. create or reuse the workspace root
+4. provision or refresh workspace-local Hermes defaults
+5. run request-scoped Hermes execution inside that workspace boundary
 
-Do not create one Hermes CLI profile per end user as the primary tenancy model.
-
-If Hermes needs multiple runtime personas later, those should be app/service agents such as:
-
-- `coder`
-- `research-bot`
-- `ops-agent`
-
-Those are Hermes agent profiles, not customer profiles.
-
-### Recommended Isolation Model
-
-Use one Hermes runtime instance per user workspace.
-
-Concretely:
-
-- user workspace root: `workspaces/<workspace_slug>/`
-- workspace runtime root: `workspaces/<workspace_slug>/agent/`
-- workspace Hermes home: `workspaces/<workspace_slug>/agent/.hermes/`
-- request-scoped `HERMES_HOME`: `workspaces/<workspace_slug>/agent/.hermes/`
-
-Why this is the recommended model:
-
-- Hermes built-in memory becomes naturally per-workspace
-- installed skills and plugins can be tenant-scoped
-- logs, auth files, and provider config stay isolated
-- no need to reinterpret Hermes CLI profiles as customer accounts
-- matches Hermes’ actual contract: `HERMES_HOME` is the runtime home boundary
-
-Tradeoff:
-
-- more disk use and more provisioning work per tenant
-- skill/plugin rollout needs a replication strategy
-
-## Storage Split
-
-### Postgres From Day One
-
-Use Postgres for control-plane data:
-
-- users
-- Feishu identities
-- tenants/workspaces
-- memberships and roles
-- profile slug allocation
-- per-user config
-- per-tenant config
-- selected Hermes memory provider
-- Feishu chat to user/profile/session mapping
-
-### Defer Until Login/Profile Is Stable
-
-Do not move session/run metadata to Postgres during the first login/profile rollout.
-
-Migrate later, after isolation is stable and tested:
-
-- session metadata indexes
-- run metadata indexes
-- reporting/admin query tables
-
-### Filesystem Or Object Storage
-
-Keep filesystem or object storage for data-plane state:
-
-- workspace-local Hermes runtime home contents
-- `USER.md` and `MEMORY.md`
-- uploads
-- session event logs
-- run artifacts
-- reports
-- generated CSV/JSON/markdown outputs
-- large working directories
-
-Canonical rule:
-
-- Postgres is the source of truth for identity and profile metadata.
-- Filesystem paths are derived execution and storage locations.
-
-## Feishu Login Design
-
-### Web Login
-
-Flow:
-
-1. User clicks Sign in with Feishu in the frontend.
-2. Backend completes the Feishu OAuth callback.
-3. Backend resolves the external identity.
-4. Backend finds or creates the app user and workspace mapping.
-5. Backend creates or reuses the user workspace.
-6. Backend issues an HttpOnly signed session cookie.
-7. Subsequent API requests resolve user workspace context from the authenticated session.
-
-### Feishu Chat Auto-Provision
-
-Flow:
-
-1. Inbound Feishu sender identity is resolved first.
-2. Backend finds or creates the app user and workspace mapping.
-3. Backend creates or reuses the user workspace.
-4. Chat session is created under that user’s workspace-scoped data root.
-5. Future messages reuse the mapped user/workspace/session.
-
-### Runtime Contract
-
-Every authenticated request or background task must:
-
-- resolve workspace context before runtime execution
-- set `HERMES_HOME=workspaces/<workspace_slug>/agent/.hermes`
-- set the Vibe-Trading runtime root to `workspaces/<workspace_slug>/agent/`
-- ensure sessions, runs, uploads, and swarm data remain within that user scope
-
-The default service deployment should therefore be understood as:
-
-- Hermes home per user request: `workspaces/<workspace_slug>/agent/.hermes`
-- user workspace root: `workspaces/<workspace_slug>/agent/`
-
-not:
-
-- one shared `HERMES_HOME` for all end users
-
-## Memory Strategy
-
-### V1: Built-in Hermes Memory First
-
-Use Hermes built-in memory first:
-
-- per-user `USER.md`
-- per-user `MEMORY.md`
-- optional session search for deeper history
-
-Why:
-
-- it is already scoped to the active `HERMES_HOME`
-- it requires no custom provider work
-- it is the safest first layer for multi-tenant isolation
-
-Important caveat:
-
-- because Hermes built-in memory is tied to `HERMES_HOME`, per-user memory isolation is only rigorous if each user workspace has its own isolated Hermes runtime home
-- this is the main reason to prefer one Hermes runtime instance per workspace
-
-### Constraint: Only One External Provider
-
-Hermes supports only one external memory provider at a time.
-
-This is both:
-
-- documented in the official Hermes memory-provider docs
-- enforced in the vendored source code
-
-Therefore:
-
-- OpenViking + Hindsight cannot both be active natively inside Hermes at the same time
-
-### V2: Choose One Active Provider Per User/Profile
-
-Preferred v2 pattern:
-
-- choose one active Hermes external provider strategy for the application runtime, or explicitly partition it by user workspace through the app’s integration layer
-- keep the other system outside Hermes as an app-managed enrichment or indexing pipeline
-
-Under the recommended model, external provider configuration should also be scoped per workspace-local `HERMES_HOME`.
-
-Recommended provider roles:
-
-- OpenViking for structured self-hosted knowledge browsing, ingestion, and tiered retrieval
-- Hindsight for graph-style long-term recall, entity relationships, and reflection
-
-### Day-One Readiness For Future Federation
-
-Even before implementing advanced memory, prepare the architecture now:
-
-- store per-user memory backend preference/config in Postgres
-- keep provider selection behind an app abstraction rather than scattered request logic
-- isolate provider bootstrap behind a single runtime resolver
-- treat built-in Hermes memory as the always-on baseline layer
-- keep separate resolvers for:
-  - app workspace resolution
-  - Hermes runtime resolution
-- add a replicator/provisioner for seeding each workspace-local Hermes home with the approved base config, skills, and plugins
-
-### Workspace Hermes Provisioning
-
-Because each user workspace gets its own Hermes runtime home, the system needs a provisioning mechanism.
-
-The plan should assume a workspace Hermes provisioner that can:
+The provisioner should:
 
 - create `workspaces/<workspace_slug>/agent/.hermes/`
 - seed `config.yaml` and `.env` defaults
-- seed approved skills
-- seed approved plugins
+- create empty private directories for memories, local skills, logs, and other private runtime state
+- merge shared skill overlay config into the workspace config via `skills.external_dirs`
+- surface app-owned shared skills from `agent/src/skills/app-infra` and `agent/src/skills/domain/vibe-trading` through `skills.external_dirs`
+- expose approved shared plugin capabilities through installed app-managed entry-point plugins, not by copying shared plugins into workspaces
+- ban workspace-local plugin provisioning, discovery, and installation for application-level plugins
 - apply tenant entitlements
-- run upgrades/sync when shared paid bundles change
+- run deterministic upgrades when shared bundles or schemas change
 
-This provisioner is the right place to implement future paid skill/plugin subscriptions.
+The runtime contract for every authenticated request or background task is:
+
+- resolve workspace context before runtime execution
+- use the workspace-local `HERMES_HOME`
+- keep sessions, runs, uploads, swarm state, and memory inside that workspace boundary
+
+## Memory Rollout Assumptions
+
+For v1 and v2 planning:
+
+- built-in Hermes memory is the default per-user memory layer
+- only one Hermes external memory provider can be active at a time
+- OpenViking and Hindsight can both be part of the long-term architecture, but not as two simultaneously active Hermes providers
+- any future federated provider remains a v3 option only
 
 ## Backlog
 
@@ -457,6 +247,7 @@ Priority areas:
 - modules that cache `HERMES_HOME` or derived paths at import time
 - `run_agent` startup that loads `.env` from `HERMES_HOME` before workspace context is applied
 - authenticated session and swarm execution paths that isolate run/session directories but still rely on a process-wide Hermes home
+- workspace-local `.env` handling: avoid per-request reload into `os.environ` inside the shared API process; secrets/config isolation needs a non-global config channel
 
 ### V3 Option: Federated Custom Memory Provider
 
@@ -509,33 +300,33 @@ References:
 ## Implementation Phases
 
 1. Add Feishu-authenticated app user/profile mapping in Postgres.
-2. Create real Hermes profiles per user with config-only cloning.
-3. Make backend request handling profile-scoped via per-request `HERMES_HOME`.
+2. Provision workspace-local Hermes homes with config defaults, empty private roots, and shared skill overlay config.
+3. Make backend request handling workspace-scoped via per-request `HERMES_HOME`.
 4. Keep Hermes built-in memory as the initial per-user memory solution.
-5. Stabilize and test login/profile isolation thoroughly.
+5. Stabilize and test login and workspace isolation thoroughly.
 6. Add Postgres-backed session/run metadata after the rollout is stable.
-7. Add one optional external Hermes memory provider after profile isolation is stable.
+7. Add one optional external Hermes memory provider after workspace isolation is stable.
 8. Treat a custom federated memory provider as a v3 option only.
 
 ## Risks And Constraints
 
 - Current backend has process-global and file-global assumptions that are unsafe for SaaS multi-tenancy.
-- If `HERMES_HOME` is set too late, users can leak memory, config, or session state across profiles.
-- `--clone-all` profile creation is unsafe for new-user provisioning.
+- If `HERMES_HOME` is set too late, users can leak memory, config, or session state across workspaces.
+- cloning or copying full runtime homes is unsafe for new-user provisioning because it can copy private state into the wrong workspace.
 - Built-in memory is frozen at session start, so mid-session memory writes do not affect the current prompt.
 - Hermes supports only one external provider at a time.
 - Native OpenViking + Hindsight simultaneous activation is not a supported runtime mode.
 - A federated provider is a v3 option, not a v1 or v2 deliverable.
-- Session/run metadata should not move into Postgres during the first login/profile rollout because it increases migration surface area and makes tenant-isolation debugging harder.
+- Session/run metadata should not move into Postgres during the first login and workspace rollout because it increases migration surface area and makes tenant-isolation debugging harder.
 
 ## Acceptance Criteria
 
 The implementation based on this plan must preserve these rules:
 
 - the app, not Hermes, owns canonical user identity
-- Hermes profiles are the per-user runtime boundary
+- workspace-local `HERMES_HOME` is the per-user runtime boundary
 - Postgres is used for control-plane state from day one
-- session/run metadata moves to Postgres only after login/profile rollout is stable and tested
+- session/run metadata moves to Postgres only after login and workspace rollout is stable and tested
 - filesystem/object storage remains the runtime/data-plane store
 - built-in Hermes memory remains enabled for every user
 - only one external Hermes memory provider can be active at a time

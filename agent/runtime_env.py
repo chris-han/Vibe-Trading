@@ -76,6 +76,17 @@ _FALSEY_STRINGS = {"", "0", "false", "off", "no", "none", "disabled"}
 _VALID_REASONING_EFFORTS = {"xhigh", "high", "medium", "low", "minimal"}
 
 
+def _disable_workspace_plugin_paths() -> None:
+    """Disable workspace-local Hermes plugin discovery/install flows.
+
+    Vibe-Trading ships application plugins through installed entry points from
+    shared repo code. End-user workspaces must not discover or install plugins
+    from their workspace-local HERMES_HOME.
+    """
+    os.environ["HERMES_DISABLE_USER_PLUGINS"] = "1"
+    os.environ["HERMES_DISABLE_PROJECT_PLUGINS"] = "1"
+
+
 def _set_env_if_missing_or_blank(name: str, value: str | None) -> None:
     """Populate an environment variable when it is missing or blank."""
     if value is None:
@@ -126,6 +137,7 @@ def prepare_hermes_project_context(*, chdir: bool = False) -> Path:
     required for plugin discovery.
     """
     _set_env_if_missing_or_blank("VIBE_TRADING_ROOT", str(_REPO_ROOT))
+    _disable_workspace_plugin_paths()
     if chdir:
         os.chdir(_REPO_ROOT)
     return _REPO_ROOT

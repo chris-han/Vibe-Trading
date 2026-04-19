@@ -23,7 +23,6 @@ TARGET_FILE_RE = re.compile(
     r"agent/src/swarm/worker\.py|"
     r"agent/cli\.py|"
     r"agent/src/skills/.*|"
-    r"agent/\.hermes/skills/.*|"
     r"\.github/skills/runtime-code-sanitizer/scripts/pre-commit"
     r")$"
 )
