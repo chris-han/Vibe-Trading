@@ -55,14 +55,6 @@ vibe_trading:
   #   deployment_name: gpt-4o
   #   api_version: 2025-01-01-preview
 
-  kimi:
-    api_key: sk-kimi-AucIhM3j6Ggv63XEKr63JZunCU7Ye65wg7GAWsanQnwqp4dDzoj0SPbqQXdhBYRv
-    base_url: https://api.kimi.com/coding/v1
-    user_agent: RooCode/1.0.0
-
-  data_providers:
-    tushare_token: 6522910c853faf7bbcf81705668dd1b126dbc578256cea7477a88114
-
   runtime:
     timeout_seconds: 2400
     max_retries: 5

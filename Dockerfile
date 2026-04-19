@@ -44,22 +44,28 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
 
 WORKDIR /app
 
+ENV VIRTUAL_ENV=/app/agent/.venv \
+    PATH="/app/agent/.venv/bin:${PATH}"
+
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps (install before copying code for layer caching)
+RUN mkdir -p /app/agent && python -m venv /app/agent/.venv
 COPY agent/requirements.txt agent/requirements.txt
-RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org \
     $(if [ -n "$HTTP_PROXY" ]; then echo "--proxy=$HTTP_PROXY"; fi) \
     -r agent/requirements.txt
 
 # Copy project
 COPY pyproject.toml LICENSE README.md ./
-COPY .hermes/ .hermes/
+COPY agent/.hermes/ /app/bootstrap/hermes/
 COPY agent/ agent/
-COPY data/ data/
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh && mkdir -p /app/agent/.hermes /app/workspaces/public
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist frontend/dist
@@ -73,6 +79,8 @@ EXPOSE 8899
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8899/health')" || exit 1
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Run API server (serves frontend/dist as static files)
 CMD ["vibe-trading", "serve", "--host", "0.0.0.0", "--port", "8899"]
