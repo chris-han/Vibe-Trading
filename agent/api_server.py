@@ -441,6 +441,7 @@ _security = HTTPBearer(auto_error=False)
 _API_KEY = os.getenv("API_AUTH_KEY")
 _auth_store: AuthStore | None = None
 _auth_store_path: Path | None = None
+_DEFAULT_FEISHU_OAUTH_REDIRECT_URI = "https://app.semantier.com/auth/feishu/callback"
 
 
 @dataclass
@@ -459,8 +460,13 @@ def _feishu_oauth_enabled() -> bool:
     app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
     app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
     session_secret = os.getenv("FEISHU_SESSION_SECRET", "").strip()
-    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    redirect_uri = _get_feishu_oauth_redirect_uri()
     return all([app_id, app_secret, session_secret, redirect_uri])
+
+
+def _get_feishu_oauth_redirect_uri() -> str:
+    """Return the configured Feishu OAuth redirect URI or the production default."""
+    return (os.getenv("FEISHU_OAUTH_REDIRECT_URI") or "").strip() or _DEFAULT_FEISHU_OAUTH_REDIRECT_URI
 
 
 def _get_auth_store() -> AuthStore:
@@ -999,11 +1005,7 @@ async def auth_feishu_login(request: Request):
     if not _feishu_oauth_enabled():
         raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
     app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
-    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
-    if not redirect_uri:
-        # Construct from current request if not configured
-        base_url = str(request.base_url).rstrip("/")
-        redirect_uri = f"{base_url}/auth/feishu/callback"
+    redirect_uri = _get_feishu_oauth_redirect_uri()
 
     if not app_id or not redirect_uri:
         raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
@@ -1020,10 +1022,7 @@ async def auth_feishu_callback(request: Request, code: str, state: Optional[str]
     if not _feishu_oauth_enabled():
         raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
 
-    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
-    if not redirect_uri:
-        base_url = str(request.base_url).rstrip("/")
-        redirect_uri = f"{base_url}/auth/feishu/callback"
+    redirect_uri = _get_feishu_oauth_redirect_uri()
 
     token_data = _feishu_exchange_oauth_code(code, redirect_uri=redirect_uri)
     profile = _feishu_fetch_user_profile(str(token_data.get("access_token") or ""))
@@ -2162,7 +2161,7 @@ def _resolve_feishu_auth_user(*, open_id: str = "", union_id: str = "") -> Optio
 def _feishu_login_required_message() -> str:
     import urllib.parse
 
-    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    redirect_uri = _get_feishu_oauth_redirect_uri()
     login_url = "/auth/feishu/login"
     if redirect_uri:
         parsed = urllib.parse.urlsplit(redirect_uri)
