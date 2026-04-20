@@ -5,6 +5,7 @@ import sys
 import types
 
 import runtime_env
+import api_server
 
 
 
@@ -234,3 +235,21 @@ def test_prepare_hermes_project_context_registers_local_plugin_without_entry_poi
 
     assert repo_root == runtime_env.AGENT_DIR.parent
     assert registry.get_entry("setup_backtest_run") is not None
+
+
+def test_get_session_service_accepts_truthy_enable_session_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENABLE_SESSION_RUNTIME", " true ")
+    monkeypatch.setattr(api_server, "_session_service", None, raising=False)
+    monkeypatch.setattr(api_server, "_session_service_by_workspace", {}, raising=False)
+    monkeypatch.setattr(api_server, "SESSIONS_DIR", tmp_path / "sessions", raising=False)
+    monkeypatch.setattr(api_server, "RUNS_DIR", tmp_path / "runs", raising=False)
+
+    service = api_server._get_session_service()
+
+    assert service is not None
+
+
+def test_get_env_bool_accepts_numeric_truthy(monkeypatch):
+    monkeypatch.setenv("ENABLE_SESSION_RUNTIME", "1")
+
+    assert api_server._get_env_bool("ENABLE_SESSION_RUNTIME") is True

@@ -451,10 +451,21 @@ class RequestContext:
     workspace: WorkspacePaths
 
 
+def _get_env_bool(name: str, default: bool = False) -> bool:
+    """Parse a boolean env var with tolerant support for common truthy values."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on"}
+
+
 def _feishu_oauth_enabled() -> bool:
     configured = os.getenv("FEISHU_OAUTH_ENABLED")
     if configured is not None and configured.strip():
-        return configured.strip().lower() == "true"
+        return _get_env_bool("FEISHU_OAUTH_ENABLED")
     # Fallback to checking mandatory variables: app_id, secret, session_secret.
     # redirect_uri is also usually required but can sometimes be inferred.
     app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
@@ -1069,7 +1080,7 @@ _session_service_by_workspace: Dict[str, Any] = {}
 
 def _get_session_service(workspace: Optional[WorkspacePaths] = None):
     """Lazy-init session service when ENABLE_SESSION_RUNTIME=true."""
-    if os.getenv("ENABLE_SESSION_RUNTIME", "true").lower() != "true":
+    if not _get_env_bool("ENABLE_SESSION_RUNTIME", default=True):
         return None
 
     import asyncio
