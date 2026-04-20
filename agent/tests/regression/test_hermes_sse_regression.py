@@ -449,7 +449,11 @@ class TestHermesSessionEvents:
         assert register_calls
         _, final_overrides = register_calls[-1]
         assert final_overrides["cwd"] == str(run_dir / "artifacts")
+        assert final_overrides["safe_read_root"] == str(tmp_path.resolve())
         assert final_overrides["safe_write_root"] == str(run_dir)
+        assert final_overrides["display_cwd"] == "/workspace/run/artifacts"
+        assert final_overrides["display_safe_read_root"] == "/workspace"
+        assert final_overrides["display_safe_write_root"] == "/workspace/run"
 
     def test_hermes_toolset_selection_exposes_legacy_vt_aliases(self):
         """Compat toolset is now empty; all tools are provided by hermes built-in toolsets.

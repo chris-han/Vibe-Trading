@@ -38,7 +38,11 @@ _OUTPUT_FORMAT_PROMPT = OUTPUT_FORMAT_PROMPT
 _load_output_format_skill = load_output_format_skill
 
 
-from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
+from runtime_env import (
+    ensure_runtime_env,
+    get_hermes_agent_kwargs,
+    prepare_hermes_project_context,
+)
 from src.backtest.bootstrap import bootstrap_run_from_prompt, is_backtest_prompt
 from src.session.events import EventBus
 from src.session.models import (
@@ -928,9 +932,14 @@ class SessionService:
         # while still allowing explicit edits to config.json or code/.
         try:
             from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
+            workspace_root = self.runs_dir.parent.resolve()
             register_task_env_overrides(sid, {
                 "cwd": str(run_dir / "artifacts"),
+                "safe_read_root": str(workspace_root),
                 "safe_write_root": str(run_dir),
+                "display_cwd": "/workspace/run/artifacts",
+                "display_safe_read_root": "/workspace",
+                "display_safe_write_root": "/workspace/run",
             })
             _hermes_overrides_set = True
         except Exception:

@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from rich.console import Console
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from runtime_env import ensure_runtime_env, get_data_root, get_runs_dir, get_sessions_dir, get_swarm_runs_dir, get_uploads_dir
 from src.adapters.factory import get_feishu_visualization_adapter
@@ -385,6 +386,27 @@ class BatchDeleteSessionsRequest(BaseModel):
 # FastAPI Application
 # ============================================================================
 
+class ForwardedHeadersMiddleware(BaseHTTPMiddleware):
+    """Handle X-Forwarded-Proto and X-Forwarded-Host for proxy environments."""
+    async def dispatch(self, request: Request, call_next):
+        forwarded_proto = request.headers.get("X-Forwarded-Proto")
+        forwarded_host = request.headers.get("X-Forwarded-Host")
+        if forwarded_proto:
+            request.scope["scheme"] = forwarded_proto
+        if forwarded_host:
+            # Reconstruct host and port from header
+            host_parts = forwarded_host.split(":", 1)
+            host = host_parts[0]
+            port = int(host_parts[1]) if len(host_parts) > 1 else (443 if forwarded_proto == "https" else 80)
+            request.scope["server"] = (host, port)
+            # Update headers to keep things consistent
+            request.scope["headers"] = [
+                (b"host", forwarded_host.encode("latin-1")) if k == b"host" else (k, v)
+                for k, v in request.scope.get("headers", [])
+            ]
+        return await call_next(request)
+
+
 app = FastAPI(
     title="semantier API",
     description="semantier API: natural-language finance research, backtesting, and agents workflows",
@@ -392,6 +414,8 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+app.add_middleware(ForwardedHeadersMiddleware)
 
 # CORS: override with CORS_ORIGINS (comma-separated)
 _CORS_ORIGINS = os.getenv(
@@ -430,15 +454,13 @@ def _feishu_oauth_enabled() -> bool:
     configured = os.getenv("FEISHU_OAUTH_ENABLED")
     if configured is not None and configured.strip():
         return configured.strip().lower() == "true"
-    return all(
-        os.getenv(name, "").strip()
-        for name in (
-            "FEISHU_OAUTH_APP_ID",
-            "FEISHU_APP_SECRET",
-            "FEISHU_OAUTH_REDIRECT_URI",
-            "FEISHU_SESSION_SECRET",
-        )
-    )
+    # Fallback to checking mandatory variables: app_id, secret, session_secret.
+    # redirect_uri is also usually required but can sometimes be inferred.
+    app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
+    app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
+    session_secret = os.getenv("FEISHU_SESSION_SECRET", "").strip()
+    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    return all([app_id, app_secret, session_secret, redirect_uri])
 
 
 def _get_auth_store() -> AuthStore:
@@ -956,11 +978,16 @@ async def auth_me(request: Request):
 
 
 @app.get("/auth/feishu/login")
-async def auth_feishu_login():
+async def auth_feishu_login(request: Request):
     if not _feishu_oauth_enabled():
         raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
-    app_id = os.getenv("FEISHU_OAUTH_APP_ID", "").strip()
+    app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
     redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    if not redirect_uri:
+        # Construct from current request if not configured
+        base_url = str(request.base_url).rstrip("/")
+        redirect_uri = f"{base_url}/auth/feishu/callback"
+
     if not app_id or not redirect_uri:
         raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
     state = uuid.uuid4().hex
@@ -972,10 +999,16 @@ async def auth_feishu_login():
 
 
 @app.get("/auth/feishu/callback")
-async def auth_feishu_callback(code: str, state: Optional[str] = None):
+async def auth_feishu_callback(request: Request, code: str, state: Optional[str] = None):
     if not _feishu_oauth_enabled():
         raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
-    token_data = _feishu_exchange_oauth_code(code)
+
+    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
+    if not redirect_uri:
+        base_url = str(request.base_url).rstrip("/")
+        redirect_uri = f"{base_url}/auth/feishu/callback"
+
+    token_data = _feishu_exchange_oauth_code(code, redirect_uri=redirect_uri)
     profile = _feishu_fetch_user_profile(str(token_data.get("access_token") or ""))
     user = _get_auth_store().upsert_feishu_user(
         open_id=str(profile.get("open_id") or ""),
@@ -1063,12 +1096,11 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
     return svc
 
 
-def _feishu_exchange_oauth_code(code: str) -> Dict[str, Any]:
+def _feishu_exchange_oauth_code(code: str, redirect_uri: str) -> Dict[str, Any]:
     import requests
 
-    app_id = os.getenv("FEISHU_OAUTH_APP_ID", "").strip()
+    app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
     app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
-    redirect_uri = os.getenv("FEISHU_OAUTH_REDIRECT_URI", "").strip()
     if not app_id or not app_secret or not redirect_uri:
         raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
 
