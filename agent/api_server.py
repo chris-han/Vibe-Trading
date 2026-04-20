@@ -1474,7 +1474,7 @@ _FEISHU_BASE_URL = (
 _FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
 _FEISHU_STREAM_UPDATE_INTERVAL_SECONDS = max(
     0.2,
-    float(os.getenv("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", "0.35")),
+    float(os.getenv("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", 0.35)),
 )
 _FEISHU_TOKEN_CACHE: Dict[str, Any] = {"token": "", "expires_at": 0.0}
 _feishu_logger = logging.getLogger("feishu.webhook")
