@@ -1,0 +1,14 @@
+name: Deploy to Dokploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Dokploy Rebuild
+        run: |
+          curl -X POST https://docker.semantier.com/api/deploy/compose/WTShUf__f6JWmokGD_faM

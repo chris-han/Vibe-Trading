@@ -414,6 +414,8 @@ class TestHermesSessionEvents:
         assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
+        assert "Do not use delegate_task to discover or import setup_backtest_run/backtest" in prompt
+        assert "do not restrict the child to terminal/file-only toolsets" in prompt
 
     def test_run_with_agent_scopes_safe_write_root_to_run_dir(self, tmp_path):
         """Session runtime must allow edits anywhere inside the active backtest run."""
@@ -731,6 +733,61 @@ class TestHermesSessionEvents:
         completed = cap.data_for("attempt.completed")[-1]
         assert completed["has_run_artifact"] is False
         assert completed["run_dir"] == str(run_dir)
+
+    def test_backtest_prompt_without_backtest_tool_fails_even_after_setup(self, tmp_path):
+        """Backtest prompts must not succeed after setup-only scaffolding."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Backtest AAPL for 2025")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "backtest-partial"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        setup_payload = json.dumps({
+            "status": "ok",
+            "run_dir": str(run_dir),
+            "files_written": ["config.json", "code/signal_engine.py"],
+        })
+
+        def _agent_factory(*args, **kwargs):
+            cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                assert cb is not None
+                cb("tool.started", "setup_backtest_run", "", {})
+                cb("tool.completed", "setup_backtest_run", setup_payload, {}, is_error=False)
+                return {
+                    "final_response": "I need to find setup_backtest_run and the runner.py.",
+                    "status": "success",
+                }
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore, patch(
+                "src.session.service.bootstrap_run_from_prompt",
+                return_value={"status": "ok"},
+            ):
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.mark_failure.return_value = None
+                store.save_request.return_value = {}
+                result = await svc._run_with_agent(attempt)
+
+                assert result["status"] == "failed"
+                assert "no successful backtest tool execution or metrics" in result["reason"].lower()
+                assert not (run_dir / "report.md").exists()
+                store.mark_failure.assert_called()
+                store.mark_success.assert_not_called()
+
+        _run(_t())
 
     def test_cancel_calls_interrupt_not_cancel(self, tmp_path):
         """cancel_current() calls agent.interrupt(), not agent.cancel() (Migration Plan §2.2)."""

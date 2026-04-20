@@ -19,6 +19,8 @@ _BACKTEST_WORKFLOW_RULES = (
     "Pass config_json and signal_engine_py directly to setup_backtest_run(...); do not manually create run directories or write the run files yourself.",
     "Only after setup_backtest_run succeeds, call backtest(run_dir=...).",
     "If a backtest fails because generated strategy code is wrong, prefer a fresh setup_backtest_run(...) before retrying.",
+    "Do not use delegate_task to discover or import setup_backtest_run/backtest from the repository source code.",
+    "If you delegate backtest-related work, do not restrict the child to terminal/file-only toolsets; omit toolsets or include the runtime's finance/backtest toolset so the child can call setup_backtest_run(...) and backtest(...).",
 )
 
 _DOCUMENT_WORKFLOW_RULES = (
@@ -112,8 +114,8 @@ def build_session_runtime_prompt(
     visible_artifacts_dir = display_artifacts_dir or f"{visible_run_dir.rstrip('/')}/artifacts"
     visible_uploads_dir = f"{visible_workspace_root.rstrip('/')}/sessions/{session_id}/uploads"
     return (
-        f"Session workspace: {visible_workspace_root}\n"
         f"Run directory: {visible_run_dir}\n"
+        f"Session workspace: {visible_workspace_root}\n"
         f"Artifacts directory: {visible_artifacts_dir}\n"
         f"Uploads directory: {visible_uploads_dir}\n"
         "Use relative paths for terminal work.\n"

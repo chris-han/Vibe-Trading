@@ -427,7 +427,18 @@ class RequestContext:
 
 
 def _feishu_oauth_enabled() -> bool:
-    return os.getenv("FEISHU_OAUTH_ENABLED", "false").strip().lower() == "true"
+    configured = os.getenv("FEISHU_OAUTH_ENABLED")
+    if configured is not None and configured.strip():
+        return configured.strip().lower() == "true"
+    return all(
+        os.getenv(name, "").strip()
+        for name in (
+            "FEISHU_OAUTH_APP_ID",
+            "FEISHU_APP_SECRET",
+            "FEISHU_OAUTH_REDIRECT_URI",
+            "FEISHU_SESSION_SECRET",
+        )
+    )
 
 
 def _get_auth_store() -> AuthStore:

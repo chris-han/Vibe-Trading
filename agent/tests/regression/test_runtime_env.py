@@ -209,3 +209,28 @@ def test_prepare_hermes_project_context_sets_repo_root(monkeypatch):
     assert os.getenv("HERMES_ENABLE_PROJECT_PLUGINS") in (None, "")
     assert os.getenv("HERMES_DISABLE_USER_PLUGINS") == "1"
     assert os.getenv("HERMES_DISABLE_PROJECT_PLUGINS") == "1"
+
+
+def test_prepare_hermes_project_context_registers_local_plugin_without_entry_point(monkeypatch):
+    import importlib.metadata as metadata
+    import sys
+
+    hermes_root = runtime_env.AGENT_DIR.parent / "hermes-agent"
+    for path in (runtime_env.AGENT_DIR, hermes_root):
+        text = str(path)
+        if text not in sys.path:
+            sys.path.insert(0, text)
+
+    monkeypatch.setattr(runtime_env, "_LOCAL_PLUGIN_BOOTSTRAPPED", False)
+
+    def _empty_entry_points():
+        return metadata.entry_points().__class__(()) if hasattr(metadata.entry_points(), "select") else []
+
+    monkeypatch.setattr(runtime_env.importlib.metadata, "entry_points", _empty_entry_points)
+
+    from tools.registry import registry
+
+    repo_root = runtime_env.prepare_hermes_project_context(chdir=False)
+
+    assert repo_root == runtime_env.AGENT_DIR.parent
+    assert registry.get_entry("setup_backtest_run") is not None

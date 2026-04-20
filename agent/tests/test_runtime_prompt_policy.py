@@ -17,8 +17,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     )
 
     assert prompt.startswith(
-        "Session workspace: /workspace\n"
         "Run directory: /tmp/run-123\n"
+        "Session workspace: /workspace\n"
         "Artifacts directory: /tmp/run-123/artifacts\n"
         "Uploads directory: /workspace/sessions/session-abc/uploads\n"
         "Use relative paths for terminal work.\n"

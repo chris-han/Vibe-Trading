@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,7 @@ _DEFAULT_HERMES_HOME = AGENT_DIR / ".hermes"
 _WORKSPACES_DIR = _REPO_ROOT / "workspaces"
 _DEFAULT_WORKSPACE_ID = "public"
 _ENV_BOOTSTRAPPED = False
+_LOCAL_PLUGIN_BOOTSTRAPPED = False
 
 
 def get_data_root(workspace_id: str | None = None) -> Path:
@@ -127,6 +131,71 @@ def _resolve_backend_python() -> Path:
     return AGENT_DIR / ".venv" / scripts_dir / executable
 
 
+def _has_vibe_trading_entry_point() -> bool:
+    """Return whether the installed environment exposes the Vibe-Trading plugin entry point."""
+    try:
+        entry_points = importlib.metadata.entry_points()
+        if hasattr(entry_points, "select"):
+            group = entry_points.select(group="hermes_agent.plugins")
+        elif isinstance(entry_points, dict):
+            group = entry_points.get("hermes_agent.plugins", [])
+        else:
+            group = [ep for ep in entry_points if ep.group == "hermes_agent.plugins"]
+    except Exception:
+        return False
+    return any(getattr(ep, "name", "") == "vibe-trading" for ep in group)
+
+
+def _ensure_local_vibe_trading_plugin() -> None:
+    """Register the local Vibe-Trading Hermes plugin when the package is not installed.
+
+    Tests and source-tree runs often execute without installing ``vibe-trading-ai``
+    into the active venv, which means Hermes entry-point discovery cannot see the
+    ``hermes_agent.plugins`` registration from ``agent/pyproject.toml``. In that
+    case we register the same plugin module directly from source so app-owned
+    runtime behavior does not depend on editable-install state.
+    """
+    global _LOCAL_PLUGIN_BOOTSTRAPPED
+    if _LOCAL_PLUGIN_BOOTSTRAPPED or _has_vibe_trading_entry_point():
+        return
+
+    hermes_root = _REPO_ROOT / "hermes-agent"
+    for path in (AGENT_DIR, hermes_root):
+        text = str(path)
+        if text not in sys.path:
+            sys.path.insert(0, text)
+
+    try:
+        from tools.registry import registry
+
+        if registry.get_entry("setup_backtest_run") is not None:
+            _LOCAL_PLUGIN_BOOTSTRAPPED = True
+            return
+
+        from hermes_cli.plugins import LoadedPlugin, PluginContext, PluginManifest, get_plugin_manager
+
+        manager = get_plugin_manager()
+        module = importlib.import_module("src.plugins.vibe_trading")
+        manifest = PluginManifest(
+            name="vibe-trading",
+            version="source-tree",
+            description="Local Vibe-Trading plugin fallback",
+            source="project",
+            path=str(AGENT_DIR / "src" / "plugins" / "vibe_trading"),
+        )
+        before_tools = set(manager._plugin_tool_names)
+        ctx = PluginContext(manifest, manager)
+        module.register(ctx)
+
+        loaded = LoadedPlugin(manifest=manifest, module=module, enabled=True)
+        loaded.tools_registered = sorted(manager._plugin_tool_names - before_tools)
+        manager._plugins[manifest.name] = loaded
+        _LOCAL_PLUGIN_BOOTSTRAPPED = True
+    except Exception:
+        # Non-fatal fallback: installed entry points or explicit imports may still work.
+        pass
+
+
 def prepare_hermes_project_context(*, chdir: bool = False) -> Path:
     """Prepare repo-root context for Vibe-Trading Hermes entrypoints.
 
@@ -138,6 +207,7 @@ def prepare_hermes_project_context(*, chdir: bool = False) -> Path:
     """
     _set_env_if_missing_or_blank("VIBE_TRADING_ROOT", str(_REPO_ROOT))
     _disable_workspace_plugin_paths()
+    _ensure_local_vibe_trading_plugin()
     if chdir:
         os.chdir(_REPO_ROOT)
     return _REPO_ROOT

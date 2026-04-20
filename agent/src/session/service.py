@@ -673,10 +673,12 @@ class SessionService:
 
         sid = attempt.session_id
         attempt_id = attempt.attempt_id
+        is_backtest_task = is_backtest_prompt(attempt.prompt)
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None
         saw_reportable_tool_run = False
+        saw_successful_backtest = False
 
         state_store = RunStateStore()
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -697,7 +699,7 @@ class SessionService:
             args: Optional[dict] = None,
             **kwargs,
         ) -> None:
-            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output
+            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output, saw_successful_backtest
             if event_type == "tool.started":
                 if tool_name == "backtest":
                     started_run_dir = str((args or {}).get("run_dir") or "").strip()
@@ -758,6 +760,7 @@ class SessionService:
                         resolved = parsed_result.get("resolved_run_dir") or parsed_result.get("run_dir")
                         if parsed_result.get("status") == "ok" and resolved:
                             latest_backtest_run_dir = str(resolved)
+                            saw_successful_backtest = True
                     elif tool_name == "run_swarm":
                         saw_reportable_tool_run = True
 
@@ -953,12 +956,11 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
-            if final_text and saw_reportable_tool_run:
+            if final_text and ((not is_backtest_task and saw_reportable_tool_run) or saw_successful_backtest):
                 try:
                     (run_dir / "report.md").write_text(final_text, encoding="utf-8")
                 except Exception:
                     logger.warning("Failed to persist report.md for run_dir=%s", run_dir, exc_info=True)
-            state_store.mark_success(run_dir)
             result: Dict[str, Any] = {
                 "status": "success",
                 "content": final_text,
@@ -991,13 +993,6 @@ class SessionService:
         if actual_run_dir:
             result["run_dir"] = actual_run_dir
             result["run_id"] = Path(actual_run_dir).name
-            # If the backtest tool created its own run dir, propagate state.json there too
-            # so the frontend can resolve the status from the returned run_id.
-            if actual_run_dir != str(run_dir):
-                try:
-                    state_store.mark_success(Path(actual_run_dir)) if result.get("status") == "success" else state_store.mark_failure(Path(actual_run_dir), str(result.get("reason", "")))
-                except Exception:
-                    pass
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics
@@ -1005,6 +1000,32 @@ class SessionService:
             result.get("run_dir"),
             result.get("metrics"),
         )
+
+        if result.get("status") == "success" and is_backtest_task:
+            backtest_completed = saw_successful_backtest or bool(result.get("metrics"))
+            if not backtest_completed:
+                result["status"] = "failed"
+                result["reason"] = (
+                    "Backtest run did not complete successfully; no successful backtest tool execution or metrics were produced."
+                )
+                result["content"] = ""
+
+        final_run_dir = Path(result.get("run_dir") or run_dir)
+        if result.get("status") == "success":
+            state_store.mark_success(run_dir)
+            if final_run_dir != run_dir:
+                try:
+                    state_store.mark_success(final_run_dir)
+                except Exception:
+                    pass
+        else:
+            failure_reason = str(result.get("reason", "unknown"))
+            state_store.mark_failure(run_dir, failure_reason)
+            if final_run_dir != run_dir:
+                try:
+                    state_store.mark_failure(final_run_dir, failure_reason)
+                except Exception:
+                    pass
 
         return result
 

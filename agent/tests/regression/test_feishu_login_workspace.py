@@ -93,6 +93,34 @@ def test_feishu_callback_bootstraps_workspace_and_sets_session_cookie(tmp_path, 
     assert (workspace_root / ".hermes" / "config.yaml").exists()
 
 
+def test_feishu_login_auto_enables_when_oauth_config_is_present(monkeypatch):
+    monkeypatch.delenv("FEISHU_OAUTH_ENABLED", raising=False)
+    monkeypatch.setenv("FEISHU_OAUTH_APP_ID", "cli_test_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "oauth-secret")
+    monkeypatch.setenv("FEISHU_OAUTH_REDIRECT_URI", "http://testserver/auth/feishu/callback")
+    monkeypatch.setenv("FEISHU_SESSION_SECRET", "test-secret")
+
+    client = TestClient(api_server.app)
+    response = client.get("/auth/feishu/login", follow_redirects=False)
+
+    assert response.status_code in (302, 307), response.text
+    assert "open-apis/authen/v1/authorize" in response.headers["location"]
+
+
+def test_feishu_login_respects_explicit_disable_even_when_config_exists(monkeypatch):
+    monkeypatch.setenv("FEISHU_OAUTH_ENABLED", "false")
+    monkeypatch.setenv("FEISHU_OAUTH_APP_ID", "cli_test_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "oauth-secret")
+    monkeypatch.setenv("FEISHU_OAUTH_REDIRECT_URI", "http://testserver/auth/feishu/callback")
+    monkeypatch.setenv("FEISHU_SESSION_SECRET", "test-secret")
+
+    client = TestClient(api_server.app)
+    response = client.get("/auth/feishu/login", follow_redirects=False)
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "Feishu OAuth is not enabled"
+
+
 def test_sessions_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch):
     workspaces_dir = _patch_isolated_auth_runtime(tmp_path, monkeypatch)
 
