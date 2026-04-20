@@ -17,11 +17,13 @@ FROM python:3.11-slim AS runtime
 # System proxy configuration (uses build args for mirror/proxy support)
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
+ARG ALL_PROXY
 ARG NO_PROXY
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
+    ALL_PROXY=${ALL_PROXY} \
     NO_PROXY=${NO_PROXY} \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
@@ -29,6 +31,7 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     http_proxy=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
+    all_proxy=${ALL_PROXY} \
     no_proxy=${NO_PROXY}
 
 WORKDIR /app

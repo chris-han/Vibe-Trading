@@ -172,6 +172,74 @@ def test_run_backtest_resolves_single_nested_prepared_run_dir(tmp_path):
     assert payload["resolved_run_dir"] == str(nested_run)
 
 
+def test_run_backtest_rejects_malformed_proxy_env(tmp_path, monkeypatch):
+    from src.tools.backtest_tool import run_backtest
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:6153export")
+
+    raw = run_backtest(str(tmp_path))
+    payload = json.loads(raw)
+
+    assert payload["status"] == "error"
+    assert payload["reason"] == "invalid_proxy_env"
+    assert "Malformed proxy environment variable HTTPS_PROXY" in payload["error"]
+
+
+def test_run_backtest_classifies_market_data_network_failures(tmp_path, monkeypatch):
+    from src.tools.backtest_tool import run_backtest
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(key, raising=False)
+
+    (tmp_path / "code").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "source": "auto",
+                "codes": ["AAPL.US", "BTC-USDT"],
+                "start_date": "2025-01-01",
+                "end_date": "2025-12-31",
+                "initial_cash": 100000,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "code" / "signal_engine.py").write_text(
+        "class SignalEngine:\n    def generate(self, data_map):\n        return {}\n",
+        encoding="utf-8",
+    )
+
+    with patch("src.tools.backtest_tool.Runner") as MockRunner:
+        runner = MockRunner.return_value
+        runner.execute.return_value = MagicMock(
+            success=False,
+            exit_code=1,
+            stdout=(
+                "[WARN] yfinance returned no usable data for AAPL\n"
+                "[WARN] failed to fetch BTC-USDT: HTTPSConnectionPool(host='www.okx.com', port=443): "
+                "Max retries exceeded with url: /api/v5/market/candles\n"
+                "{\"error\": \"No data fetched\"}\n"
+            ),
+            stderr="",
+            artifacts={},
+        )
+        raw = run_backtest(str(tmp_path))
+
+    payload = json.loads(raw)
+    assert payload["status"] == "error"
+    assert payload["reason"] == "market_data_network_error"
+    assert "Outbound market-data requests failed" in payload["diagnosis"]
+    assert payload["detail"]["providers"] == ["yfinance", "okx"]
+    assert payload["detail"]["proxy_env"] == {
+        "HTTP_PROXY": False,
+        "HTTPS_PROXY": False,
+        "ALL_PROXY": False,
+        "NO_PROXY": False,
+    }
+
+
 def test_setup_backtest_run_sanitizes_invalid_signal_engine_annotations(tmp_path):
     from src.vibe_trading_helper import _setup_backtest_run
 

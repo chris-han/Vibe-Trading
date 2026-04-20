@@ -9,11 +9,13 @@ services:
       args:
         - HTTP_PROXY=${DOCKER_HTTP_PROXY:-}
         - HTTPS_PROXY=${DOCKER_HTTPS_PROXY:-}
+        - ALL_PROXY=${DOCKER_ALL_PROXY:-}
         - NO_PROXY=${DOCKER_NO_PROXY:-}
     environment:
       # Proxy settings
       HTTP_PROXY: ${DOCKER_HTTP_PROXY:-}
       HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      ALL_PROXY: ${DOCKER_ALL_PROXY:-}
       NO_PROXY: ${DOCKER_NO_PROXY:-}
       # Application constants
       HERMES_HOME: /app/agent/.hermes
