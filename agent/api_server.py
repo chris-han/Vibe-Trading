@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, Security, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Security, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -35,6 +35,12 @@ from runtime_env import ensure_runtime_env, get_data_root, get_runs_dir, get_ses
 from src.adapters.factory import get_feishu_visualization_adapter
 from src.auth.store import AuthStore, AuthUser
 from src.auth.workspace import WorkspacePaths, ensure_workspace, workspace_swarm_runs_dir
+from src.upload_capabilities import (
+    build_upload_capabilities_payload,
+    get_upload_extension,
+    is_supported_upload_filename,
+    supported_upload_extensions,
+)
 from src.ui_services import build_run_analysis, load_run_context, load_run_report
 
 logging.basicConfig(
@@ -992,6 +998,110 @@ class AuthMeResponse(BaseModel):
     workspace_slug: Optional[str] = None
 
 
+class UploadCapabilitiesResponse(BaseModel):
+    allowed_extensions: List[str]
+    accept: str
+    max_upload_size_bytes: int
+    max_upload_size_mb: int
+    types_summary: str
+
+
+class UploadBatchResponse(BaseModel):
+    status: str
+    files: List[Dict[str, str]]
+
+
+def _resolve_effective_upload_scope(
+    request: Request,
+    session_id: Optional[str],
+    run_id: Optional[str],
+) -> tuple[Optional[str], Optional[str], Path, Path]:
+    effective_session_id = (
+        session_id
+        or request.query_params.get("session_id")
+        or request.headers.get("x-session-id")
+    )
+    effective_run_id = (
+        run_id
+        or request.query_params.get("run_id")
+        or request.headers.get("x-run-id")
+    )
+    ctx = _resolve_request_context(request, require_login=False)
+    active_runs_dir = ctx.workspace.runs_dir if _feishu_oauth_enabled() else RUNS_DIR
+    active_sessions_dir = ctx.workspace.sessions_dir if _feishu_oauth_enabled() else SESSIONS_DIR
+    return effective_session_id, effective_run_id, active_runs_dir, active_sessions_dir
+
+
+def _resolve_upload_target_dir(
+    *,
+    request: Request,
+    session_id: Optional[str],
+    run_id: Optional[str],
+) -> tuple[Path, Optional[str], Optional[str], Path, Path]:
+    effective_session_id, effective_run_id, active_runs_dir, active_sessions_dir = _resolve_effective_upload_scope(
+        request,
+        session_id,
+        run_id,
+    )
+
+    try:
+        target_dir = _resolve_upload_dir(
+            session_id=effective_session_id,
+            run_id=effective_run_id,
+            runs_dir=active_runs_dir,
+            sessions_dir=active_sessions_dir,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 400 and "session_id or run_id" in str(exc.detail):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "session_id or run_id is required for uploads. "
+                    "Provide one via multipart form field, query param, or "
+                    "x-session-id/x-run-id header."
+                ),
+            )
+        raise
+
+    if _feishu_oauth_enabled() and effective_session_id and not (active_sessions_dir / effective_session_id).exists():
+        raise HTTPException(status_code=404, detail=f"Session {effective_session_id} not found")
+    if _feishu_oauth_enabled() and effective_run_id and _resolve_run_dir(
+        effective_run_id,
+        runs_dir=active_runs_dir,
+        sessions_dir=active_sessions_dir,
+    ) is None:
+        raise HTTPException(status_code=404, detail=f"Run {effective_run_id} not found")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir, effective_session_id, effective_run_id, active_runs_dir, active_sessions_dir
+
+
+async def _store_uploaded_file(file: UploadFile, target_dir: Path) -> Dict[str, str]:
+    file_extension = get_upload_extension(file.filename)
+    if not is_supported_upload_filename(file.filename) or not file_extension:
+        supported_list = ", ".join(supported_upload_extensions())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. Allowed extensions: {supported_list}",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large (limit {MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
+
+    safe_name = f"{uuid.uuid4().hex}{file_extension}"
+    dest = target_dir / safe_name
+    dest.write_bytes(content)
+    return {
+        "status": "ok",
+        "file_path": str(dest.resolve()),
+        "filename": file.filename or safe_name,
+    }
+
+
 @app.get("/auth/me", response_model=AuthMeResponse)
 async def auth_me(request: Request):
     ctx = _resolve_request_context(request, require_login=False)
@@ -1009,6 +1119,11 @@ async def auth_me(request: Request):
             workspace_slug=ctx.user.workspace_slug,
         ),
     )
+
+
+@app.get("/capabilities/uploads", response_model=UploadCapabilitiesResponse)
+async def upload_capabilities():
+    return UploadCapabilitiesResponse(**build_upload_capabilities_payload(MAX_UPLOAD_SIZE))
 
 
 @app.get("/auth/feishu/login")
@@ -1405,72 +1520,27 @@ async def upload_file(
     session_id: Optional[str] = Form(None),
     run_id: Optional[str] = Form(None),
 ):
-    """Upload a PDF into the scoped session/run artifact folder with a UUID name."""
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    """Upload a supported document into the scoped session/run artifact folder."""
+    target_dir, _, _, _, _ = _resolve_upload_target_dir(request=request, session_id=session_id, run_id=run_id)
+    return await _store_uploaded_file(file, target_dir)
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large (limit {MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
-        )
 
-    # Backward compatibility: accept scope via query params or headers when
-    # multipart form fields are not provided by the client.
-    effective_session_id = (
-        session_id
-        or request.query_params.get("session_id")
-        or request.headers.get("x-session-id")
-    )
-    effective_run_id = (
-        run_id
-        or request.query_params.get("run_id")
-        or request.headers.get("x-run-id")
-    )
-    ctx = _resolve_request_context(request, require_login=False)
-    active_runs_dir = ctx.workspace.runs_dir if _feishu_oauth_enabled() else RUNS_DIR
-    active_sessions_dir = ctx.workspace.sessions_dir if _feishu_oauth_enabled() else SESSIONS_DIR
+@app.post("/upload/batch", response_model=UploadBatchResponse, dependencies=[Depends(require_auth)])
+async def upload_files(
+    request: Request,
+    files: Optional[List[UploadFile]] = File(default=None),
+    session_id: Optional[str] = Form(None),
+    run_id: Optional[str] = Form(None),
+):
+    """Upload multiple supported documents into the scoped session/run artifact folder."""
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required")
 
-    try:
-        target_dir = _resolve_upload_dir(
-            session_id=effective_session_id,
-            run_id=effective_run_id,
-            runs_dir=active_runs_dir,
-            sessions_dir=active_sessions_dir,
-        )
-    except HTTPException as exc:
-        if exc.status_code == 400 and "session_id or run_id" in str(exc.detail):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "session_id or run_id is required for uploads. "
-                    "Provide one via multipart form field, query param, or "
-                    "x-session-id/x-run-id header."
-                ),
-            )
-        raise
-
-    if _feishu_oauth_enabled() and effective_session_id and not (active_sessions_dir / effective_session_id).exists():
-        raise HTTPException(status_code=404, detail=f"Session {effective_session_id} not found")
-    if _feishu_oauth_enabled() and effective_run_id and _resolve_run_dir(
-        effective_run_id,
-        runs_dir=active_runs_dir,
-        sessions_dir=active_sessions_dir,
-    ) is None:
-        raise HTTPException(status_code=404, detail=f"Run {effective_run_id} not found")
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    safe_name = f"{uuid.uuid4().hex}.pdf"
-    dest = target_dir / safe_name
-    dest.write_bytes(content)
-
-    return {
-        "status": "ok",
-        "file_path": str(dest.resolve()),
-        "filename": file.filename,
-    }
+    target_dir, _, _, _, _ = _resolve_upload_target_dir(request=request, session_id=session_id, run_id=run_id)
+    stored_files: List[Dict[str, str]] = []
+    for file in files:
+        stored_files.append(await _store_uploaded_file(file, target_dir))
+    return UploadBatchResponse(status="ok", files=stored_files)
 
 
 # ============================================================================

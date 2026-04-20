@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from src.upload_capabilities import format_supported_upload_extensions
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +25,22 @@ _BACKTEST_WORKFLOW_RULES = (
     "If you delegate backtest-related work, do not restrict the child to terminal/file-only toolsets; omit toolsets or include the runtime's finance/backtest toolset so the child can call setup_backtest_run(...) and backtest(...).",
 )
 
-_DOCUMENT_WORKFLOW_RULES = (
-    "Refer to the current workspace upload area shown above for all user-provided report paths.",
-    "If the user provides an uploaded PDF reference, prefer read_document(file_path=...) to extract it.",
-    "Never invent a PDF filename; only call read_document when the exact local path is known.",
-    "If the filename is unknown, list the Uploads directory shown above for candidate PDFs before searching elsewhere.",
-    "Never search Desktop, Downloads, /mnt, or other host filesystem locations for uploaded documents.",
-    "If no local path is available, use read_url or browser tools to fetch the report from the source site.",
-    "Prefer reading the first relevant pages first with pages='1-5' when the document is long.",
-    "Treat low-text pages as scanned/image pages; OCR is optional and controlled by HERMES_ENABLE_PDF_OCR.",
-    "Do not claim you cannot read PDFs when read_document is available.",
-)
+def _document_workflow_rules() -> tuple[str, ...]:
+    supported_types = format_supported_upload_extensions()
+    return (
+        "Refer to the current workspace upload area shown above for all user-provided report paths.",
+        f"Uploaded document types accepted by this runtime: {supported_types}.",
+        'For generic document/file-format capability questions or non-PDF office documents, call skill_view(name="ocr-and-documents") before answering from the raw tool list.',
+        "For DOCX, XLSX, or similar local document formats, prefer the relevant loaded skill guidance before concluding whether the runtime can read them.",
+        "If the user provides an uploaded document reference, prefer the relevant reader for that local file path.",
+        "Never invent an uploaded filename; only call a local document reader when the exact local path is known.",
+        "If the filename is unknown, list the Uploads directory shown above for candidate documents before searching elsewhere.",
+        "Never search Desktop, Downloads, /mnt, or other host filesystem locations for uploaded documents.",
+        "If no local path is available, use read_url or browser tools to fetch the report from the source site.",
+        "Prefer reading the first relevant pages first with pages='1-5' when the document is long.",
+        "Treat low-text PDF pages as scanned/image pages; OCR is optional and controlled by HERMES_ENABLE_PDF_OCR.",
+        "Do not claim you cannot read supported uploaded documents when the relevant reader tool or loaded skill is available.",
+    )
 
 _MARKET_DATA_WORKFLOW_RULES = (
     "For finance or research tasks, call skill_view(name=...) first to get approved data access methods and symbol conventions.",
@@ -57,7 +64,7 @@ _MARKET_DATA_WORKFLOW_RULES = (
 
 
 BACKTEST_WORKFLOW_PROMPT = _format_rules("Backtest workflow rules", _BACKTEST_WORKFLOW_RULES)
-DOCUMENT_WORKFLOW_PROMPT = _format_rules("Document workflow rules", _DOCUMENT_WORKFLOW_RULES)
+DOCUMENT_WORKFLOW_PROMPT = _format_rules("Document workflow rules", _document_workflow_rules())
 MARKET_DATA_WORKFLOW_PROMPT = _format_rules("Market data workflow rules", _MARKET_DATA_WORKFLOW_RULES)
 
 OUTPUT_FORMAT_PROMPT = _format_rules(

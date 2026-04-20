@@ -163,3 +163,13 @@ def test_ensure_workspace_does_not_create_plugins_dir(tmp_path: Path):
     paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
 
     assert not (paths.hermes_home / "plugins").exists()
+
+
+def test_ensure_workspace_does_not_create_workspace_uploads_dir(tmp_path: Path):
+    template_hermes_home = tmp_path / "template-hermes"
+    template_hermes_home.mkdir(parents=True)
+
+    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
+
+    assert paths.uploads_dir == paths.agent_root / "uploads"
+    assert not paths.uploads_dir.exists()

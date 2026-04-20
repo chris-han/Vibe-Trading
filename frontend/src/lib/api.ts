@@ -24,6 +24,19 @@ export interface UploadResult {
   filename: string;
 }
 
+export interface UploadBatchResult {
+  status: string;
+  files: UploadResult[];
+}
+
+export interface UploadCapabilities {
+  allowed_extensions: string[];
+  accept: string;
+  max_upload_size_bytes: number;
+  max_upload_size_mb: number;
+  types_summary: string;
+}
+
 async function uploadFile(file: File, sessionId?: string): Promise<UploadResult> {
   if (!sessionId) {
     throw new Error("No active session — please start a conversation before uploading.");
@@ -50,8 +63,38 @@ async function uploadFile(file: File, sessionId?: string): Promise<UploadResult>
   return res.json();
 }
 
+async function uploadFiles(files: File[], sessionId?: string): Promise<UploadBatchResult> {
+  if (!sessionId) {
+    throw new Error("No active session — please start a conversation before uploading.");
+  }
+  if (files.length === 0) {
+    throw new Error("No files selected for upload.");
+  }
+  const form = new FormData();
+  form.append("session_id", sessionId);
+  files.forEach((file) => form.append("files", file));
+  const uploadUrl = `${BASE}/upload/batch?session_id=${encodeURIComponent(sessionId)}`;
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    credentials: "include",
+    headers: { "x-session-id": sessionId },
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      detail = body.detail || body.message || detail;
+    } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export const api = {
   uploadFile,
+  uploadFiles,
+  getUploadCapabilities: () => request<UploadCapabilities>("/capabilities/uploads"),
   getAuthMe: () => request<AuthMeData>("/auth/me"),
   logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
   feishuLoginUrl: () => `${BASE}/auth/feishu/login`,

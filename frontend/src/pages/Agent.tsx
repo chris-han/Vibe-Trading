@@ -7,6 +7,7 @@ import { useSessionsStore } from "@/stores/sessions";
 import { useSSE } from "@/hooks/useSSE";
 import { useI18n } from "@/lib/i18n";
 import { api } from "@/lib/api";
+import type { UploadCapabilities } from "@/lib/api";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
@@ -20,6 +21,11 @@ import { markdownProseClass } from "@/components/common/markdownStyles";
 const SESSION_MESSAGES_PAGE_SIZE = 100;
 const SWARM_TEAM_MODE_MARKER = "[Swarm Team Mode]";
 const SWARM_BADGE = { name: "auto", title: "Agent Swarm" } as const;
+
+type UploadedDocument = {
+  filename: string;
+  filePath: string;
+};
 
 function normalizeSwarmPrompt(rawInput: string) {
   const hasSwarmMarker = rawInput.includes(SWARM_TEAM_MODE_MARKER);
@@ -69,11 +75,12 @@ export function Agent() {
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
 
-  const [attachment, setAttachment] = useState<{ filename: string; filePath: string } | null>(null);
+  const [attachments, setAttachments] = useState<UploadedDocument[]>([]);
   const [uploading, setUploading] = useState(false);
   const [showUploadMenu, setShowUploadMenu] = useState(false);
   const uploadMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadCapabilities, setUploadCapabilities] = useState<UploadCapabilities | null>(null);
   const [swarmPreset, setSwarmPreset] = useState<{ name: string; title: string } | null>(null);
   const swarmCancelRef = useRef(false);
   const [swarmDash, setSwarmDash] = useState<SwarmDashboardProps | null>(null);
@@ -159,6 +166,26 @@ export function Agent() {
       prevSseStatusRef.current = s;
     });
   }, [onStatusChange, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void api.getUploadCapabilities()
+      .then((capabilities) => {
+        if (!cancelled) {
+          setUploadCapabilities(capabilities);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUploadCapabilities(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const doDisconnect = useCallback(() => {
     disconnect();
@@ -656,9 +683,12 @@ export function Agent() {
       }
     }
 
-    if (attachment) {
-      finalPrompt = `[Uploaded file: ${attachment.filename}, path: ${attachment.filePath}]\n\n${finalPrompt}`;
-      setAttachment(null);
+    if (attachments.length > 0) {
+      const uploadedDocumentsBlock = attachments
+        .map((attachment) => `- ${attachment.filename}: ${attachment.filePath}`)
+        .join("\n");
+      finalPrompt = `[Uploaded documents]\n${uploadedDocumentsBlock}\n\n${finalPrompt}`;
+      setAttachments([]);
     }
     setInput("");
     act().addMessage({ id: "", type: "user", content: finalPrompt, timestamp: Date.now() });
@@ -759,30 +789,51 @@ export function Agent() {
   }, [status]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
     e.target.value = "";
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      toast.error("Only PDF files are supported");
+
+    const maxUploadSize = uploadCapabilities?.max_upload_size_bytes ?? 50 * 1024 * 1024;
+    const maxUploadSizeMb = uploadCapabilities?.max_upload_size_mb ?? 50;
+
+    const validFiles = files.filter((file) => {
+      const extension = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "";
+      if (uploadCapabilities && !uploadCapabilities.allowed_extensions.includes(extension)) {
+        toast.error(`Unsupported file type for ${file.name}. Allowed: ${uploadCapabilities.types_summary}`);
+        return false;
+      }
+      if (file.size > maxUploadSize) {
+        toast.error(`${file.name} exceeds the ${maxUploadSizeMb} MB limit`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) {
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      toast.error("File size exceeds 50 MB limit");
-      return;
-    }
+
     setUploading(true);
     setShowUploadMenu(false);
     try {
-      const sid = await ensureSession(file.name);
-      const result = await api.uploadFile(file, sid);
-      setAttachment({ filename: result.filename, filePath: result.file_path });
-      toast.success(`Uploaded: ${result.filename}`);
+      const sid = await ensureSession(validFiles[0].name);
+      const batchResult = await api.uploadFiles(validFiles, sid);
+      const uploadedDocuments: UploadedDocument[] = batchResult.files.map((file) => ({
+        filename: file.filename,
+        filePath: file.file_path,
+      }));
+      setAttachments((current) => [...current, ...uploadedDocuments]);
+      toast.success(
+        uploadedDocuments.length === 1
+          ? `Uploaded: ${uploadedDocuments[0].filename}`
+          : `Uploaded ${uploadedDocuments.length} documents`,
+      );
     } catch (err) {
       toast.error(`Upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setUploading(false);
     }
-  }, [ensureSession]);
+  }, [ensureSession, uploadCapabilities]);
 
   const handleLoadMoreHistory = useCallback(async () => {
     if (!urlSessionId || sessionLoading || loadingMoreHistory) return;
@@ -947,27 +998,33 @@ export function Agent() {
               </span>
             </div>
           )}
-          {/* Attachment badge */}
-          {attachment && (
-            <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-button bg-primary text-primary-foreground text-xs font-medium">
-                <Paperclip className="h-3 w-3" />
-                {attachment.filename}
-                <button type="button" onClick={() => setAttachment(null)} className="hover:text-destructive hover:bg-destructive/20 rounded p-0.5 transition-colors">
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
+          {/* Attachment badges */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              {attachments.map((attachment) => (
+                <span key={attachment.filePath} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-button bg-primary text-primary-foreground text-xs font-medium">
+                  <Paperclip className="h-3 w-3" />
+                  {attachment.filename}
+                  <button
+                    type="button"
+                    onClick={() => setAttachments((current) => current.filter((item) => item.filePath !== attachment.filePath))}
+                    className="hover:text-destructive hover:bg-destructive/20 rounded p-0.5 transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
           {/* Uploading indicator */}
           {uploading && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Uploading...
+              Uploading documents...
             </div>
           )}
           <div className="flex gap-2 items-end">
-            {/* "+" menu: PDF upload + Swarm presets */}
+            {/* "+" menu: document upload + Swarm presets */}
             <div className="relative" ref={uploadMenuRef}>
               <button
                 type="button"
@@ -986,7 +1043,7 @@ export function Agent() {
                     className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
                     <Paperclip className="h-4 w-4" />
-                    Upload PDF document
+                    Upload documents
                   </button>
                   <div className="border-t border-border my-1" />
                   <button
@@ -1007,7 +1064,8 @@ export function Agent() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf"
+              multiple
+              accept={uploadCapabilities?.accept}
               onChange={handleFileSelect}
               className="hidden"
             />
@@ -1044,7 +1102,7 @@ export function Agent() {
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim() && !attachment}
+                disabled={!input.trim() && attachments.length === 0}
                 className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-medium disabled:opacity-40 hover:bg-primary/90 transition-colors flex items-center justify-center"
               >
                 <ArrowUp className="h-4 w-4" />

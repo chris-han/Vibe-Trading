@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src import runtime_prompt_policy
+from src.upload_capabilities import format_supported_upload_extensions
 
 
 def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
@@ -43,6 +44,9 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "Do NOT cd to /workspace or /workspace/run in terminal commands" in prompt
     assert "use the Hermes web_search tool first" in prompt
     assert "use read_url to fetch the full page content" in prompt
+    assert f"Uploaded document types accepted by this runtime: {format_supported_upload_extensions()}." in prompt
+    assert 'skill_view(name="ocr-and-documents")' in prompt
+    assert "For DOCX, XLSX, or similar local document formats" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
     assert prompt.endswith("skill-body-for:web\n")
 

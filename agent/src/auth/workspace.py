@@ -216,7 +216,6 @@ def ensure_workspace(
         paths.hermes_home,
         paths.sessions_dir,
         paths.runs_dir,
-        paths.uploads_dir,
         paths.swarm_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)

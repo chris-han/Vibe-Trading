@@ -78,8 +78,8 @@ const CATEGORIES: Category[] = [
     color: "text-blue-400 border-blue-500/30 hover:border-blue-500/60 hover:bg-blue-500/5",
     examples: [
       {
-        title: "Analyze an Earnings Report PDF",
-        desc: "Upload a PDF and ask questions about the financials",
+        title: "Analyze an Earnings Report",
+        desc: "Upload a document and ask questions about the financials",
         prompt: "Summarize the key financial metrics, risks, and outlook from the uploaded earnings report",
       },
       {
@@ -100,7 +100,7 @@ const CAPABILITY_CHIPS = [
   "4 Portfolio Optimizers",
   "15+ Risk Metrics",
   "Options & Derivatives",
-  "PDF & Web Research",
+  "Documents & Web Research",
   "Factor Analysis & ML",
 ];
 
