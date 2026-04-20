@@ -312,8 +312,26 @@ Edit `agent/.env`:
 | `LANGCHAIN_MODEL_NAME` | Yes | Model name (e.g. `deepseek/deepseek-v3.2`) |
 | `TUSHARE_TOKEN` | A-shares only | Tushare Pro token for A-share data |
 | `TIMEOUT_SECONDS` | No | Agent timeout, default 2400s |
+| `FEISHU_OAUTH_ENABLED` | No | Set to `true` to enable Feishu login |
+| `FEISHU_APP_ID` | Feishu only | Feishu App ID (Developer Console) |
+| `FEISHU_APP_SECRET` | Feishu only | Feishu App Secret (Developer Console) |
+| `FEISHU_SESSION_SECRET`| Feishu only | Random string for signing auth sessions |
 
 **Free data (no key needed):** HK/US equities via yfinance, crypto via OKX public API.
+
+---
+
+## 🔑 Feishu Setup (Optional)
+
+To enable Feishu login and per-user isolated workspaces:
+
+1.  **Create App**: Create a "Custom App" on the [Feishu Open Platform](https://open.feishu.cn/app).
+2.  **Redirect URL**: In **Security Settings**, add: `https://your-domain.com/auth/feishu/callback` (or `http://localhost:8899/auth/feishu/callback` for local testing).
+3.  **Bot Capability**: Enable the **Bot** feature if you want to use the Feishu messenger integration.
+4.  **Credentials**: Copy the App ID and App Secret to your `.env` file.
+5.  **Session Secret**: Generate a long random string for `FEISHU_SESSION_SECRET` to secure your login cookies.
+
+Vibe-Trading automatically handles `X-Forwarded-Proto` and `X-Forwarded-Host` headers, so it correctly infers the redirect URI even behind proxies like Cloudflare or Nginx.
 
 ---
 
