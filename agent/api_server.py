@@ -599,6 +599,23 @@ def _load_csv_to_dict(path: Path, limit: Optional[int] = None) -> List[Dict[str,
         return []
 
 
+def _get_env_float(name: str, default: float) -> float:
+    """Parse a float env var while tolerating empty or invalid values."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return float(raw_value.strip() or default)
+    except (TypeError, ValueError):
+        logging.getLogger(__name__).warning(
+            "Invalid float for %s=%r; using default %s",
+            name,
+            raw_value,
+            default,
+        )
+        return default
+
+
 
 def _build_response_from_run_dir(run_dir: Path, elapsed: float, *, include_analysis: bool = False) -> RunResponse:
     """Build a run response from a persisted run directory."""
@@ -1474,7 +1491,7 @@ _FEISHU_BASE_URL = (
 _FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
 _FEISHU_STREAM_UPDATE_INTERVAL_SECONDS = max(
     0.2,
-    float(os.getenv("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", 0.35)),
+    _get_env_float("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", 0.35),
 )
 _FEISHU_TOKEN_CACHE: Dict[str, Any] = {"token": "", "expires_at": 0.0}
 _feishu_logger = logging.getLogger("feishu.webhook")
