@@ -4,7 +4,7 @@ services:
     container_name: vibe-trading
     working_dir: /app
     env_file:
-      - ${VIBE_TRADING_ENV_FILE:-agent/.env}
+      - .env
     build:
       context: .
       dockerfile: Dockerfile
