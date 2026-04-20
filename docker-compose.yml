@@ -4,10 +4,7 @@ services:
     container_name: vibe-trading
     working_dir: /app
     env_file:
-      - path: .env
-        required: false
-      - path: agent/.env
-        required: false
+      - ${VIBE_TRADING_ENV_FILE:-agent/.env}
     build:
       context: .
       dockerfile: Dockerfile
