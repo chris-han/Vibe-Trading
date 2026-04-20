@@ -1,9 +1,13 @@
 services:
   vibe-trading:
+    image: semantier:vibe-trading
     container_name: vibe-trading
     working_dir: /app
     env_file:
-      - agent/.env
+      - path: .env
+        required: false
+      - path: agent/.env
+        required: false
     build:
       context: .
       dockerfile: Dockerfile
