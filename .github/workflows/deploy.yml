@@ -11,4 +11,8 @@ jobs:
     steps:
       - name: Trigger Dokploy Rebuild
         run: |
-          curl -X POST "https://docker.semantier.com/api/deploy/compose/sOo6yxOPEJgNNOrdVfyt7?branch=${{ github.ref_name }}"
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -d '{"ref": "${{ github.ref }}", "repository": {"full_name": "${{ github.repository }}"}}' \
+            "https://docker.semantier.com/api/deploy/compose/sOo6yxOPEJgNNOrdVfyt7"
