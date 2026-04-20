@@ -342,6 +342,11 @@ Deployment is handled by **Dokploy** using a Docker Compose stack on the product
 - Dokploy deploys the `vibe-trading` service and publishes the backend on host port **8899** (container: 8899 -> host: 8899).
 - Public ingress is provided by a **Cloudflare Tunnel (cloudflared)** instance that forwards the public hostname (for example `app.semantier.com`) to `localhost:8899` on the Dokploy host.
 - There is currently **no Traefik** proxy or listener on host port 80 on the production host; attempts to reach `localhost:80` will return connection refused.
+- change the env in dokploy to 
+```FEISHU_OAUTH_REDIRECT_URI=https://app.semantier.com/auth/feishu/callback ```
+from 
+```FEISHU_OAUTH_REDIRECT_URI=http://localhost:8899/auth/feishu/callback```
+
 
 Recommendation:
 
