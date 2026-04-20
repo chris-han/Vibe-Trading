@@ -60,3 +60,5 @@ auth.sqlite3
 workspaces/
 
 agent/.auth/auth.sqlite3
+temp_val_venv/
+temp_venv/

@@ -55,7 +55,8 @@ RUN chmod +x /app/docker-entrypoint.sh && mkdir -p /app/agent/.hermes /app/works
 COPY --from=frontend-build /app/frontend/dist frontend/dist
 
 # Install Hermes runtime and app entrypoint
-RUN pip install --no-cache-dir -e /app/hermes-agent \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -e /app/hermes-agent \
     && pip install --no-cache-dir -e .
 
 # Default port

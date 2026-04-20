@@ -1,9 +1,0 @@
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0HTTP/1.1 405 Method Not Allowed
-date: Sat, 18 Apr 2026 12:06:47 GMT
-server: uvicorn
-content-length: 31
-content-type: application/json
-
-{"detail":"Method Not Allowed"}100   109  100    31  100    78   9149  23022 --:--:-- --:--:-- --:--:-- 36333

@@ -13,25 +13,29 @@ import logging
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
+from pathlib import Path
 
-from src.runtime_prompt_policy import (
-    SESSION_VIRTUAL_ARTIFACTS_DIR,
-    SESSION_VIRTUAL_RUN_DIR,
-    SESSION_VIRTUAL_WORKSPACE_ROOT,
-    build_session_runtime_prompt,
-)
 from src.ui_services import expand_artifact_markdown
+from src.runtime_prompt_policy import (
+    BACKTEST_WORKFLOW_PROMPT,
+    OUTPUT_FORMAT_PROMPT,
+    DOCUMENT_WORKFLOW_PROMPT,
+    MARKET_DATA_WORKFLOW_PROMPT,
+    build_session_runtime_prompt,
+    load_output_format_skill,
+)
 
 logger = logging.getLogger(__name__)
 
-_PLAIN_CODE_FENCE_RE = re.compile(r"```[ \t]*\n(.*?)\n```", re.DOTALL)
-_BOX_DRAWING_RE = re.compile(r"[┌┐└┘├┤┬┴┼│─╭╮╰╯╞╡╔╗╚╝═║]")
-_MARKDOWN_HEADING_RE = re.compile(r"^##\s+", re.MULTILINE)
-
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
+
+_BACKTEST_WORKFLOW_PROMPT = BACKTEST_WORKFLOW_PROMPT
+_DOCUMENT_WORKFLOW_PROMPT = DOCUMENT_WORKFLOW_PROMPT
+_MARKET_DATA_WORKFLOW_PROMPT = MARKET_DATA_WORKFLOW_PROMPT
+_OUTPUT_FORMAT_PROMPT = OUTPUT_FORMAT_PROMPT
+_load_output_format_skill = load_output_format_skill
 
 
 from runtime_env import ensure_runtime_env, get_hermes_agent_kwargs, prepare_hermes_project_context
@@ -57,8 +61,6 @@ class SessionService:
         event_bus: SSE event bus.
         runs_dir: Root runs directory.
     """
-
-    _REPORTABLE_TOOL_NAMES = frozenset({"read_document"})
 
     def __init__(
         self,
@@ -666,20 +668,11 @@ class SessionService:
         _HERMES = Path(__file__).resolve().parents[3] / "hermes-agent"
         if str(_HERMES) not in sys.path:
             sys.path.insert(0, str(_HERMES))
-        from hermes_constants import reset_active_hermes_home, set_active_hermes_home
-
-        hermes_home = self.runs_dir.parent / ".hermes"
-        _hermes_home_token = set_active_hermes_home(hermes_home)
-        try:
-            from run_agent import AIAgent
-            from src.core.state import RunStateStore
-        except Exception:
-            reset_active_hermes_home(_hermes_home_token)
-            raise
+        from run_agent import AIAgent
+        from src.core.state import RunStateStore
 
         sid = attempt.session_id
         attempt_id = attempt.attempt_id
-        session_channel = str((self.store.get_session(sid) or Session()).config.get("channel", "")).strip().lower()
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None
@@ -704,7 +697,7 @@ class SessionService:
             args: Optional[dict] = None,
             **kwargs,
         ) -> None:
-            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output, saw_reportable_tool_run
+            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output
             if event_type == "tool.started":
                 if tool_name == "backtest":
                     started_run_dir = str((args or {}).get("run_dir") or "").strip()
@@ -756,9 +749,6 @@ class SessionService:
                 except Exception:
                     parsed_result = None
 
-                if not is_error and tool_name in self._REPORTABLE_TOOL_NAMES:
-                    saw_reportable_tool_run = True
-
                 if not is_error and parsed_result:
                     if tool_name == "setup_backtest_run":
                         saw_reportable_tool_run = True
@@ -769,8 +759,6 @@ class SessionService:
                         if parsed_result.get("status") == "ok" and resolved:
                             latest_backtest_run_dir = str(resolved)
                     elif tool_name == "run_swarm":
-                        saw_reportable_tool_run = True
-                    elif self._is_reportable_tool_result(tool_name, parsed_result):
                         saw_reportable_tool_run = True
 
                 if not is_error:
@@ -858,23 +846,38 @@ class SessionService:
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
 
-        # Scope built-in file/terminal tools to the active workspace root rather
-        # than the repo-local default agent/ directory. For authenticated web
-        # sessions this keeps uploads, sessions, and runs under the current
-        # workspace readable on the first turn.
-        prepare_hermes_project_context(chdir=False)
-        file_root = self.runs_dir.parent.resolve()
+        # Configure terminal/file tool root via env var and per-session task
+        # override so every session starts in agent/ rather than the full repo
+        # root. This prevents search_files from crawling hermes-agent/ and other
+        # top-level sibling directories.
+        #
+        # TERMINAL_CWD is the global fallback; register_task_env_overrides pins
+        # the exact session-scoped cwd in Hermes' tool layer so that file ops
+        # and terminal commands resolve relative paths without any absolute path
+        # being injected via the prompt. The Vibe-Trading plugin loads through
+        # the installed Hermes entry-point package, so cwd is not part of
+        # plugin discovery.
+        repo_root = prepare_hermes_project_context(chdir=False)
+        agent_root = repo_root / "agent"
+
+        # TERMINAL_CWD may be set in .env as a relative path (e.g. a username
+        # like 'chris'). Resolve it against agent_root so the tool layer always
+        # receives an absolute path.
+        _raw_cwd = os.getenv("TERMINAL_CWD", "")
+        if _raw_cwd and not os.path.isabs(_raw_cwd):
+            file_root = (agent_root / _raw_cwd).resolve()
+        elif _raw_cwd:
+            file_root = Path(_raw_cwd).resolve()
+        else:
+            file_root = agent_root
+        # Ensure the directory exists so Hermes doesn't reject it.
         file_root.mkdir(parents=True, exist_ok=True)
 
         try:
             from tools.terminal_tool import register_task_env_overrides
             register_task_env_overrides(sid, {
                 "cwd": str(file_root),
-                "safe_read_root": str(file_root),
                 "safe_write_root": str(file_root),
-                "display_cwd": SESSION_VIRTUAL_WORKSPACE_ROOT,
-                "display_safe_read_root": SESSION_VIRTUAL_WORKSPACE_ROOT,
-                "display_safe_write_root": SESSION_VIRTUAL_WORKSPACE_ROOT,
             })
         except Exception:
             pass  # Non-fatal: TERMINAL_CWD env-var fallback still applies
@@ -905,13 +908,9 @@ class SessionService:
             ephemeral_system_prompt=build_session_runtime_prompt(
                 str(run_dir),
                 sid,
-                session_channel,
-                display_workspace_root=SESSION_VIRTUAL_WORKSPACE_ROOT,
-                display_run_dir=SESSION_VIRTUAL_RUN_DIR,
-                display_artifacts_dir=SESSION_VIRTUAL_ARTIFACTS_DIR,
+                (self.store.get_session(sid) or Session()).config.get("channel", ""),
             ),
             skip_context_files=True,
-            ack_continuation="aggressive",
             **agent_kwargs,
         )
         self._active_loops[sid] = agent
@@ -928,11 +927,7 @@ class SessionService:
             from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
             register_task_env_overrides(sid, {
                 "cwd": str(run_dir / "artifacts"),
-                "safe_read_root": str(file_root),
                 "safe_write_root": str(run_dir),
-                "display_cwd": SESSION_VIRTUAL_ARTIFACTS_DIR,
-                "display_safe_read_root": SESSION_VIRTUAL_WORKSPACE_ROOT,
-                "display_safe_write_root": SESSION_VIRTUAL_RUN_DIR,
             })
             _hermes_overrides_set = True
         except Exception:
@@ -958,7 +953,11 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
-            final_text = self._normalize_channel_output(final_text, session_channel)
+            if final_text and saw_reportable_tool_run:
+                try:
+                    (run_dir / "report.md").write_text(final_text, encoding="utf-8")
+                except Exception:
+                    logger.warning("Failed to persist report.md for run_dir=%s", run_dir, exc_info=True)
             state_store.mark_success(run_dir)
             result: Dict[str, Any] = {
                 "status": "success",
@@ -977,7 +976,6 @@ class SessionService:
                 "run_id": run_dir.name,
             }
         finally:
-            reset_active_hermes_home(_hermes_home_token)
             reset_session_runs_dir(_runs_token)
             if _swarm_token is not None:
                 reset_session_swarm_dir(_swarm_token)
@@ -1003,16 +1001,6 @@ class SessionService:
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics
-        should_persist_report = result.get("status") == "success" and final_text and (
-            saw_reportable_tool_run or self._looks_like_report_output(final_text)
-        )
-        if should_persist_report:
-            report_dir = Path(str(result.get("run_dir") or run_dir))
-            try:
-                report_dir.mkdir(parents=True, exist_ok=True)
-                (report_dir / "report.md").write_text(final_text, encoding="utf-8")
-            except Exception:
-                logger.warning("Failed to persist report.md for run_dir=%s", report_dir, exc_info=True)
         result["has_run_artifact"] = self._has_run_artifact(
             result.get("run_dir"),
             result.get("metrics"),
@@ -1041,16 +1029,6 @@ class SessionService:
             base / "artifacts" / "metrics.csv",
         ]
         return any(path.exists() and path.is_file() for path in artifact_paths)
-
-    @staticmethod
-    def _looks_like_report_output(text: str) -> bool:
-        """Return whether final output is structured enough to merit report persistence."""
-        body = str(text or "").strip()
-        if len(body) < 500:
-            return False
-        heading_count = len(_MARKDOWN_HEADING_RE.findall(body))
-        has_table = "|---" in body or "|------" in body
-        return heading_count >= 2 and has_table
 
     @staticmethod
     def _convert_messages_to_history(messages: list) -> list[Dict[str, Any]]:
@@ -1096,20 +1074,6 @@ class SessionService:
             trimmed.append(msg)
             total_chars += msg_len
         return list(reversed(trimmed))
-
-    @staticmethod
-    def _normalize_channel_output(text: str, channel: str) -> str:
-        """Apply narrow channel-specific cleanup to final assistant output."""
-        if not text or str(channel or "").strip().lower() != "feishu":
-            return text
-
-        def _replace_plain_fence(match: re.Match[str]) -> str:
-            body = match.group(1)
-            if not _BOX_DRAWING_RE.search(body):
-                return match.group(0)
-            return body.strip("\n")
-
-        return _PLAIN_CODE_FENCE_RE.sub(_replace_plain_fence, text)
 
     @staticmethod
     def _load_metrics(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -1165,19 +1129,6 @@ class SessionService:
             return clean_preview[:4000]
 
         return ""
-
-    @classmethod
-    def _is_reportable_tool_result(
-        cls,
-        tool_name: str,
-        parsed_result: Optional[Dict[str, Any]],
-    ) -> bool:
-        """Return whether a successful tool result should persist a report."""
-        if tool_name not in cls._REPORTABLE_TOOL_NAMES:
-            return False
-        if not isinstance(parsed_result, dict):
-            return False
-        return str(parsed_result.get("status") or "").strip().lower() == "ok"
 
     @staticmethod
     def _format_result_message(attempt: Attempt) -> str:

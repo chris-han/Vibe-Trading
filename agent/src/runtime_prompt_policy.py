@@ -15,7 +15,8 @@ def _format_rules(title: str, rules: tuple[str, ...]) -> str:
 
 _BACKTEST_WORKFLOW_RULES = (
     "If the user asks for a new backtest or strategy test, do NOT call backtest(run_dir=...) first.",
-    'First call load_skill("strategy-generate") when you need the SignalEngine contract.',
+    'First call skill_view(name="strategy-generate") when you need the SignalEngine contract.',
+    "Pass config_json and signal_engine_py directly to setup_backtest_run(...); do not manually create run directories or write the run files yourself.",
     "Only after setup_backtest_run succeeds, call backtest(run_dir=...).",
     "If a backtest fails because generated strategy code is wrong, prefer a fresh setup_backtest_run(...) before retrying.",
 )
@@ -33,7 +34,7 @@ _DOCUMENT_WORKFLOW_RULES = (
 )
 
 _MARKET_DATA_WORKFLOW_RULES = (
-    "For finance or research tasks, call load_skill first to get approved data access methods and symbol conventions.",
+    "For finance or research tasks, call skill_view(name=...) first to get approved data access methods and symbol conventions.",
     "For creating, editing, patching, or deleting skills, use skill_manage instead of general file-editing tools.",
     "User-generated skills belong in the active workspace HERMES_HOME/skills directory, not in the current run or artifacts directory.",
     "Do not create or modify files under .hermes/skills directly with general file-editing tools; relative .hermes/skills paths resolve inside the active run/artifacts sandbox.",
@@ -47,8 +48,8 @@ _MARKET_DATA_WORKFLOW_RULES = (
     "For package installs, use python3 -m pip. Do NOT call pip/pip3 directly.",
     "Do NOT embed long Python programs directly in bash commands.",
     "The terminal already starts inside the run artifacts directory; prefer relative paths over any cd command.",
-    "Treat /workspace as a read-only workspace alias for locating inputs. Do NOT cd to /workspace for execution.",
-    "When a command needs an explicit writable path, use /workspace/run or a relative path under the current cwd.",
+    "Treat /workspace and /workspace/run as display aliases for file-style tools, not terminal cwd targets.",
+    "Do NOT cd to /workspace or /workspace/run in terminal commands; use relative paths from the current cwd instead.",
     "If an external endpoint or symbol looks suspicious, validate it against the loaded skill before using it.",
 )
 
@@ -115,8 +116,8 @@ def build_session_runtime_prompt(
         f"Run directory: {visible_run_dir}\n"
         f"Artifacts directory: {visible_artifacts_dir}\n"
         f"Uploads directory: {visible_uploads_dir}\n"
-        "Use relative paths for terminal work unless you need an explicit virtual session path.\n"
-        "Use /workspace only for reading shared session inputs, and use /workspace/run only for explicit writable locations.\n"
+        "Use relative paths for terminal work.\n"
+        "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
         "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"
         f"{BACKTEST_WORKFLOW_PROMPT}"

@@ -21,21 +21,26 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
         "Run directory: /tmp/run-123\n"
         "Artifacts directory: /tmp/run-123/artifacts\n"
         "Uploads directory: /workspace/sessions/session-abc/uploads\n"
-        "Use relative paths for terminal work unless you need an explicit virtual session path.\n"
-        "Use /workspace only for reading shared session inputs, and use /workspace/run only for explicit writable locations.\n"
+        "Use relative paths for terminal work.\n"
+        "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
         "Do not rely on host absolute paths.\n"
         "Session: session-abc\n"
     )
     assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
     assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
+    assert 'skill_view(name="strategy-generate")' in prompt
+    assert "Pass config_json and signal_engine_py directly to setup_backtest_run(...)" in prompt
+    assert "call skill_view(name=...) first" in prompt
+    assert "load_skill(\"strategy-generate\")" not in prompt
     assert "use skill_manage instead of general file-editing tools" in prompt
     assert "active workspace HERMES_HOME/skills directory" in prompt
     assert "relative .hermes/skills paths resolve inside the active run/artifacts sandbox" in prompt
     assert "use python3 from the preconfigured session environment" in prompt
     assert "Do NOT assume .venv exists under the current run directory" in prompt
     assert "The terminal already starts inside the run artifacts directory" in prompt
-    assert "Do NOT cd to /workspace" in prompt
+    assert "Treat /workspace and /workspace/run as display aliases for file-style tools" in prompt
+    assert "Do NOT cd to /workspace or /workspace/run in terminal commands" in prompt
     assert "use the Hermes web_search tool first" in prompt
     assert "use read_url to fetch the full page content" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt

@@ -138,11 +138,13 @@ class SignalEngine:
 
 ## Workflow
 
-1. **Setup**: Use `setup_backtest_run()` with appropriate config
-2. **Signal Engine**: Implement weight logic directly (don't rely on optimizers for mixed assets)
-3. **Run**: Call `backtest(run_dir=...)`
-4. **Validate**: Check `artifacts/positions.csv` for actual weight allocation
-5. **Analyze**: Read `artifacts/metrics.csv` and `artifacts/equity.csv`
+1. **Load guidance**: Call `skill_view(name="strategy-generate")` first if you need the SignalEngine contract or working templates
+2. **Setup**: Use `setup_backtest_run(config_json=..., signal_engine_py=...)` with both payloads provided directly
+3. **Do not scaffold manually**: Do not create run directories yourself and do not write `config.json` or `code/signal_engine.py` with general file tools for a new mixed-asset backtest
+4. **Signal Engine**: Implement weight logic directly in the `signal_engine_py` payload (don't rely on optimizers for mixed assets)
+5. **Run**: Call `backtest(run_dir=...)`
+6. **Validate**: Check `artifacts/positions.csv` for actual weight allocation
+7. **Analyze**: Read `artifacts/metrics.csv` and `artifacts/equity.csv`
 
 ## Individual Asset Returns
 
@@ -188,6 +190,8 @@ for f in sorted(files):
 ```
 
 **Note**: Set `optimizer: null` and implement weights in signal_engine.py for mixed portfolios.
+
+For new runs, send that config and strategy code straight into `setup_backtest_run(...)` instead of patching files into place afterward.
 
 ## Verification Checklist
 

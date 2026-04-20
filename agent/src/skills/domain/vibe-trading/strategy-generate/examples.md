@@ -5,7 +5,7 @@
 User: "用000001.SZ做双均线金叉策略，短期5日长期20日，回测2024年"
 
 Tool call sequence:
-1. load_skill("strategy-generate") → 获得工作流指引
+1. skill_view(name="strategy-generate") → 获得工作流指引
 2. setup_backtest_run(config_json=..., signal_engine_py=...) → 一次性创建运行目录并写入配置与策略代码
    ```json
    {
@@ -23,7 +23,7 @@ Tool call sequence:
 User: "Build RSI strategy on AAPL, buy when RSI<30 sell when RSI>70, backtest 2024"
 
 Tool call sequence:
-1. load_skill("strategy-generate") → 获得工作流指引
+1. skill_view(name="strategy-generate") → 获得工作流指引
 2. setup_backtest_run(config_json=..., signal_engine_py=...) → 创建运行目录与代码
    ```json
    {
@@ -41,7 +41,7 @@ Tool call sequence:
 User: "BTC-USDT趋势跟踪策略，回测2024年"
 
 Tool call sequence:
-1. load_skill("strategy-generate") → 获得工作流指引
+1. skill_view(name="strategy-generate") → 获得工作流指引
 2. setup_backtest_run(config_json=..., signal_engine_py=...) → 创建运行目录与代码
    ```json
    {

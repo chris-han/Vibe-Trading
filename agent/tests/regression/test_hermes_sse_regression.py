@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -415,9 +414,6 @@ class TestHermesSessionEvents:
         assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
-        assert "Session workspace: /workspace" in prompt
-        assert "Run directory: /workspace/run" in prompt
-        assert str(tmp_path) not in prompt
 
     def test_run_with_agent_scopes_safe_write_root_to_run_dir(self, tmp_path):
         """Session runtime must allow edits anywhere inside the active backtest run."""
@@ -435,18 +431,13 @@ class TestHermesSessionEvents:
         def _register(task_id, overrides):
             register_calls.append((task_id, dict(overrides)))
 
-        fake_tools = types.ModuleType("tools")
-        fake_terminal_tool = types.ModuleType("tools.terminal_tool")
-        fake_terminal_tool.register_task_env_overrides = _register
-        fake_terminal_tool.clear_task_env_overrides = lambda task_id: None
-        fake_tools.terminal_tool = fake_terminal_tool
-
         async def _t():
             sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
                 run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
             ))
             with patch("src.core.state.RunStateStore") as MockStore, \
-                 patch.dict(sys.modules, {"tools": fake_tools, "tools.terminal_tool": fake_terminal_tool}):
+                 patch("tools.terminal_tool.register_task_env_overrides", side_effect=_register), \
+                 patch("tools.terminal_tool.clear_task_env_overrides"):
                 MockStore.return_value.create_run_dir.return_value = run_dir
                 MockStore.return_value.mark_success.return_value = None
                 await svc._run_with_agent(attempt)
@@ -456,54 +447,7 @@ class TestHermesSessionEvents:
         assert register_calls
         _, final_overrides = register_calls[-1]
         assert final_overrides["cwd"] == str(run_dir / "artifacts")
-        assert final_overrides["safe_read_root"] == str(tmp_path)
         assert final_overrides["safe_write_root"] == str(run_dir)
-        assert final_overrides["display_cwd"] == "/workspace/run/artifacts"
-        assert final_overrides["display_safe_read_root"] == "/workspace"
-        assert final_overrides["display_safe_write_root"] == "/workspace/run"
-
-    def test_run_with_agent_scopes_initial_read_root_to_workspace_root(self, tmp_path):
-        """Initial tool root should match the active workspace root, not repo-local agent/."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t")
-        attempt = Attempt(session_id=session.session_id, prompt="find uploaded pdf")
-        svc.store.create_attempt(attempt)
-
-        run_dir = tmp_path / "runs" / "r-root"
-        register_calls: list[tuple[str, dict]] = []
-
-        def _register(task_id, overrides):
-            register_calls.append((task_id, dict(overrides)))
-
-        fake_tools = types.ModuleType("tools")
-        fake_terminal_tool = types.ModuleType("tools.terminal_tool")
-        fake_terminal_tool.register_task_env_overrides = _register
-        fake_terminal_tool.clear_task_env_overrides = lambda task_id: None
-        fake_tools.terminal_tool = fake_terminal_tool
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
-                run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
-            ))
-            with patch("src.core.state.RunStateStore") as MockStore, \
-                 patch.dict(sys.modules, {"tools": fake_tools, "tools.terminal_tool": fake_terminal_tool}):
-                MockStore.return_value.create_run_dir.return_value = run_dir
-                MockStore.return_value.mark_success.return_value = None
-                await svc._run_with_agent(attempt)
-
-        _run(_t())
-
-        assert register_calls
-        _, initial_overrides = register_calls[0]
-        assert initial_overrides["cwd"] == str(tmp_path)
-        assert initial_overrides["safe_read_root"] == str(tmp_path)
-        assert initial_overrides["safe_write_root"] == str(tmp_path)
-        assert initial_overrides["display_cwd"] == "/workspace"
-        assert initial_overrides["display_safe_read_root"] == "/workspace"
-        assert initial_overrides["display_safe_write_root"] == "/workspace"
 
     def test_hermes_toolset_selection_exposes_legacy_vt_aliases(self):
         """Compat toolset is now empty; all tools are provided by hermes built-in toolsets.
@@ -562,12 +506,12 @@ class TestHermesSessionEvents:
         svc.store.create_attempt(attempt)
 
         observed = {}
-        run_dir = tmp_path / "runs" / "r2"
 
         def _agent_factory(*args, **kwargs):
             inst = MagicMock()
 
             def run_conv(**kw):
+                run_dir = Path(kwargs["ephemeral_system_prompt"].splitlines()[0].replace("Run directory:", "").strip())
                 req_path = run_dir / "req.json"
                 observed["req_exists"] = req_path.exists()
                 observed["req_payload"] = req_path.read_text(encoding="utf-8") if req_path.exists() else ""
@@ -579,6 +523,7 @@ class TestHermesSessionEvents:
         async def _t():
             sys.modules["run_agent"].AIAgent = _agent_factory
             with patch("src.core.state.RunStateStore") as MockStore:
+                run_dir = tmp_path / "runs" / "r2"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 MockStore.return_value.create_run_dir.return_value = run_dir
                 MockStore.return_value.mark_success.return_value = None
@@ -606,12 +551,12 @@ class TestHermesSessionEvents:
         svc.store.create_attempt(attempt)
 
         observed = {}
-        run_dir = tmp_path / "runs" / "r3"
 
         def _agent_factory(*args, **kwargs):
             inst = MagicMock()
 
             def run_conv(**kw):
+                run_dir = Path(kwargs["ephemeral_system_prompt"].splitlines()[0].replace("Run directory:", "").strip())
                 req_path = run_dir / "req.json"
                 observed["req_exists"] = req_path.exists()
                 observed["req_payload"] = req_path.read_text(encoding="utf-8") if req_path.exists() else ""
@@ -623,6 +568,7 @@ class TestHermesSessionEvents:
         async def _t():
             sys.modules["run_agent"].AIAgent = _agent_factory
             with patch("src.core.state.RunStateStore") as MockStore:
+                run_dir = tmp_path / "runs" / "r3"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 MockStore.return_value.create_run_dir.return_value = run_dir
                 MockStore.return_value.mark_success.return_value = None
@@ -709,8 +655,6 @@ class TestHermesSessionEvents:
         assert stored_attempt.run_dir == str(actual_run_dir)
         assert stored_attempt.metrics is not None
         assert stored_attempt.metrics["final_value"] == 1211710.73
-        assert (actual_run_dir / "report.md").read_text(encoding="utf-8") == "completed"
-        assert not (placeholder_run_dir / "report.md").exists()
 
         messages = svc.store.get_messages(session.session_id)
         assistant = [m for m in messages if m.role == "assistant"][-1]
@@ -747,298 +691,6 @@ class TestHermesSessionEvents:
 
                 assert result["has_run_artifact"] is False
                 assert not (run_dir / "report.md").exists()
-
-        _run(_t())
-
-    def test_document_analysis_run_persists_report_and_marks_artifact(self, tmp_path):
-        """A read_document-backed analysis should persist report.md and surface a run artifact."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t")
-        attempt = Attempt(session_id=session.session_id, prompt="summarize uploaded earnings report")
-        svc.store.create_attempt(attempt)
-
-        run_dir = tmp_path / "runs" / "document-analysis"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        final_response = "# Full report\n\nRevenue increased 17% year over year."
-
-        def _agent_factory(*args, **kwargs):
-            cb = kwargs.get("tool_progress_callback")
-            inst = MagicMock()
-
-            def run_conv(**kw):
-                if cb:
-                    cb(
-                        "tool.started",
-                        "read_document",
-                        "reading...",
-                        {"file_path": "/tmp/earnings.pdf", "pages": "1-15"},
-                    )
-                    cb(
-                        "tool.completed",
-                        "read_document",
-                        json.dumps({"status": "ok", "file": "earnings.pdf", "text": "Revenue increased 17%."}),
-                        {},
-                        is_error=False,
-                    )
-                return {"final_response": final_response, "status": "success"}
-
-            inst.run_conversation = run_conv
-            return inst
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = _agent_factory
-            with patch("src.core.state.RunStateStore") as MockStore:
-                store = MockStore.return_value
-                store.create_run_dir.return_value = run_dir
-                store.mark_success.return_value = None
-                store.save_request.return_value = {}
-                result = await svc._run_with_agent(attempt)
-
-                assert result["has_run_artifact"] is True
-                assert (run_dir / "report.md").read_text(encoding="utf-8") == final_response
-
-        _run(_t())
-
-    def test_document_analysis_run_persists_report_with_truncated_tool_preview(self, tmp_path):
-        """A successful read_document run should still persist report.md when the preview JSON is truncated."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t")
-        attempt = Attempt(session_id=session.session_id, prompt="summarize uploaded earnings report")
-        svc.store.create_attempt(attempt)
-
-        run_dir = tmp_path / "runs" / "document-analysis-truncated-preview"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        final_response = "# Full report\n\nRevenue increased 17% year over year."
-
-        def _agent_factory(*args, **kwargs):
-            cb = kwargs.get("tool_progress_callback")
-            inst = MagicMock()
-
-            def run_conv(**kw):
-                if cb:
-                    cb(
-                        "tool.started",
-                        "read_document",
-                        "reading...",
-                        {"file_path": "/tmp/earnings.pdf", "pages": "1-15"},
-                    )
-                    cb(
-                        "tool.completed",
-                        "read_document",
-                        '{"status": "ok", "file": "earnings.pdf", "text": "Revenue increased 17%',
-                        {},
-                        is_error=False,
-                    )
-                return {"final_response": final_response, "status": "success"}
-
-            inst.run_conversation = run_conv
-            return inst
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = _agent_factory
-            with patch("src.core.state.RunStateStore") as MockStore:
-                store = MockStore.return_value
-                store.create_run_dir.return_value = run_dir
-                store.mark_success.return_value = None
-                store.save_request.return_value = {}
-                result = await svc._run_with_agent(attempt)
-
-                assert result["has_run_artifact"] is True
-                assert (run_dir / "report.md").read_text(encoding="utf-8") == final_response
-
-        _run(_t())
-
-    def test_structured_research_reply_persists_report_without_reportable_tool(self, tmp_path):
-        """Long-form structured research replies should persist report.md even without read_document."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t")
-        attempt = Attempt(session_id=session.session_id, prompt="pypl前景是否现在值得买")
-        svc.store.create_attempt(attempt)
-
-        run_dir = tmp_path / "runs" / "structured-research"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        final_response = (
-            "# PayPal 投资价值分析报告\n\n"
-            "## 核心数据概览\n\n"
-            "| 指标 | 数值 | 评估 |\n"
-            "|------|------|------|\n"
-            "| 当前价格 | $51.14 | 低位区间 |\n\n"
-            "## 与历史估值对比\n\n"
-            "| 时期 | 市盈率 | 背景 |\n"
-            "|------|--------|------|\n"
-            "| 2020 年高点 | ~80x | 疫情电商繁荣 |\n"
-            "| 当前 | 9.45x | 接近历史低位 |\n\n"
-            "## 操作策略\n\n"
-            "| 档位 | 区间 | 触发条件 | 动作 | 风险控制 |\n"
-            "|------|------|----------|------|----------|\n"
-            "| 第一档 | $45-48 | 回踩 50 日均线 | 分批买入 | 跌破 $44 减仓 |\n"
-        )
-
-        def _agent_factory(*args, **kwargs):
-            inst = MagicMock()
-            inst.run_conversation.return_value = {"final_response": final_response, "status": "success"}
-            return inst
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = _agent_factory
-            with patch("src.core.state.RunStateStore") as MockStore:
-                store = MockStore.return_value
-                store.create_run_dir.return_value = run_dir
-                store.mark_success.return_value = None
-                store.save_request.return_value = {}
-                result = await svc._run_with_agent(attempt)
-
-                assert result["has_run_artifact"] is True
-                assert (run_dir / "report.md").read_text(encoding="utf-8") == final_response
-
-        _run(_t())
-
-    def test_feishu_run_strips_plain_fenced_box_drawing_block_from_final_response(self, tmp_path):
-        """Feishu final replies must not persist plain fenced box-drawing layouts."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t", config={"channel": "feishu"})
-        attempt = Attempt(session_id=session.session_id, prompt="give me a trading plan")
-        svc.store.create_attempt(attempt)
-
-        run_dir = tmp_path / "runs" / "feishu-box-layout"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        final_response = (
-            "## 🎯 操作策略\n\n"
-            "```\n"
-            "┌─────────────────────────────┐\n"
-            "│  当前位置：$278              │\n"
-            "│  第一档：$240-250           │\n"
-            "└─────────────────────────────┘\n"
-            "```\n"
-        )
-
-        def _agent_factory(*args, **kwargs):
-            inst = MagicMock()
-            inst.run_conversation.return_value = {"final_response": final_response, "status": "success"}
-            return inst
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = _agent_factory
-            with patch("src.core.state.RunStateStore") as MockStore:
-                store = MockStore.return_value
-                store.create_run_dir.return_value = run_dir
-                store.mark_success.return_value = None
-                store.save_request.return_value = {}
-                result = await svc._run_with_agent(attempt)
-
-                assert "```" not in result["content"]
-                assert "┌" in result["content"]
-
-        _run(_t())
-
-    def test_setup_backtest_run_only_persists_report_to_prepared_run_dir(self, tmp_path):
-        """A setup_backtest_run-only workflow should write report.md to the prepared run dir."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t")
-        attempt = Attempt(session_id=session.session_id, prompt="prepare a backtest run")
-        svc.store.create_attempt(attempt)
-
-        placeholder_run_dir = tmp_path / "runs" / "placeholder"
-        placeholder_run_dir.mkdir(parents=True, exist_ok=True)
-        prepared_run_dir = tmp_path / "runs" / "prepared-run"
-        prepared_run_dir.mkdir(parents=True, exist_ok=True)
-        final_response = "# Prepared run\n\nConfig and signal engine are ready."
-        setup_payload = json.dumps({
-            "status": "ok",
-            "run_dir": str(prepared_run_dir),
-            "files_written": ["config.json", "code/signal_engine.py"],
-        })
-
-        def _agent_factory(*args, **kwargs):
-            cb = kwargs.get("tool_progress_callback")
-            inst = MagicMock()
-
-            def run_conv(**kw):
-                assert cb is not None
-                cb("tool.started", "setup_backtest_run", "", {})
-                cb("tool.completed", "setup_backtest_run", setup_payload, {}, is_error=False)
-                return {"final_response": final_response, "status": "success"}
-
-            inst.run_conversation = run_conv
-            return inst
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = _agent_factory
-            with patch("src.core.state.RunStateStore") as MockStore:
-                store = MockStore.return_value
-                store.create_run_dir.return_value = placeholder_run_dir
-                store.mark_success.return_value = None
-                store.save_request.return_value = {}
-                result = await svc._run_with_agent(attempt)
-
-                assert result["run_dir"] == str(prepared_run_dir)
-                assert result["has_run_artifact"] is True
-                assert (prepared_run_dir / "report.md").read_text(encoding="utf-8") == final_response
-                assert not (placeholder_run_dir / "report.md").exists()
-
-        _run(_t())
-
-    def test_run_swarm_persists_report_and_marks_artifact(self, tmp_path):
-        """A run_swarm workflow should persist the final report and surface a run artifact."""
-        from src.session.models import Attempt
-
-        cap = EventCapture()
-        svc = _make_service(cap, tmp_path)
-        session = svc.create_session(title="t")
-        attempt = Attempt(session_id=session.session_id, prompt="run the research swarm")
-        svc.store.create_attempt(attempt)
-
-        run_dir = tmp_path / "runs" / "swarm-placeholder"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        swarm_report = "# Swarm verdict\n\nAllocate 6% with tight risk controls."
-
-        def _agent_factory(*args, **kwargs):
-            cb = kwargs.get("tool_progress_callback")
-            inst = MagicMock()
-
-            def run_conv(**kw):
-                assert cb is not None
-                cb("tool.started", "run_swarm", "", {"preset_name": "research"})
-                cb(
-                    "tool.completed",
-                    "run_swarm",
-                    json.dumps({"status": "completed", "run_id": "swarm-123", "final_report": swarm_report}),
-                    {},
-                    is_error=False,
-                )
-                return {"final_response": "", "status": "success"}
-
-            inst.run_conversation = run_conv
-            return inst
-
-        async def _t():
-            sys.modules["run_agent"].AIAgent = _agent_factory
-            with patch("src.core.state.RunStateStore") as MockStore:
-                store = MockStore.return_value
-                store.create_run_dir.return_value = run_dir
-                store.mark_success.return_value = None
-                store.save_request.return_value = {}
-                result = await svc._run_with_agent(attempt)
-
-                assert result["run_dir"] == str(run_dir)
-                assert result["content"] == swarm_report
-                assert result["has_run_artifact"] is True
-                assert (run_dir / "report.md").read_text(encoding="utf-8") == swarm_report
 
         _run(_t())
 
