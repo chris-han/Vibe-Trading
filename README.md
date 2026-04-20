@@ -33,7 +33,8 @@
   <a href="#-cli-reference">CLI</a> &nbsp;&middot;&nbsp;
   <a href="#-api-server">API</a> &nbsp;&middot;&nbsp;
   <a href="#-mcp-plugin">MCP</a> &nbsp;&middot;&nbsp;
-  <a href="#-project-structure">Structure</a>
+  <a href="#-project-structure">Structure</a> &nbsp;&middot;&nbsp;
+  <a href="#-deployment--cicd">Deployment</a>
 </p>
 
 <p align="center">
@@ -313,6 +314,38 @@ Edit `agent/.env`:
 | `TIMEOUT_SECONDS` | No | Agent timeout, default 2400s |
 
 **Free data (no key needed):** HK/US equities via yfinance, crypto via OKX public API.
+
+---
+
+## 🚢 Deployment & CI/CD
+
+Deployment is handled by **Dokploy** using a Docker Compose stack on the production host. The practical, verified production topology is:
+
+- Dokploy deploys the `vibe-trading` service and publishes the backend on host port **8899** (container: 8899 -> host: 8899).
+- Public ingress is provided by a **Cloudflare Tunnel (cloudflared)** instance that forwards the public hostname (for example `app.semantier.com`) to `localhost:8899` on the Dokploy host.
+- There is currently **no Traefik** proxy or listener on host port 80 on the production host; attempts to reach `localhost:80` will return connection refused.
+
+Recommendation:
+
+- Keep the Cloudflare Tunnel target set to `localhost:8899` (this is the working production path).
+- If you later prefer host port 80 / standard HTTP routing, enable Dokploy's proxy (Traefik) on the host, redeploy so Traefik is created and bound to port 80, then update the tunnel target accordingly.
+
+GitHub Action / Dokploy webhook
+
+- The repository contains a deploy workflow (`.github/workflows/deploy.yml`) that triggers a Dokploy Compose rebuild on pushes to `main`.
+- Webhook endpoint (used by the workflow): `https://docker.semantier.com/api/deploy/compose/sOo6yxOPEJgNNOrdVfyt7` (POST)
+- Trigger: `push` to `main` with a small JSON payload containing `ref` and `repository.full_name`.
+
+Quick host validations (useful when diagnosing routing issues):
+
+```bash
+docker ps                                   # check running containers
+ss -ltnp | grep :8899                       # confirm app listener on 8899
+curl -fsS http://127.0.0.1:8899/health      # app health endpoint
+ss -ltnp | grep :80                         # should show nothing if Traefik is not present
+```
+
+If you'd like, I can add the exact `deploy.yml` snippet here or help with steps to enable Dokploy's proxy and reintroduce Traefik on the host.
 
 ---
 
