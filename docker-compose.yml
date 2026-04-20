@@ -3,11 +3,6 @@ services:
     image: semantier:vibe-trading
     container_name: vibe-trading
     working_dir: /app
-    env_file:
-      - path: .env
-        required: false
-      - path: agent/.env
-        required: false
     build:
       context: .
       dockerfile: Dockerfile
@@ -19,9 +14,7 @@ services:
       HTTP_PROXY: ${DOCKER_HTTP_PROXY:-}
       HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
       NO_PROXY: ${DOCKER_NO_PROXY:-}
-      FEISHU_OAUTH_ENABLED: "true"
-      HERMES_HOME: /app/agent/.hermes
-      VIBE_TRADING_ROOT: /app
+      # All other variables should come from Dokploy's injection
     ports:
       - "8899:8899"
     expose:
