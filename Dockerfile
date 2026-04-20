@@ -1,9 +1,13 @@
 # ============================================================================
-# Stage 1: Use prebuilt frontend assets from the local repo context
+# Stage 1: Build frontend assets from source so Git-based deploys work
 # ============================================================================
-FROM scratch AS frontend-build
+FROM oven/bun:1 AS frontend-build
 
-COPY frontend/dist/ /app/frontend/dist/
+WORKDIR /app/frontend
+
+COPY frontend/ /app/frontend/
+
+RUN bun install && bun run build
 
 # ============================================================================
 # Stage 2: Python runtime
@@ -43,14 +47,16 @@ RUN pip install --no-cache-dir --trusted-host ${PIP_TRUSTED_HOST} \
 COPY pyproject.toml LICENSE README.md ./
 COPY agent/.hermes/ /app/bootstrap/hermes/
 COPY agent/ agent/
+COPY hermes-agent/ hermes-agent/
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh && mkdir -p /app/agent/.hermes /app/workspaces/public
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist frontend/dist
 
-# Install CLI entrypoint
-RUN pip install --no-cache-dir -e .
+# Install Hermes runtime and app entrypoint
+RUN pip install --no-cache-dir -e /app/hermes-agent \
+    && pip install --no-cache-dir -e .
 
 # Default port
 EXPOSE 8899
