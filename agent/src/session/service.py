@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from pathlib import Path
 
+from hermes_constants import reset_active_hermes_home, set_active_hermes_home
 from src.ui_services import build_backtest_report, expand_artifact_markdown
 from src.runtime_prompt_policy import (
     BACKTEST_WORKFLOW_PROMPT,
@@ -105,6 +106,7 @@ class SessionService:
         event_bus: EventBus,
         runs_dir: Path,
         swarm_dir: Optional[Path] = None,
+        hermes_home: Optional[Path] = None,
     ) -> None:
         """Initialize the session service.
 
@@ -113,11 +115,13 @@ class SessionService:
             event_bus: SSE event bus.
             runs_dir: Root runs directory.
             swarm_dir: Workspace-scoped swarm directory (swarm runs written here).
+            hermes_home: Workspace-scoped Hermes home used for request-local skill/config discovery.
         """
         self.store = store
         self.event_bus = event_bus
         self.runs_dir = runs_dir
         self.swarm_dir = swarm_dir
+        self.hermes_home = hermes_home.resolve() if hermes_home is not None else None
         self._active_loops: Dict[str, "AgentLoop"] = {}
 
     def create_session(self, title: str = "", config: Optional[Dict[str, Any]] = None) -> Session:
@@ -743,6 +747,11 @@ class SessionService:
         sid = attempt.session_id
         attempt_id = attempt.attempt_id
         is_backtest_task = is_backtest_prompt(attempt.prompt)
+        hermes_home_token = (
+            set_active_hermes_home(self.hermes_home)
+            if self.hermes_home is not None
+            else None
+        )
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None
@@ -1095,6 +1104,8 @@ class SessionService:
                 except Exception:
                     pass
             self._active_loops.pop(sid, None)
+            if hermes_home_token is not None:
+                reset_active_hermes_home(hermes_home_token)
 
         # Load metrics from the run output when available.
         actual_run_dir = latest_backtest_run_dir or latest_prepared_run_dir or result.get("run_dir")

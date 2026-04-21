@@ -1680,6 +1680,7 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         event_bus=event_bus,
         runs_dir=runs_dir,
         swarm_dir=swarm_dir,
+        hermes_home=workspace.hermes_home if workspace is not None else None,
     )
     if workspace is not None:
         _session_service_by_workspace[workspace.workspace_id] = svc
