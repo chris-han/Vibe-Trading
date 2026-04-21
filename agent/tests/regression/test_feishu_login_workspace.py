@@ -79,18 +79,72 @@ def test_feishu_callback_bootstraps_workspace_and_sets_session_cookie(tmp_path, 
     assert response.status_code in (302, 307), response.text
     assert "vt_session" in response.cookies
 
-    me = client.get("/auth/me")
-    assert me.status_code == 200, me.text
-    body = me.json()
-    assert body["authenticated"] is True
-    assert body["user"]["feishu_open_id"] == "ou_alice"
-    assert body["user"]["workspace_slug"] == "alice_zhang"
-    user_id = body["user"]["user_id"]
 
-    workspace_root = workspaces_dir / user_id
-    assert workspace_root.exists()
-    assert (workspace_root / ".hermes").exists()
-    assert (workspace_root / ".hermes" / "config.yaml").exists()
+def test_system_paths_reports_active_hermes_home(tmp_path, monkeypatch):
+    hermes_home = tmp_path / "backend-hermes-home"
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    client = TestClient(api_server.app)
+    response = client.get("/system/paths")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["hermesHome"] == str(hermes_home.resolve())
+    assert Path(payload["dataRoot"]).exists()
+
+
+def test_system_paths_reports_public_workspace_for_anonymous_user(tmp_path, monkeypatch):
+    workspaces_dir = _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    client = TestClient(api_server.app)
+    response = client.get("/system/paths")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["authenticated"] is False
+    assert payload["currentWorkspaceId"] == "public"
+    assert payload["currentWorkspaceSlug"] == "public"
+    assert payload["currentWorkspaceRoot"] == str((workspaces_dir / "public").resolve())
+    assert Path(payload["currentWorkspaceRoot"]).is_dir()
+
+
+def test_system_paths_reports_authenticated_workspace_root(tmp_path, monkeypatch):
+    workspaces_dir = _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        api_server,
+        "_feishu_exchange_oauth_code",
+        lambda code, redirect_uri=None: {"access_token": f"token-{code}"},
+    )
+    monkeypatch.setattr(
+        api_server,
+        "_feishu_fetch_user_profile",
+        lambda access_token: {
+            "open_id": "ou_alice",
+            "union_id": "on_alice",
+            "name": "Alice Zhang",
+            "en_name": "Alice Zhang",
+            "avatar_url": "https://example.com/alice.png",
+            "email": "alice@example.com",
+        },
+    )
+
+    client = TestClient(api_server.app)
+    callback = client.get("/auth/feishu/callback?code=abc123&state=state-1", follow_redirects=False)
+
+    assert callback.status_code in (302, 307), callback.text
+
+    response = client.get("/system/paths")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    user = client.get("/auth/me").json()["user"]
+
+    assert payload["authenticated"] is True
+    assert payload["currentWorkspaceId"] == user["user_id"]
+    assert payload["currentWorkspaceSlug"] == user["workspace_slug"]
+    assert payload["currentWorkspaceRoot"] == str((workspaces_dir / user["user_id"]).resolve())
+    assert Path(payload["currentWorkspaceRoot"]).is_dir()
 
 
 def test_feishu_login_auto_enables_when_oauth_config_is_present(monkeypatch):

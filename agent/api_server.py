@@ -31,7 +31,7 @@ from rich.console import Console
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from runtime_env import ensure_runtime_env, get_data_root, get_runs_dir, get_sessions_dir, get_swarm_runs_dir, get_uploads_dir
+from runtime_env import ensure_runtime_env, get_data_root, get_hermes_home, get_runs_dir, get_sessions_dir, get_swarm_runs_dir, get_uploads_dir
 from src.adapters.factory import get_feishu_visualization_adapter
 from src.auth.store import AuthStore, AuthUser
 from src.auth.workspace import WorkspacePaths, ensure_workspace, workspace_swarm_runs_dir
@@ -961,6 +961,28 @@ async def api_info():
         "version": "5.0.0",
         "docs": "/docs",
         "health": "/health",
+    }
+
+
+@app.get("/system/paths")
+async def system_paths(request: Request):
+    """Return backend-owned runtime paths used by this API process."""
+    hermes_home = get_hermes_home()
+    ctx = _resolve_request_context(request, require_login=False)
+    return {
+        "hermesHome": str(hermes_home),
+        "dataRoot": str(DATA_ROOT),
+        "sessionsDir": str(SESSIONS_DIR),
+        "runsDir": str(RUNS_DIR),
+        "uploadsDir": str(UPLOADS_DIR),
+        "authenticated": ctx.authenticated,
+        "currentWorkspaceId": ctx.workspace.workspace_id,
+        "currentWorkspaceSlug": ctx.workspace.workspace_slug,
+        "currentWorkspaceRoot": str(ctx.workspace.workspace_root),
+        "currentHermesHome": str(ctx.workspace.hermes_home),
+        "currentSessionsDir": str(ctx.workspace.sessions_dir),
+        "currentRunsDir": str(ctx.workspace.runs_dir),
+        "currentUploadsDir": str(ctx.workspace.uploads_dir),
     }
 
 

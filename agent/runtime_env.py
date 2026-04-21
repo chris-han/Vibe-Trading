@@ -41,6 +41,13 @@ def get_data_root(workspace_id: str | None = None) -> Path:
     return root
 
 
+def get_hermes_home() -> Path:
+    """Return the active Hermes home used by the backend runtime."""
+    hermes_home = _resolve_hermes_home().resolve()
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    return hermes_home
+
+
 def _sync_terminal_cwd_env() -> None:
     """Export the canonical data root for Hermes tool compatibility.
 
