@@ -57,6 +57,19 @@ def test_wrapper_rejects_relative_hermes_home_header():
     assert response.json()["detail"] == "X-Hermes-Home must be an absolute path"
 
 
+def test_wrapper_rejects_missing_hermes_home_header():
+    client = TestClient(hermes_dashboard_wrapper.app)
+    response = client.get(
+        "/api/sessions",
+        headers={
+            "Authorization": f"Bearer {_SESSION_TOKEN}",
+        },
+    )
+
+    assert response.status_code == 428
+    assert response.json()["detail"] == "X-Hermes-Home header is required"
+
+
 def test_wrapper_scopes_skill_install_per_request(monkeypatch, tmp_path):
     import tools.skills_guard as skills_guard
     import tools.skills_hub as skills_hub

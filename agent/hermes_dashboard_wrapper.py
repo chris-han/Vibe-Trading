@@ -21,6 +21,19 @@ from hermes_constants import reset_active_hermes_home, set_active_hermes_home
 from hermes_cli.web_server import app as hermes_dashboard_app
 
 HERMES_HOME_HEADER = "x-hermes-home"
+REQUIRE_HERMES_HOME_PREFIXES = (
+    "/api/",
+    "/v1/",
+)
+OPTIONAL_HERMES_HOME_PATHS = {
+    "/api/status",
+    "/api/config/defaults",
+    "/api/config/schema",
+    "/api/model/info",
+    "/api/dashboard/themes",
+    "/api/dashboard/plugins",
+    "/api/dashboard/plugins/rescan",
+}
 
 
 class RequestScopedHermesHomeMiddleware:
@@ -32,6 +45,7 @@ class RequestScopedHermesHomeMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = str(scope.get("path") or "")
         header_map = {
             key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in scope.get("headers", [])
@@ -57,6 +71,26 @@ class RequestScopedHermesHomeMiddleware:
                 return
             token = set_active_hermes_home(candidate)
         else:
+            requires_hermes_home = (
+                path.startswith(REQUIRE_HERMES_HOME_PREFIXES)
+                and path not in OPTIONAL_HERMES_HOME_PATHS
+            )
+            if requires_hermes_home:
+                payload = json.dumps(
+                    {"detail": "X-Hermes-Home header is required"}
+                ).encode("utf-8")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 428,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(payload)).encode("ascii")),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": payload})
+                return
             token = None
 
         try:
