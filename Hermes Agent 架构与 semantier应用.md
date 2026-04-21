@@ -48,6 +48,29 @@ Hermes 的权限控制通过以下维度实现：
 3. **身份绑定执行 (Identity-Bound Execution)**：所有动作执行均与 Profile 身份进行“密码学绑定”，防止“混淆代理”攻击。
 4. **物理隔离**：不同的角色分配不同的 Profile，且运行在不同的系统隔离环境（如 Docker/Sandbox）下。
 
+### **2.3 Semantier 当前落地：由 /agent 充当 Hermes Dashboard Wrapper**
+
+在 `Vibe-Trading` 当前实现里，我们**不直接修改 upstream `hermes-agent` dashboard 源码**来支持多租户，而是让 `/agent` 作为包装层（wrapper）。
+
+核心做法：
+
+* `agent/api_server.py` 继续作为 **请求级工作空间解析器**，通过 `vt_session` 将用户解析到 `workspaces/<user_id>/`。
+* `hermes-workspace` 服务端先调用后端 `/system/paths`，拿到当前用户的 `currentWorkspaceRoot`。
+* 随后 `hermes-workspace` 在调用 Hermes Dashboard API 时，额外转发 `X-Hermes-Home: <workspace>/.hermes`。
+* 真正消费这个 Header 的不是 upstream dashboard 本体，而是 `agent/hermes_dashboard_wrapper.py` 这个 **ASGI 包装器**：它在每个请求进入时调用 `set_active_hermes_home(...)`，请求结束后再 `reset_active_hermes_home(...)`。
+* upstream `hermes-agent` 里的 `SessionDB()`、配置读取、日志与其他 `get_hermes_home()` 消费者因此自动切换到当前用户工作空间下的 `.hermes` 目录。
+
+这条路径的意义是：
+
+* **避免维护 upstream fork 补丁**：`hermes-agent` 可以保持原样升级。
+* **保持请求级隔离**：同一个 dashboard 进程可按请求读取不同用户的 `state.db`、`config.yaml` 与其它 Profile 状态。
+* **与 Semantier 后端一致**：控制平面仍然由 `agent` 持有，Hermes Dashboard 只被当作被包装的 UI/API 组件。
+
+当前约定：
+
+* Hermes Dashboard 应通过 `agent/hermes_dashboard_wrapper.py` 启动，而不是直接运行 upstream `hermes dashboard`。
+* 若直接运行 upstream dashboard，则 `X-Hermes-Home` 会被忽略，Dashboard 会退回单一 `HERMES_HOME` 视图，无法满足多用户隔离。
+
 ## ---
 
 **3\. Skill 学习与自进化**

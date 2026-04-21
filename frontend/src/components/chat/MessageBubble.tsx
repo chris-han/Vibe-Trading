@@ -77,7 +77,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onRetry }: Props
           {msg.content}
           {ts && <span className="block text-[9px] opacity-70 text-right mt-1">{ts}</span>}
         </div>
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5">
+        <div className="h-8 w-8 rounded-full border border-border/70 bg-transparent flex items-center justify-center shrink-0 mt-0.5">
           <User className="h-4 w-4 text-muted-foreground" />
         </div>
       </div>

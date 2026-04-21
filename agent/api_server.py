@@ -1487,6 +1487,7 @@ async def session_events(
     session_id: str,
     request: Request,
     last_event_id: Optional[str] = Query(None, alias="Last-Event-ID"),
+    replay_existing: bool = Query(False),
 ):
     """SSE stream for agent events."""
     ctx = _resolve_request_context(request, require_login=False)
@@ -1501,7 +1502,11 @@ async def session_events(
     event_id = header_id or last_event_id
 
     async def event_generator():
-        async for event in svc.event_bus.subscribe(session_id, last_event_id=event_id):
+        async for event in svc.event_bus.subscribe(
+            session_id,
+            last_event_id=event_id,
+            replay_existing=replay_existing,
+        ):
             if await request.is_disconnected():
                 break
             yield event.to_sse()
