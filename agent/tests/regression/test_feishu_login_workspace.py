@@ -58,7 +58,7 @@ def test_feishu_callback_bootstraps_workspace_and_sets_session_cookie(tmp_path, 
     monkeypatch.setattr(
         api_server,
         "_feishu_exchange_oauth_code",
-        lambda code: {"access_token": f"token-{code}"},
+        lambda code, redirect_uri=None: {"access_token": f"token-{code}"},
     )
     monkeypatch.setattr(
         api_server,
@@ -121,6 +121,23 @@ def test_feishu_login_respects_explicit_disable_even_when_config_exists(monkeypa
     assert response.json()["detail"] == "Feishu OAuth is not enabled"
 
 
+def test_auth_me_reports_feishu_oauth_capability(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    guest = TestClient(api_server.app)
+    guest_me = guest.get("/auth/me")
+
+    assert guest_me.status_code == 200, guest_me.text
+    assert guest_me.json()["feishu_oauth_enabled"] is True
+
+    monkeypatch.setenv("FEISHU_OAUTH_ENABLED", "false")
+    disabled = TestClient(api_server.app)
+    disabled_me = disabled.get("/auth/me")
+
+    assert disabled_me.status_code == 200, disabled_me.text
+    assert disabled_me.json()["feishu_oauth_enabled"] is False
+
+
 def test_sessions_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch):
     workspaces_dir = _patch_isolated_auth_runtime(tmp_path, monkeypatch)
 
@@ -139,7 +156,11 @@ def test_sessions_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch
         },
     }
 
-    monkeypatch.setattr(api_server, "_feishu_exchange_oauth_code", lambda code: {"access_token": f"{code}-token"})
+    monkeypatch.setattr(
+        api_server,
+        "_feishu_exchange_oauth_code",
+        lambda code, redirect_uri=None: {"access_token": f"{code}-token"},
+    )
     monkeypatch.setattr(api_server, "_feishu_fetch_user_profile", lambda access_token: profiles[access_token])
 
     alice = TestClient(api_server.app)
@@ -184,7 +205,11 @@ def test_workspace_session_ids_cannot_be_used_across_workspaces(tmp_path, monkey
         },
     }
 
-    monkeypatch.setattr(api_server, "_feishu_exchange_oauth_code", lambda code: {"access_token": f"{code}-token"})
+    monkeypatch.setattr(
+        api_server,
+        "_feishu_exchange_oauth_code",
+        lambda code, redirect_uri=None: {"access_token": f"{code}-token"},
+    )
     monkeypatch.setattr(api_server, "_feishu_fetch_user_profile", lambda access_token: profiles[access_token])
 
     alice = TestClient(api_server.app)
@@ -223,7 +248,11 @@ def test_runs_are_isolated_per_authenticated_workspace(tmp_path, monkeypatch):
         },
     }
 
-    monkeypatch.setattr(api_server, "_feishu_exchange_oauth_code", lambda code: {"access_token": f"{code}-token"})
+    monkeypatch.setattr(
+        api_server,
+        "_feishu_exchange_oauth_code",
+        lambda code, redirect_uri=None: {"access_token": f"{code}-token"},
+    )
     monkeypatch.setattr(api_server, "_feishu_fetch_user_profile", lambda access_token: profiles[access_token])
 
     alice = TestClient(api_server.app)
@@ -272,7 +301,11 @@ def test_swarm_runtime_is_resolved_per_authenticated_workspace(tmp_path, monkeyp
         },
     }
 
-    monkeypatch.setattr(api_server, "_feishu_exchange_oauth_code", lambda code: {"access_token": f"{code}-token"})
+    monkeypatch.setattr(
+        api_server,
+        "_feishu_exchange_oauth_code",
+        lambda code, redirect_uri=None: {"access_token": f"{code}-token"},
+    )
     monkeypatch.setattr(api_server, "_feishu_fetch_user_profile", lambda access_token: profiles[access_token])
 
     runtimes = {}

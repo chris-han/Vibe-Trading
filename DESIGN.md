@@ -151,94 +151,147 @@ body {
 
 ---
 
-## 4. Component Stylings
+## 4. Brand Identity & Logo
+
+### Logo Assets
+
+| File | Size | Usage | Notes |
+|------|------|-------|-------|
+| `logo.svg` | 32×32px (`h-8 w-8`) | Sidebar brand mark | Primary navigation logo. `rounded-button object-contain shrink-0 bg-transparent` |
+| `logo-wireframe.svg` | 56×56px (`h-14 w-14`) | Welcome screen hero | Centered inside a `rounded-button bg-primary shadow-sm` container |
+| `favicon.svg` | — | Browser tab icon | Standard SVG favicon |
+
+### Dead Assets (unused in current build)
+The following files exist in `public/` but are **not referenced** anywhere in the source:
+- `semantier-logo.png`
+- `semantier-logo-text-light.png`
+- `smantier-logo-text.png`
+
+### Wordmark
+The brand name "semantier" is rendered as **plain text**, not as an image.
+
+**Sidebar (expanded)**
+- Layout: `flex items-center gap-2`
+- Mark: `h-8 w-8 rounded-button object-contain shrink-0 bg-transparent`
+- Wordmark: `font-bold text-base text-foreground`
+
+**Sidebar (collapsed)**
+- Layout: `flex items-center justify-center`
+- Mark: `h-8 w-8 rounded-button object-contain shrink-0 bg-transparent`
+- Wordmark hidden
+
+**Welcome / Hero screen**
+- Container: `mx-auto flex h-14 w-14 items-center justify-center rounded-button bg-primary shadow-sm`
+- Mark: `block h-14 w-14 object-contain object-center`
+- Wordmark: `text-xl font-bold tracking-tight text-foreground md:text-2xl`
+
+### Logo Styling Rules
+- **Never** use a PNG logo for the UI wordmark — always use plain text with `font-bold`
+- Sidebar mark is `32px` inside a flex row with `gap-2`
+- Welcome mark is `56px` inside a `64px` primary-green rounded square (`rounded-button` = 16px radius)
+- Both marks use `object-contain` and `bg-transparent`
+- `alt` text: `"semantier logo"`
+
+---
+
+## 5. Component Stylings
 
 ### Buttons
 
 **Primary Green CTA**
-```tsx
-<button className="rounded-button bg-primary text-primary-foreground px-5 py-2 text-sm font-medium transition-colors hover:bg-primary/90 hover:scale-105 active:scale-95 cursor-pointer">
-  Action
-</button>
-```
-- Background: `bg-primary` (`#9fe870`)
-- Text: `text-primary-foreground` (`#163300`)
+- Background: `bg-primary` (`var(--primary)`, `#9fe870`)
+- Text: `text-primary-foreground` (`var(--primary-foreground)`, `#163300`)
+- Padding: `px-5 py-2`
 - Radius: `rounded-button` (16px)
-- Hover: `hover:bg-primary/90` + `hover:scale-105`
+- Typography: `text-sm font-medium`
+- Transition: `transition-colors`
+- Hover: `hover:bg-primary/90 hover:scale-105`
 - Active: `active:scale-95`
+- Cursor: `cursor-pointer`
 
 **Secondary / Outline**
-```tsx
-<button className="rounded-button border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">
-  Secondary
-</button>
-```
+- Background: `bg-background`
+- Border: `border border-border`
+- Text: `text-sm font-medium text-foreground`
+- Padding: `px-4 py-2.5`
+- Radius: `rounded-button` (16px)
+- Hover: `hover:bg-muted`
+- Transition: `transition-colors`
 
 **Ghost / Icon**
-```tsx
-<button className="p-1.5 rounded-button bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground transition-opacity">
-  <Icon className="h-4 w-4" />
-</button>
-```
+- Background: `bg-muted/80` → `hover:bg-muted`
+- Text: `text-muted-foreground` → `hover:text-foreground`
+- Padding: `p-1.5`
+- Radius: `rounded-button` (16px)
+- Transition: `transition-opacity`
 
 **Destructive Circular**
-```tsx
-<button className="w-9 h-9 rounded-full bg-destructive text-destructive-foreground font-medium hover:bg-destructive/90 transition-colors">
-  <StopIcon className="h-4 w-4" />
-</button>
-```
+- Size: `w-9 h-9`
+- Shape: `rounded-full`
+- Background: `bg-destructive`
+- Text: `text-destructive-foreground font-medium`
+- Hover: `hover:bg-destructive/90`
+- Transition: `transition-colors`
 
 **Send Circular**
-```tsx
-<button className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-medium disabled:opacity-40 hover:bg-primary/90 transition-colors">
-  <SendIcon className="h-4 w-4" />
-</button>
-```
+- Size: `w-9 h-9`
+- Shape: `rounded-full`
+- Background: `bg-primary`
+- Text: `text-primary-foreground font-medium`
+- Disabled: `disabled:opacity-40`
+- Hover: `hover:bg-primary/90`
+- Transition: `transition-colors`
 
 ### Cards & Containers
 
 **Standard Card**
-```tsx
-<div className="rounded-card border border-border bg-card p-6 space-y-3 shadow-sm">
-  {/* content */}
-</div>
-```
+- Radius: `rounded-card` (20px)
+- Border: `border border-border`
+- Background: `bg-card`
+- Padding: `p-6`
+- Gap: `space-y-3`
+- Shadow: `shadow-sm` (optional)
 
 **Message Bubble (User)**
-```tsx
-<div className="rounded-card rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm">
-  {message}
-</div>
-```
+- Radius: `rounded-card rounded-tr-sm`
+- Background: `bg-primary`
+- Text: `text-primary-foreground text-sm`
+- Padding: `px-4 py-2.5`
 
 **Error Card**
-```tsx
-<div className="rounded-card border border-destructive/30 bg-destructive/10 px-4 py-3">
-  {error}
-</div>
-```
+- Radius: `rounded-card`
+- Border: `border border-destructive/30`
+- Background: `bg-destructive/10`
+- Padding: `px-4 py-3`
 
 **Metrics Card**
-```tsx
-<div className="grid gap-1.5 rounded-card border border-border bg-muted/50 p-3">
-  {/* metrics */}
-</div>
-```
+- Layout: `grid gap-1.5`
+- Radius: `rounded-card`
+- Border: `border border-border`
+- Background: `bg-muted/50`
+- Padding: `p-3`
 
 ### Navigation
 
-```tsx
-<Link className={cn(
-  "flex items-center rounded-button text-sm font-medium transition-all duration-150",
-  collapsed ? "justify-center p-2" : "gap-3 px-3 py-2.5",
-  isActive
-    ? "bg-primary text-primary-foreground"
-    : "text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-[1.02]"
-)}>
-  <Icon className="h-4 w-4" />
-  {!collapsed && label}
-</Link>
-```
+**Nav Item (Base)**
+- Layout: `flex items-center`
+- Radius: `rounded-button`
+- Typography: `text-sm font-medium`
+- Transition: `transition-all duration-150`
+
+**Nav Item — Expanded**
+- Layout: `gap-3 px-3 py-2.5`
+
+**Nav Item — Collapsed**
+- Layout: `justify-center p-2`
+
+**Nav Item — Active State**
+- Background: `bg-primary`
+- Text: `text-primary-foreground`
+
+**Nav Item — Inactive State**
+- Text: `text-muted-foreground`
+- Hover: `hover:bg-muted hover:text-foreground hover:scale-[1.02]`
 
 ### Do's and Don'ts
 
@@ -263,7 +316,7 @@ body {
 
 ---
 
-## 5. Border Radius Scale
+## 6. Border Radius Scale
 
 | Token / Class | Value | Usage |
 |---------------|-------|-------|
@@ -279,7 +332,7 @@ body {
 
 ---
 
-## 6. Depth & Elevation
+## 7. Depth & Elevation
 
 The project uses a **very restrained, minimal shadow palette**:
 
@@ -296,7 +349,7 @@ The project uses a **very restrained, minimal shadow palette**:
 
 ---
 
-## 7. Dark Mode Strategy
+## 8. Dark Mode Strategy
 
 ### Implementation
 - **Strategy**: `class` (manual toggle via CSS class on `<html>`)
@@ -316,7 +369,7 @@ Dark mode is **warm-tinted**, not cool/blue:
 
 ---
 
-## 8. Layout & Spacing
+## 9. Layout & Spacing
 
 ### Base Unit: 8px
 ### Scale
@@ -338,7 +391,7 @@ Dark mode is **warm-tinted**, not cool/blue:
 
 ---
 
-## 9. Animation & Transition Conventions
+## 10. Animation & Transition Conventions
 
 ### Timing
 | Duration | Usage |
@@ -363,7 +416,7 @@ Dark mode is **warm-tinted**, not cool/blue:
 
 ---
 
-## 10. Component Composition Patterns
+## 11. Component Composition Patterns
 
 ### `cn()` Utility
 ```ts
@@ -377,28 +430,29 @@ export function cn(...inputs: ClassValue[]) {
 Used ubiquitously for conditional class merging, especially for active/hover/disabled states.
 
 ### Conditional State Composition
-```tsx
-className={cn(
-  "flex items-center rounded-button text-sm font-medium transition-all duration-150",
-  collapsed ? "justify-center p-2" : "gap-3 px-3 py-2.5",
-  isActive
-    ? "bg-primary text-primary-foreground"
-    : "text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-[1.02]"
-)}
+Pattern for merging conditional states into a single class string:
+
+**Base + conditional layout + conditional state**
+```
+flex items-center rounded-button text-sm font-medium transition-all duration-150
+[expanded]  → gap-3 px-3 py-2.5
+[collapsed] → justify-center p-2
+[active]    → bg-primary text-primary-foreground
+[inactive]  → text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-[1.02]
 ```
 
 ### Group Hover Reveal
-```tsx
-<div className="group">
-  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-    <ActionButton />
-  </div>
-</div>
-```
+Pattern for revealing action buttons on parent hover:
+
+**Parent**
+- `group`
+
+**Child (initially hidden)**
+- `opacity-0 group-hover:opacity-100 transition-opacity`
 
 ---
 
-## 11. Responsive Behavior
+## 12. Responsive Behavior
 
 ### Breakpoints
 | Name | Width | Key Changes |
@@ -410,7 +464,7 @@ className={cn(
 
 ---
 
-## 12. Agent Prompt Guide
+## 13. Agent Prompt Guide
 
 ### Quick Color Reference
 - Text: Near Black (`#0e0f0c`)

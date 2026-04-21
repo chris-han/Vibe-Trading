@@ -975,6 +975,7 @@ class AuthUserResponse(BaseModel):
 
 class AuthMeResponse(BaseModel):
     authenticated: bool
+    feishu_oauth_enabled: bool
     user: Optional[AuthUserResponse] = None
     workspace_slug: Optional[str] = None
 
@@ -1087,9 +1088,14 @@ async def _store_uploaded_file(file: UploadFile, target_dir: Path) -> Dict[str, 
 async def auth_me(request: Request):
     ctx = _resolve_request_context(request, require_login=False)
     if not ctx.authenticated or ctx.user is None:
-        return AuthMeResponse(authenticated=False, workspace_slug=ctx.workspace.workspace_slug)
+        return AuthMeResponse(
+            authenticated=False,
+            feishu_oauth_enabled=_feishu_oauth_enabled(),
+            workspace_slug=ctx.workspace.workspace_slug,
+        )
     return AuthMeResponse(
         authenticated=True,
+        feishu_oauth_enabled=_feishu_oauth_enabled(),
         workspace_slug=ctx.workspace.workspace_slug,
         user=AuthUserResponse(
             user_id=ctx.user.user_id,
