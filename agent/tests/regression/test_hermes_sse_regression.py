@@ -832,6 +832,43 @@ class TestHermesSessionEvents:
         assert completed["has_run_artifact"] is False
         assert completed["run_dir"] == str(run_dir)
 
+    def test_run_attempt_emits_assistant_message_created_with_run_metadata(self, tmp_path):
+        """Completed backtest attempts should stream the persisted assistant reply as message.created."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Backtest AAPL for 2025")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "bt-live-message"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        async def _fake_run(att, messages=None):
+            return {
+                "status": "success",
+                "content": "Backtest finished with a modest gain.",
+                "run_dir": str(run_dir),
+                "run_id": run_dir.name,
+                "has_run_artifact": True,
+                "metrics": {"final_value": 1010000.0, "trade_count": 12.0},
+            }
+
+        async def _t():
+            with patch.object(svc, "_run_with_agent", side_effect=_fake_run):
+                await svc._run_attempt(session, attempt)
+
+        _run(_t())
+
+        created = cap.data_for("message.created")[-1]
+        assert created["role"] == "assistant"
+        assert created["content"] == "Backtest finished with a modest gain."
+        assert created["linked_attempt_id"] == attempt.attempt_id
+        assert created["metadata"]["run_id"] == run_dir.name
+        assert created["metadata"]["has_run_artifact"] is True
+        assert created["metadata"]["metrics"]["trade_count"] == 12.0
+
     def test_backtest_prompt_without_backtest_tool_fails_even_after_setup(self, tmp_path):
         """Backtest prompts must not succeed after setup-only scaffolding."""
         from src.session.models import Attempt

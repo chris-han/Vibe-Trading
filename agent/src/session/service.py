@@ -642,6 +642,18 @@ class SessionService:
                 metadata=reply_metadata,
             )
             self.store.append_message(reply)
+            self.event_bus.emit(
+                session.session_id,
+                SessionEventType.MESSAGE_CREATED.value,
+                {
+                    "message_id": reply.message_id,
+                    "role": reply.role,
+                    "content": reply.content,
+                    "created_at": reply.created_at,
+                    "linked_attempt_id": reply.linked_attempt_id,
+                    "metadata": reply.metadata,
+                },
+            )
             self._record_event(
                 session.session_id,
                 SessionEventType.ATTEMPT_COMPLETED.value if attempt.status == AttemptStatus.COMPLETED else SessionEventType.ATTEMPT_FAILED.value,
