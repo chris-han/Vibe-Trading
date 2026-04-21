@@ -73,33 +73,19 @@ _TEMPLATE_HERMES_HOME = _AGENT_DIR / ".hermes"
 RUNS_DIR = get_runs_dir(DATA_ROOT)
 SESSIONS_DIR = get_sessions_dir(DATA_ROOT)
 UPLOADS_DIR = get_uploads_dir(DATA_ROOT)
-LEGACY_RUNS_DIR = _AGENT_DIR / "runs"
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-def _candidate_runs_dirs(
-    runs_dir: Optional[Path] = None,
-    legacy_runs_dir: Optional[Path] = None,
-) -> List[Path]:
+def _candidate_runs_dirs(runs_dir: Optional[Path] = None) -> List[Path]:
     """Return run roots in lookup order.
 
-    Keep backward compatibility with older runs written under agent/runs while
-    the canonical root lives under workspaces/<workspace_id>.
+    The canonical root lives under workspaces/<workspace_id>/runs.
     """
     if runs_dir is not None:
-        roots = [runs_dir]
-        if RUNS_DIR not in roots:
-            roots.append(RUNS_DIR)
-        if legacy_runs_dir is not None and legacy_runs_dir not in roots:
-            roots.append(legacy_runs_dir)
-        return roots
+        return [runs_dir]
 
-    current_legacy = legacy_runs_dir or LEGACY_RUNS_DIR
-    roots = [RUNS_DIR]
-    if current_legacy not in roots:
-        roots.append(current_legacy)
-    return roots
+    return [RUNS_DIR]
 
 
 def _session_run_roots(sessions_dir: Optional[Path] = None) -> List[Path]:
@@ -122,14 +108,13 @@ def _resolve_run_dir(
     *,
     runs_dir: Optional[Path] = None,
     sessions_dir: Optional[Path] = None,
-    legacy_runs_dir: Optional[Path] = None,
 ) -> Optional[Path]:
     """Resolve a run directory across all known run roots.
 
-    Checks the global runs roots first (backward compat), then falls back to
-    scanning nested session run directories.
+    Checks the configured run root first, then falls back to scanning nested
+    session run directories.
     """
-    for root in _candidate_runs_dirs(runs_dir=runs_dir, legacy_runs_dir=legacy_runs_dir):
+    for root in _candidate_runs_dirs(runs_dir=runs_dir):
         run_dir = root / run_id
         if run_dir.exists():
             return run_dir
@@ -144,13 +129,10 @@ def _collect_run_dirs(
     *,
     runs_dir: Optional[Path] = None,
     sessions_dir: Optional[Path] = None,
-    legacy_runs_dir: Optional[Path] = None,
 ) -> List[Path]:
     """Collect unique run directories from all run roots."""
     by_id: Dict[str, Path] = {}
-    all_roots = list(
-        _candidate_runs_dirs(runs_dir=runs_dir, legacy_runs_dir=legacy_runs_dir)
-    ) + _session_run_roots(sessions_dir=sessions_dir)
+    all_roots = list(_candidate_runs_dirs(runs_dir=runs_dir)) + _session_run_roots(sessions_dir=sessions_dir)
     for root in all_roots:
         if not root.exists():
             continue
@@ -558,7 +540,6 @@ def _resolve_request_context(request: Request, *, require_login: bool = False) -
                     user.user_id,
                     _TEMPLATE_HERMES_HOME,
                     workspace_slug=user.workspace_slug,
-                    legacy_workspace_slug=user.workspace_slug,
                 )
                 return RequestContext(authenticated=True, user=user, workspace=workspace)
         if require_login:
@@ -1164,7 +1145,6 @@ async def auth_feishu_callback(request: Request, code: str, state: Optional[str]
         user.user_id,
         _TEMPLATE_HERMES_HOME,
         workspace_slug=user.workspace_slug,
-        legacy_workspace_slug=user.workspace_slug,
     )
     response = RedirectResponse(url="/", status_code=307)
     response.set_cookie(
@@ -2382,7 +2362,6 @@ async def _feishu_route_message(
             resolved_user.user_id,
             _TEMPLATE_HERMES_HOME,
             workspace_slug=resolved_user.workspace_slug,
-            legacy_workspace_slug=resolved_user.workspace_slug,
         )
         svc = _get_session_service(resolved_workspace)
 

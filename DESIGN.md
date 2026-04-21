@@ -1,139 +1,257 @@
-# Design System Inspired by Wise & Pintrest
+# Design System — Wise & Pinterest Inspired
 
 ## 1. Visual Theme & Atmosphere
 
 Wise's website is a bold, confident fintech platform that communicates "money without borders" through massive typography and a distinctive lime-green accent. The design operates on a warm off-white canvas with near-black text (`#0e0f0c`) and a signature Wise Green (`#9fe870`) — a fresh, lime-bright color that feels alive and optimistic, unlike the corporate blues of traditional banking.
 
-The typography uses Noto Sans SC (思源黑体) as the primary UI typeface — a Pan‑CJK grotesque that provides excellent legibility across Chinese, Latin, and numeric glyphs. It serves all default UI surfaces, navigation, buttons, cards, and data‑dense views. Noto Serif SC (思源宋体) is reserved for long‑form reading contexts such as research reports and analysis pages, lending classical authority to extended prose. Both fonts should be loaded from Google Fonts or a local hosting solution with comprehensive CJK + Latin fallbacks. At display scale (70px, weight 700), Noto Sans SC creates large, inviting headlines with a tight line‑height of 0.85. At smaller sizes, the system is compact: buttons at 12px, captions at 12–14px.
-
-What distinguishes Wise is its green-on-white-on-black material palette. Lime Green (`#9fe870`) appears on buttons with dark green text (`#163300`), creating a nature-inspired CTA that feels fresh. Hover states use `scale(1.05)` expansion rather than color changes — buttons physically grow on interaction. The border-radius system uses 9999px for buttons (pill), 30px–40px for cards, and the shadow system is minimal — just `rgba(14,15,12,0.12) 0px 0px 0px 1px` ring shadows.
+The typography uses **Autaut Grotesk** and **Noto Sans SC** (思源黑体) as the primary UI typeface. Autaut Grotesk is for English, Noto Sans SC is a Pan‑CJK grotesque that provides excellent legibility across Chinese, Latin, and numeric glyphs. They serve all default UI surfaces, navigation, buttons, cards, and data‑dense views. Noto Serif SC (思源宋体) is reserved for long‑form reading contexts such as research reports and analysis pages, lending classical authority to extended prose. Both fonts should be loaded from Google Fonts or a local hosting solution with comprehensive CJK + Latin fallbacks.
 
 **Key Characteristics:**
-- Autaut Grotesk for English UI and as the global fallback; Noto Sans SC (思源黑体) for Chinese UI and cards
-- Noto Serif SC (思源宋体) for long‑form reports and extended reading content
-- Google Fonts (or locally hosted) with comprehensive CJK + Latin fallback stacks
-- Lime Green (`#9fe870`) accent with dark green text (`#163300`) — nature‑inspired fintech
+- Autaut Grotesk for English UI and as the global fallback; Noto Sans SC (`--font-ui`) for Chinese UI and cards
+- Noto Serif SC only inside `.report` / `.long-form` page wrappers — never in cards or nav
+- Lime Green (`#9fe870`) for primary CTAs with Dark Green (`#163300`) text — nature‑inspired fintech
 - Noto Sans SC body at weight 500 as default — confident, not light
 - Near-black (`#0e0f0c`) primary with warm green undertone
-- Scale(1.05) hover animations — buttons physically grow
+- Scale(1.05) hover and scale(0.95) active on buttons
 - OpenType `"calt"` on all text
-- Semantic color system with comprehensive state management
+- Minimal shadow philosophy — depth comes from bold green accent against neutral canvas
+
+---
 
 ## 2. Color Palette & Roles
 
-### Primary Brand
-- **Near Black** (`#0e0f0c`): Primary text, background for dark sections
-- **Wise Green** (`#9fe870`): Primary CTA button, brand accent
-- **Dark Green** (`#163300`): Button text on green, deep green accent
-- **Light Mint** (`#e2f6d5`): Soft green surface, badge backgrounds
-- **Pastel Green** (`#cdffad`): `--color-interactive-contrast-hover`, hover accent
+### Primary Brand (Hex)
+| Token | Hex | Role |
+|-------|-----|------|
+| `--near-black` | `#0e0f0c` | Primary text, code surface bg, deep shadows |
+| `--wise-green` | `#9fe870` | Primary CTA, brand accent, keyword highlights |
+| `--dark-green` | `#163300` | Button text on green, deep green accent, active nav indicator |
+| `--light-mint` | `#e2f6d5` | Soft green surface, badge backgrounds |
+| `--pastel-green` | `#cdffad` | Interactive contrast hover, code title/class colors |
+| `--bright-orange` | `#ffc091` | Code string/attr colors |
+| `--warning-yellow` | `#ffd11a` | Code number/literal colors |
+| `--focus-blue` | `#435ee5` | Focus rings, outer focus border |
 
-### Semantic
-- **Positive Green** (`#054d28`): `--color-sentiment-positive-primary`, success
-- **Danger Red** (`#d03238`): `--color-interactive-negative-hover`, error/destructive
-- **Warning Yellow** (`#ffd11a`): `--color-sentiment-warning-hover`, warnings
-- **Background Cyan** (`rgba(56,200,255,0.10)`): `--color-background-accent`, info tint
-- **Bright Orange** (`#ffc091`): `--color-bright-orange`, warm accent
+### Neutral (Hex)
+| Token | Hex | Role |
+|-------|-----|------|
+| `--warm-dark` | `#454745` | Secondary text, borders |
+| `--warm-gray` | `#868685` | Muted text, tertiary |
+| `--light-surface` | `#e8ebe6` | Subtle green-tinted light surface, code surface text base |
 
-### Neutral
-- **Warm Dark** (`#454745`): Secondary text, borders
-- **Gray** (`#868685`): Muted text, tertiary
-- **Light Surface** (`#e8ebe6`): Subtle green-tinted light surface
+### Semantic Colors (HSL CSS Variables)
+These are the core shadcn/ui-style tokens. **Light mode values are HSL triplets** (used as `hsl(var(--token))`).
+
+| Token | Light Mode | Dark Mode | Tailwind Utility |
+|-------|-----------|-----------|-----------------|
+| `--background` | `80 9% 96%` | `80 6% 10%` | `bg-background` |
+| `--foreground` | `100 8% 5%` | `60 10% 94%` | `text-foreground` |
+| `--card` | `0 0% 100%` | `80 5% 13%` | `bg-card` |
+| `--card-foreground` | `100 8% 5%` | `60 10% 94%` | `text-card-foreground` |
+| `--primary` | `96 75% 67%` | `96 75% 67%` | `bg-primary` |
+| `--primary-foreground` | `96 100% 10%` | `96 100% 10%` | `text-primary-foreground` |
+| `--muted` | `80 9% 91%` | `80 5% 18%` | `bg-muted` |
+| `--muted-foreground` | `100 3% 40%` | `60 5% 55%` | `text-muted-foreground` |
+| `--destructive` | `356 65% 51%` | `356 55% 55%` | `bg-destructive` |
+| `--destructive-foreground` | `0 0% 100%` | `0 0% 100%` | `text-destructive-foreground` |
+| `--border` | `80 5% 80%` | `80 5% 22%` | `border-border` |
+| `--success` | `152 88% 17%` | `96 60% 55%` | `text-success` |
+| `--danger` | `356 65% 51%` | `356 55% 60%` | `text-danger` |
+| `--warning` | `48 100% 55%` | `48 90% 55%` | `text-warning` |
+| `--info` | `197 100% 61%` | `197 70% 60%` | `text-info` |
+
+### Dark-Mode-Only Hex Tokens (Tailwind Config)
+| Token | Hex | Role |
+|-------|-----|------|
+| `warm-white` | `#f5f5f0` | Warm off-white reference |
+| `dark-surface` | `#1a1a16` | Dark surface layer |
+| `dark-surface-2` | `#22221e` | Elevated dark surface |
+| `dark-border` | `#2d2d28` | Dark mode border reference |
+| `dark-muted` | `#91918c` | Dark mode muted text reference |
+
+### Positive / Semantic Hex Aliases
+| Token | Hex | Role |
+|-------|-----|------|
+| `--positive-green` | `#054d28` | Success states |
+| `--danger-red` | `#d03238` | Error / destructive |
+
+---
 
 ## 3. Typography Rules
 
--### Font Family
-- **UI / Cards / Default** (`--font-ui`): Prefer 'Autaut Grotesk' for English content, fall back to 'Noto Sans SC' for Chinese; full stack: 'Autaut Grotesk', 'Noto Sans SC', -apple-system, system-ui, 'Segoe UI', PingFang SC, Microsoft YaHei, Helvetica Neue, Arial, sans-serif
-- **Long‑form Reports** (`--font-report`): 'Noto Serif SC', fallbacks: Georgia, 'Times New Roman', STSong, SimSun, 宋体, serif
+### Font Family
+```css
+/* UI / Cards / Default */
+--font-ui: 'Autaut Grotesk', 'Times New Roman', -apple-system, system-ui,
+           'Noto Sans SC', 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei',
+           'Hiragino Kaku Gothic Pro', 'Meiryo', 'MS PGothic', Arial, sans-serif;
+
+/* Reports / Long-form */
+--font-report-ui: 'Autaut Grotesk', 'Times New Roman', -apple-system, system-ui,
+                  'Noto Sans SC', 'Segoe UI', Roboto, 'PingFang SC',
+                  'Microsoft YaHei', Arial, sans-serif;
+```
+
+**Loading strategy:**
+- **Noto Sans SC**: Google Fonts `@import` with weights 400, 500, 700, `display=swap`
+- **Autaut Grotesk**: Self-hosted `/font/AutautGrotesk-Regular.woff2`, `font-weight: 400`, `font-display: swap`
+- **JetBrains Mono**: Google Fonts or self-hosted for monospace
+
+### ⚠️ Autaut Grotesk Weight Limitation
+**Only weight 400 (Regular) is loaded.** The `@font-face` declaration loads a single static file:
+```css
+@font-face {
+  font-family: "Autaut Grotesk";
+  src: url("/font/AutautGrotesk-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+```
+
+The variable font file (`AutautGrotesk-VF.woff2`) exists in `public/font/` but is **not currently loaded**.
+`Monument Grotesk` files also exist in `public/font/` but are **unused** in the current codebase.
+
+**Result:** `font-medium` (500), `font-semibold` (600), and `font-bold` (700) are **browser-synthesized** (faux bold). The browser algorithmically thickens the 400 glyphs. This is intentional in the current implementation — all UI text uses these weights extensively.
 
 ### Hierarchy
 
+**Note on weights:** Only 400 is loaded for Autaut Grotesk. 500/600/700 are browser-synthesized. Noto Sans SC and Noto Serif SC load real weights from Google Fonts.
+
 | Role | Font | Size | Weight | Line Height | Letter Spacing | Notes |
 |------|------|------|--------|-------------|----------------|-------|
-| Display Hero | Noto Sans SC / Autaut Grotesk (en) | 70px (4.38rem) | 700 | 0.85 | normal | Maximum impact, `--font-ui` (zh: Noto Sans SC; en: Autaut Grotesk) |
-| Section Heading | Noto Sans SC / Autaut Grotesk (en) | 28px (1.75rem) | 700 | normal | -0.5px | Negative tracking, `--font-ui` (language dependent) |
-| Body / UI | Noto Sans SC / Autaut Grotesk (en) | 16px (1.00rem) | 500 | 1.60 | normal | Cards, nav, data; use Autaut Grotesk for English, Noto Sans SC for Chinese (`--font-ui`) |
-| Caption Bold | Noto Sans SC | 14px (0.88rem) | 700 | normal | normal | Strong metadata, `--font-ui` |
-| Caption | Noto Sans SC | 12px (0.75rem) | 400–500 | 1.50 | normal | Small text, tags, `--font-ui` |
-| Button | Noto Sans SC | 12px (0.75rem) | 500 | normal | normal | Button labels, `--font-ui` |
-| Report Body | Noto Serif SC | 16px (1.00rem) | 400 | 1.80 | 0.02em | Long‑form reports, `--font-report` |
-| Report Heading | Noto Serif SC | 22px (1.375rem) | 600 | 1.30 | -0.3px | Report section titles, `--font-report` |
+| Display Hero | Noto Sans SC / Autaut Grotesk (en) | 70px (4.38rem) | 700 | 0.85 | normal | Maximum impact, `--font-ui`. 700 is synthesized for Autaut Grotesk. |
+| Section Heading | Noto Sans SC / Autaut Grotesk (en) | 28px (1.75rem) | 700 | normal | -0.5px | Negative tracking. 700 is synthesized for Autaut Grotesk. |
+| Body / UI | Noto Sans SC / Autaut Grotesk (en) | 16px (1.00rem) | 500 | 1.60 | normal | Cards, nav, data; `--font-ui`. 500 is synthesized for Autaut Grotesk. |
+| Caption Bold | Noto Sans SC | 14px (0.88rem) | 700 | normal | normal | Strong metadata. Real 700 from Google Fonts. |
+| Caption | Noto Sans SC | 12px (0.75rem) | 400–500 | 1.50 | normal | Small text, tags |
+| Button | Noto Sans SC | 12px (0.75rem) | 500 | normal | normal | Button labels. 500 is synthesized for Autaut Grotesk. |
+| Report Body | Noto Serif SC | 16px (1.00rem) | 400 | 1.80 | 0.02em | Long‑form reports. Real 400 from Google Fonts. |
+| Report Heading | Noto Serif SC | 22px (1.375rem) | 600 | 1.30 | -0.3px | Report section titles. Real 600 from Google Fonts. |
 
-### Principles
-- **Compact type scale**: The range is 12px–70px with a dramatic jump — most functional text is 12–16px, creating a dense, app-like information hierarchy.
-- **Warm weight distribution**: 600–700 for headings, 400–500 for body. No ultra-light weights — the type always feels substantial.
-- **Negative tracking on headings**: -0.5px on 28px UI headings; -0.3px on report section headings.
-- **Dual‑font system with language preference**: prefer Autaut Grotesk for English UI; switch to Noto Sans SC for Chinese UI surfaces. Noto Serif SC remains for long‑form reports.
-- **Generous CJK line‑height**: Report body uses 1.80 line‑height to accommodate Noto Serif SC's vertical rhythm for Chinese characters.
+### Implementation Patterns
+```css
+body {
+  font-family: var(--font-ui);
+  font-feature-settings: "calt" 1;
+}
+
+.report, .long-form {
+  font-family: var(--font-report-ui);
+  font-feature-settings: normal;
+  line-height: 1.8;
+}
+```
+
+### Compact Type Scale
+- Range: 12px–70px with dramatic jump
+- Most functional text: 12–16px
+- Heavy use of explicit sizes: `text-[11px]`, `text-[13px]`, `text-[10px]`, `text-[9px]` for UI chrome
+- Standard scale: `text-xs`, `text-sm`, `text-base`, `text-xl`, `text-3xl`, `text-5xl`
+
+---
 
 ## 4. Component Stylings
 
 ### Buttons
 
-**Primary Green**
-- Background: `#9fe870` (Wise Green)
-- Text: `#163300` (Dark Green)
-- Padding: 5px 16px
-- Radius: 16px (generously rounded, not pill)
-- Hover: scale(1.05) — button physically grows
-- Active: scale(0.95) — button compresses
-- Focus: inset ring + outline
+**Primary Green CTA**
+```tsx
+<button className="rounded-button bg-primary text-primary-foreground px-5 py-2 text-sm font-medium transition-colors hover:bg-primary/90 hover:scale-105 active:scale-95 cursor-pointer">
+  Action
+</button>
+```
+- Background: `bg-primary` (`#9fe870`)
+- Text: `text-primary-foreground` (`#163300`)
+- Radius: `rounded-button` (16px)
+- Hover: `hover:bg-primary/90` + `hover:scale-105`
+- Active: `active:scale-95`
 
-**Secondary Subtle**
-- Background: `rgba(22, 51, 0, 0.08)` (dark green at 8% opacity)
-- Text: `#0e0f0c`
-- Padding: 8px 12px 8px 16px
-- Radius: 16px (generously rounded, not pill)
-- Same scale hover/active behavior
+**Secondary / Outline**
+```tsx
+<button className="rounded-button border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted">
+  Secondary
+</button>
+```
+
+**Ghost / Icon**
+```tsx
+<button className="p-1.5 rounded-button bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground transition-opacity">
+  <Icon className="h-4 w-4" />
+</button>
+```
+
+**Destructive Circular**
+```tsx
+<button className="w-9 h-9 rounded-full bg-destructive text-destructive-foreground font-medium hover:bg-destructive/90 transition-colors">
+  <StopIcon className="h-4 w-4" />
+</button>
+```
+
+**Send Circular**
+```tsx
+<button className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-medium disabled:opacity-40 hover:bg-primary/90 transition-colors">
+  <SendIcon className="h-4 w-4" />
+</button>
+```
 
 ### Cards & Containers
-- Radius: 12px (small), 16px (medium), 30px (large cards/tables)
-- Border: `1px solid rgba(14,15,12,0.12)` or `1px solid #9fe870` (green accent)
-- Shadow: `rgba(14,15,12,0.12) 0px 0px 0px 1px` (ring shadow)
+
+**Standard Card**
+```tsx
+<div className="rounded-card border border-border bg-card p-6 space-y-3 shadow-sm">
+  {/* content */}
+</div>
+```
+
+**Message Bubble (User)**
+```tsx
+<div className="rounded-card rounded-tr-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm">
+  {message}
+</div>
+```
+
+**Error Card**
+```tsx
+<div className="rounded-card border border-destructive/30 bg-destructive/10 px-4 py-3">
+  {error}
+</div>
+```
+
+**Metrics Card**
+```tsx
+<div className="grid gap-1.5 rounded-card border border-border bg-muted/50 p-3">
+  {/* metrics */}
+</div>
+```
 
 ### Navigation
-- Green-tinted navigation hover: `rgba(211,242,192,0.4)`
-- Clean header with Wise wordmark
-- Pill CTAs right-aligned
 
-## 5. Layout Principles
-
-### Spacing System
-- Base unit: 8px
-- Scale: 1px, 2px, 3px, 4px, 5px, 8px, 10px, 11px, 12px, 16px, 18px, 19px, 20px, 22px, 24px
-
-### Border Radius Scale
-- Minimal (2px): Links, inputs
-- Standard (10px): Comboboxes, inputs
-- Card (12px): Small cards, buttons, radio
-- Medium (16px): Links, medium cards, images
-- Large (30px): Feature cards
-- Section (40px): Tables, large cards
-- Mega (1000px): Presentation elements
-- Pill (9999px): All badges
-- Circle (50%): Icons, badges
-
-## 6. Depth & Elevation
-
-| Level | Treatment | Use |
-|-------|-----------|-----|
-| Flat (Level 0) | No shadow | Default |
-| Ring (Level 1) | `rgba(14,15,12,0.12) 0px 0px 0px 1px` | Card borders |
-| Inset (Level 2) | `rgb(134,134,133) 0px 0px 0px 1px inset` | Input focus |
-
-**Shadow Philosophy**: Wise uses minimal shadows — ring shadows only. Depth comes from the bold green accent against the neutral canvas.
+```tsx
+<Link className={cn(
+  "flex items-center rounded-button text-sm font-medium transition-all duration-150",
+  collapsed ? "justify-center p-2" : "gap-3 px-3 py-2.5",
+  isActive
+    ? "bg-primary text-primary-foreground"
+    : "text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-[1.02]"
+)}>
+  <Icon className="h-4 w-4" />
+  {!collapsed && label}
+</Link>
+```
 
 ### Do's and Don'ts
 
-### Do
+#### Do
 - Prefer Autaut Grotesk for English UI and body text; use Noto Sans SC (`--font-ui`) for Chinese UI and cards when content is Chinese
-- Use Noto Serif SC (`--font-report`) only inside `.report` / `.long-form` page wrappers
+- Use Noto Serif SC (`--font-report-ui`) only inside `.report` / `.long-form` page wrappers
 - Apply line-height 0.85 on Noto Sans SC display — ultra-tight is intentional
 - Use Lime Green (#9fe870) for primary CTAs with Dark Green (#163300) text
 - Apply scale(1.05) hover and scale(0.95) active on buttons
 - Load both fonts from Google Fonts or a local host with full CJK weight sets
+- Use `cn()` for all conditional class merging
 
-### Don't
+#### Don't
 - Don't use Noto Serif SC in cards, navigation, or data-dense UI — serif is for reports only
 - Don't use thin font weights — Noto Sans SC at 400 minimum
 - Don't use pill-shaped buttons — 16px radius is rounded but not pill
@@ -141,8 +259,146 @@ What distinguishes Wise is its green-on-white-on-black material palette. Lime Gr
 - Don't use the Wise Green as background for large surfaces — it's for buttons and accents
 - Don't skip the scale animation on buttons
 - Don't use traditional shadows — ring shadows only
+- Don't load `AutautGrotesk-VF.woff2` or `Monument Grotesk` unless you explicitly intend to use them — they are present in `public/font/` but unused in the current frontend
 
-## 8. Responsive Behavior
+---
+
+## 5. Border Radius Scale
+
+| Token / Class | Value | Usage |
+|---------------|-------|-------|
+| `rounded-sm` | `calc(var(--radius) - 8px)` (~4px) | Inputs, small elements |
+| `rounded-md` | `calc(var(--radius) - 4px)` (~12px) | Comboboxes, inputs |
+| `rounded-lg` | `var(--radius)` (~16px) | Containers, timelines |
+| `rounded-button` | **16px** | Buttons, badges, nav items |
+| `rounded-card` | **20px** | Cards, message bubbles, modals |
+| `rounded-comfortable` | **20px** | Alias for card |
+| `rounded-section` | **32px** | Large sections, feature cards |
+| `rounded-hero` | **40px** | Hero containers, tables |
+| `rounded-full` | 9999px | Circular icons, avatars, send buttons |
+
+---
+
+## 6. Depth & Elevation
+
+The project uses a **very restrained, minimal shadow palette**:
+
+| Value | Usage |
+|-------|-------|
+| `shadow-sm` | Capability chips, welcome header, feature cards, thinking timeline, scroll-to-bottom button |
+| `shadow-sm shadow-black/5` | User auth card in sidebar |
+| `shadow-md` | Feature cards on hover |
+| `shadow-lg` | Scroll-to-bottom button, upload dropdown menu |
+| `shadow-[0_24px_80px_rgba(14,15,12,0.12)]` | Error panel page layout |
+| `box-shadow: rgba(14, 15, 12, 0.12) 0 0 0 1px` | Run-code surface border (ring shadow) |
+
+**No custom elevation scale** beyond Tailwind defaults. The design relies more on **border contrast** (`border-border`) than on drop shadows for elevation.
+
+---
+
+## 7. Dark Mode Strategy
+
+### Implementation
+- **Strategy**: `class` (manual toggle via CSS class on `<html>`)
+- **Hook**: `useDarkMode.ts`
+  - Reads `localStorage` key `"qa-theme"` first
+  - Falls back to `prefers-color-scheme: dark`
+  - Toggles `document.documentElement.classList.toggle("dark", dark)`
+  - Persists choice to `localStorage`
+
+### Color Shift Philosophy
+Dark mode is **warm-tinted**, not cool/blue:
+- Background: `80 6% 10%` (warm dark with olive tint)
+- Foreground: `60 10% 94%` (warm off-white)
+- Borders: `80 5% 22%` (olive-tinted)
+- Primary (`wise-green`): **identical** in both modes for brand consistency
+- Semantic colors soften in dark mode (success: `96 60% 55%`, danger: `356 55% 60%`)
+
+---
+
+## 8. Layout & Spacing
+
+### Base Unit: 8px
+### Scale
+1px, 2px, 3px, 4px, 5px, 8px, 10px, 11px, 12px, 16px, 18px, 19px, 20px, 22px, 24px
+
+### Common Patterns
+| Context | Pattern |
+|---------|---------|
+| Page padding | `p-6`, `p-8` |
+| Sidebar padding | `p-2` (collapsed nav), `p-4` (footer expanded) |
+| Card internal | `p-3` (compact), `p-4`, `p-6` |
+| Section gaps | `space-y-4`, `gap-4`, `gap-6`, `mt-16` |
+| Inline gaps | `gap-1.5`, `gap-2`, `gap-3` |
+
+### Content Width Constraints
+- Chat content: `max-w-3xl mx-auto`
+- Home hero: `max-w-2xl`
+- Feature grid: `max-w-4xl`
+
+---
+
+## 9. Animation & Transition Conventions
+
+### Timing
+| Duration | Usage |
+|----------|-------|
+| `duration-150` | Nav items, session list items, icon buttons |
+| `duration-200` | Sidebar collapse/expand, accordion expand, chevron rotate |
+| `duration-500` | Swarm progress bar width |
+
+### Motion Patterns
+| Pattern | Implementation |
+|---------|----------------|
+| Hover lift | `hover:scale-[1.02]`, `hover:scale-105` |
+| Active press | `active:scale-95` |
+| Opacity reveal | `opacity-0 group-hover:opacity-100 transition-opacity` |
+| Fade/slide | `transition-all` on height, max-height, opacity, margin |
+| Loading | `animate-pulse` (skeletons, streaming cursor) |
+| Spin | `animate-spin` (Loader2 icons, refresh) |
+
+### Backdrop Blur
+- Chat input form: `bg-background/80 backdrop-blur-sm`
+- Upload menu: `bg-background/95 backdrop-blur-sm`
+
+---
+
+## 10. Component Composition Patterns
+
+### `cn()` Utility
+```ts
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+```
+Used ubiquitously for conditional class merging, especially for active/hover/disabled states.
+
+### Conditional State Composition
+```tsx
+className={cn(
+  "flex items-center rounded-button text-sm font-medium transition-all duration-150",
+  collapsed ? "justify-center p-2" : "gap-3 px-3 py-2.5",
+  isActive
+    ? "bg-primary text-primary-foreground"
+    : "text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-[1.02]"
+)}
+```
+
+### Group Hover Reveal
+```tsx
+<div className="group">
+  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+    <ActionButton />
+  </div>
+</div>
+```
+
+---
+
+## 11. Responsive Behavior
 
 ### Breakpoints
 | Name | Width | Key Changes |
@@ -152,24 +408,47 @@ What distinguishes Wise is its green-on-white-on-black material palette. Lime Gr
 | Desktop | 992–1440px | Full layout |
 | Large | >1440px | Expanded |
 
-## 9. Agent Prompt Guide
+---
+
+## 12. Agent Prompt Guide
 
 ### Quick Color Reference
 - Text: Near Black (`#0e0f0c`)
-- Background: White (`#ffffff` / off-white)
+- Background: White (`#ffffff` / off-white `80 9% 96%`)
 - Accent: Wise Green (`#9fe870`)
 - Button text: Dark Green (`#163300`)
 - Secondary: Gray (`#868685`)
+- Muted surface: `hsl(var(--muted))`
+- Border: `hsl(var(--border))`
 
 ### Example Component Prompts
-- "Create hero: white background. Headline at 96px Noto Sans SC weight 700, line-height 0.85, #0e0f0c text. Green CTA (#9fe870, 16px radius, 5px 16px padding, #163300 text). Hover: scale(1.05)."
-- "Build a card: 30px radius, 1px solid rgba(14,15,12,0.12). Title at 22px Noto Sans SC weight 600, body at 16px weight 500. Use `--font-ui`."
-- "Build a report page: font-family var(--font-report) (Noto Serif SC). Body 16px weight 400, line-height 1.80. Section headings 22px weight 600. Use `--font-report` on .report wrapper."
+
+**Primary CTA Button**
+```
+Create a primary button: rounded-button (16px), bg-primary (#9fe870), text-primary-foreground (#163300), px-5 py-2, text-sm font-medium. Hover: hover:bg-primary/90 + hover:scale-105. Active: active:scale-95.
+```
+
+**Standard Card**
+```
+Build a card: rounded-card (20px), border border-border, bg-card, p-6, optional shadow-sm. Title at text-base font-semibold, body at text-sm text-muted-foreground.
+```
+
+**Navigation Item**
+```
+Create a nav link: flex items-center, rounded-button, text-sm font-medium, transition-all duration-150. Active: bg-primary text-primary-foreground. Inactive: text-muted-foreground hover:bg-muted hover:text-foreground hover:scale-[1.02].
+```
+
+**Report Page**
+```
+Build a report page: wrapper with .report class (font-family var(--font-report-ui), line-height 1.8). Body 16px weight 400, section headings 22px weight 600. Use prose for markdown rendering with prose-sm dark:prose-invert.
+```
 
 ### Iteration Guide
-1. Noto Sans SC 700 at 0.85 line-height for display — the weight IS the brand
-2. Noto Serif SC only on `.report` / `.long-form` page wrappers — never in cards or nav
+1. Noto Sans SC 700 at tight line-height for display — the weight IS the brand
+2. Noto Serif SC only on `.report` / `.long-form` wrappers — never in cards or nav
 3. Lime Green for buttons only — dark green text on green background
 4. Scale animations (1.05 hover, 0.95 active) on all interactive elements
 5. Noto Sans SC weight 500 for body — confident reading weight
-6. Load both fonts from Google Fonts: `?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600`
+6. Prefer `border-border` and `bg-card` over shadows for elevation
+7. Use `cn()` for all conditional class merging
+8. Load fonts from Google Fonts: `?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600`

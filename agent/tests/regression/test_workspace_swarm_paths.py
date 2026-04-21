@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from runtime_env import get_runs_dir, get_sessions_dir, get_swarm_root, get_swarm_runs_dir, get_uploads_dir
-from src.auth.workspace import ensure_workspace, legacy_workspace_swarm_dir, workspace_paths, workspace_runs_dir, workspace_sessions_dir, workspace_swarm_dir, workspace_swarm_runs_dir, workspace_uploads_dir
+from src.auth.workspace import ensure_workspace, workspace_paths, workspace_runs_dir, workspace_sessions_dir, workspace_swarm_dir, workspace_swarm_runs_dir, workspace_uploads_dir
 
 
 def test_workspace_paths_use_hidden_swarm_dir(tmp_path: Path):
@@ -26,24 +26,6 @@ def test_swarm_helpers_use_hidden_runs_dir(tmp_path: Path):
     assert workspace_uploads_dir(agent_root) == agent_root / "uploads"
 
 
-def test_ensure_workspace_migrates_legacy_swarm_directory(tmp_path: Path):
-    workspace_root = tmp_path / "alice_zhang"
-    legacy_swarm_runs = legacy_workspace_swarm_dir(workspace_root) / "runs" / "swarm-123"
-    legacy_swarm_runs.mkdir(parents=True)
-    legacy_run_file = legacy_swarm_runs / "run.json"
-    legacy_run_file.write_text('{"status":"completed"}\n', encoding="utf-8")
-
-    template_hermes_home = tmp_path / "template-hermes"
-    template_hermes_home.mkdir(parents=True)
-    (template_hermes_home / "config.yaml").write_text("model: {}\n", encoding="utf-8")
-
-    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
-
-    assert paths.swarm_dir == workspace_swarm_dir(workspace_root)
-    assert not legacy_workspace_swarm_dir(workspace_root).exists()
-    assert (paths.swarm_dir / "runs" / "swarm-123" / "run.json").read_text(encoding="utf-8") == '{"status":"completed"}\n'
-
-
 def test_ensure_workspace_preserves_existing_hidden_swarm_dir(tmp_path: Path):
     workspace_root = tmp_path / "alice_zhang"
     hidden_swarm_runs = workspace_swarm_dir(workspace_root) / "runs" / "swarm-123"
@@ -60,32 +42,7 @@ def test_ensure_workspace_preserves_existing_hidden_swarm_dir(tmp_path: Path):
     assert hidden_run_file.exists()
 
 
-def test_ensure_workspace_merges_legacy_and_hidden_swarm_runs(tmp_path: Path):
-    workspace_root = tmp_path / "alice_zhang"
-    hidden_run_file = workspace_swarm_dir(workspace_root) / "runs" / "swarm-hidden" / "run.json"
-    hidden_run_file.parent.mkdir(parents=True)
-    hidden_run_file.write_text('{"status":"hidden"}\n', encoding="utf-8")
-
-    legacy_run_file = legacy_workspace_swarm_dir(workspace_root) / "runs" / "swarm-legacy" / "run.json"
-    legacy_run_file.parent.mkdir(parents=True)
-    legacy_run_file.write_text('{"status":"legacy"}\n', encoding="utf-8")
-
-    template_hermes_home = tmp_path / "template-hermes"
-    template_hermes_home.mkdir(parents=True)
-
-    paths = ensure_workspace(tmp_path, "alice_zhang", template_hermes_home)
-
-    assert paths.swarm_dir == workspace_swarm_dir(workspace_root)
-    assert (paths.swarm_dir / "runs" / "swarm-hidden" / "run.json").read_text(encoding="utf-8") == '{"status":"hidden"}\n'
-    assert (paths.swarm_dir / "runs" / "swarm-legacy" / "run.json").read_text(encoding="utf-8") == '{"status":"legacy"}\n'
-    assert not legacy_workspace_swarm_dir(workspace_root).exists()
-
-
-def test_ensure_workspace_migrates_legacy_slug_workspace_to_user_id(tmp_path: Path):
-    legacy_agent_root = tmp_path / "alice_zhang"
-    (legacy_agent_root / "runs" / "run-1").mkdir(parents=True)
-    (legacy_agent_root / "runs" / "run-1" / "state.json").write_text('{"status":"ok"}\n', encoding="utf-8")
-
+def test_ensure_workspace_uses_workspace_id_for_storage_root(tmp_path: Path):
     template_hermes_home = tmp_path / "template-hermes"
     template_hermes_home.mkdir(parents=True)
 
@@ -94,12 +51,11 @@ def test_ensure_workspace_migrates_legacy_slug_workspace_to_user_id(tmp_path: Pa
         "user-123",
         template_hermes_home,
         workspace_slug="alice_zhang",
-        legacy_workspace_slug="alice_zhang",
     )
 
     assert paths.workspace_root == tmp_path / "user-123"
+    assert paths.workspace_slug == "alice_zhang"
     assert not (tmp_path / "alice_zhang").exists()
-    assert (paths.runs_dir / "run-1" / "state.json").read_text(encoding="utf-8") == '{"status":"ok"}\n'
 
 
 def test_ensure_workspace_does_not_copy_template_skills_or_plugins(tmp_path: Path):

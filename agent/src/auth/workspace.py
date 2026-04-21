@@ -47,32 +47,6 @@ def workspace_swarm_runs_dir(agent_root: Path) -> Path:
     return workspace_swarm_dir(agent_root) / "runs"
 
 
-def legacy_workspace_swarm_dir(agent_root: Path) -> Path:
-    """Return the pre-refactor swarm storage root for a workspace agent dir."""
-    return agent_root / "swarm"
-
-
-def _merge_directory_contents(source_dir: Path, target_dir: Path) -> None:
-    """Recursively merge source contents into target without overwriting existing files."""
-    target_dir.mkdir(parents=True, exist_ok=True)
-    for child in source_dir.iterdir():
-        destination = target_dir / child.name
-        if child.is_dir():
-            if destination.exists() and destination.is_dir():
-                _merge_directory_contents(child, destination)
-                try:
-                    child.rmdir()
-                except OSError:
-                    pass
-                continue
-            shutil.move(str(child), str(destination))
-            continue
-
-        if destination.exists():
-            continue
-        shutil.move(str(child), str(destination))
-
-
 def _load_yaml_mapping(path: Path) -> dict:
     """Load a YAML mapping file, returning an empty dict for invalid payloads."""
     if not path.exists():
@@ -141,49 +115,6 @@ def _merge_external_skill_dirs(config_dest: Path, config_src: Path) -> None:
     config_dest.write_text(yaml.safe_dump(workspace_config, sort_keys=False), encoding="utf-8")
 
 
-def migrate_workspace_swarm_dir(agent_root: Path) -> Path:
-    """Move legacy workspace swarm data from swarm/ into the canonical .swarm/."""
-    target_swarm_dir = workspace_swarm_dir(agent_root)
-    legacy_swarm_dir = legacy_workspace_swarm_dir(agent_root)
-    if not legacy_swarm_dir.exists() or legacy_swarm_dir == target_swarm_dir:
-        return
-
-    if not target_swarm_dir.exists():
-        legacy_swarm_dir.rename(target_swarm_dir)
-        return target_swarm_dir
-
-    _merge_directory_contents(legacy_swarm_dir, target_swarm_dir)
-
-    try:
-        legacy_swarm_dir.rmdir()
-    except OSError:
-        pass
-
-    return target_swarm_dir
-
-
-def _migrate_workspace_root(base_dir: Path, workspace_id: str, legacy_workspace_slug: str | None) -> None:
-    """Move or merge a legacy slug-keyed workspace into the user-id workspace."""
-    legacy_slug = (legacy_workspace_slug or "").strip()
-    if not legacy_slug or legacy_slug == workspace_id:
-        return
-
-    target_root = base_dir / workspace_id
-    legacy_root = base_dir / legacy_slug
-    if not legacy_root.exists() or legacy_root == target_root:
-        return
-
-    if not target_root.exists():
-        legacy_root.rename(target_root)
-        return
-
-    _merge_directory_contents(legacy_root, target_root)
-    try:
-        legacy_root.rmdir()
-    except OSError:
-        pass
-
-
 def workspace_paths(base_dir: Path, workspace_id: str, workspace_slug: str | None = None) -> WorkspacePaths:
     workspace_root = base_dir / workspace_id
     agent_root = workspace_root
@@ -206,11 +137,8 @@ def ensure_workspace(
     template_hermes_home: Path,
     *,
     workspace_slug: str | None = None,
-    legacy_workspace_slug: str | None = None,
 ) -> WorkspacePaths:
-    _migrate_workspace_root(base_dir, workspace_id, legacy_workspace_slug)
     paths = workspace_paths(base_dir, workspace_id, workspace_slug)
-    migrate_workspace_swarm_dir(paths.agent_root)
     for directory in (
         paths.agent_root,
         paths.hermes_home,
