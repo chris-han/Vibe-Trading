@@ -28,6 +28,32 @@ from src.runtime_prompt_policy import (
 
 logger = logging.getLogger(__name__)
 
+_INCOMPLETE_RESPONSE_PATTERNS = (
+    re.compile(r"(?:^|\n)\s*(?:now let me|let me|first(?:,|\s)|first step|starting by).*(?:[:：])\s*$", re.IGNORECASE),
+    re.compile(r"(?:^|\n)\s*(?:现在让我|让我|首先|先|第一步).*(?:[:：])\s*$"),
+)
+_INCOMPLETE_RESPONSE_KEYWORDS = (
+    "let me",
+    "now let me",
+    "first",
+    "first step",
+    "starting by",
+    "现在让我",
+    "让我",
+    "首先",
+    "第一步",
+    "初始化",
+)
+
+_FILE_MUTATION_TOOL_NAMES = {
+    "write_file",
+    "edit_file",
+    "replace_in_file",
+    "append_file",
+    "delete_file",
+    "mkdir",
+}
+
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
 
@@ -550,6 +576,19 @@ class SessionService:
         text = str(error or "").strip().lower()
         return "cancelled by user" in text or text == "cancelled" or "interrupted" in text
 
+    @staticmethod
+    def _looks_incomplete_final_response(text: str) -> bool:
+        """Return whether a final assistant response looks truncated or unfinished."""
+        normalized = str(text or "").strip()
+        if not normalized:
+            return False
+        if not normalized.endswith((":", "：")):
+            return False
+        lowered = normalized.casefold()
+        if any(keyword in lowered for keyword in _INCOMPLETE_RESPONSE_KEYWORDS):
+            return True
+        return any(pattern.search(normalized) for pattern in _INCOMPLETE_RESPONSE_PATTERNS)
+
     async def _run_attempt(self, session: Session, attempt: Attempt) -> None:
         """Execute an Attempt in the background."""
         attempt.mark_running()
@@ -683,6 +722,7 @@ class SessionService:
         latest_useful_tool_output: str | None = None
         saw_reportable_tool_run = False
         saw_successful_backtest = False
+        saw_successful_file_mutation = False
 
         state_store = RunStateStore()
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -703,7 +743,8 @@ class SessionService:
             args: Optional[dict] = None,
             **kwargs,
         ) -> None:
-            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output, saw_successful_backtest
+            nonlocal latest_prepared_run_dir, latest_backtest_run_dir, latest_useful_tool_output
+            nonlocal saw_successful_backtest, saw_successful_file_mutation
             if event_type == "tool.started":
                 if tool_name == "backtest":
                     started_run_dir = str((args or {}).get("run_dir") or "").strip()
@@ -767,6 +808,12 @@ class SessionService:
                             saw_successful_backtest = True
                     elif tool_name == "run_swarm":
                         saw_reportable_tool_run = True
+
+                if not is_error and tool_name in _FILE_MUTATION_TOOL_NAMES:
+                    if tool_name == "delete_file":
+                        saw_successful_file_mutation = bool(parsed_result is None or parsed_result.get("success", True))
+                    else:
+                        saw_successful_file_mutation = True
 
                 if not is_error:
                     useful_tool_output = self._extract_useful_tool_output(tool_name, parsed_result, str(preview or ""))
@@ -965,17 +1012,41 @@ class SessionService:
                     "[%s] using tool-result fallback for empty final response",
                     sid[:8],
                 )
-            if final_text and ((not is_backtest_task and saw_reportable_tool_run) or saw_successful_backtest):
-                try:
-                    (run_dir / "report.md").write_text(final_text, encoding="utf-8")
-                except Exception:
-                    logger.warning("Failed to persist report.md for run_dir=%s", run_dir, exc_info=True)
-            result: Dict[str, Any] = {
-                "status": "success",
-                "content": final_text,
-                "run_dir": str(run_dir),
-                "run_id": run_dir.name,
-            }
+            incomplete_final_text = self._looks_incomplete_final_response(final_text)
+            if incomplete_final_text and latest_useful_tool_output and saw_successful_file_mutation and not is_backtest_task:
+                logger.warning(
+                    "[%s] using file-tool fallback for incomplete final response: %s",
+                    sid[:8],
+                    final_text[:200],
+                )
+                final_text = latest_useful_tool_output.strip()
+                incomplete_final_text = False
+
+            if incomplete_final_text:
+                logger.warning(
+                    "[%s] treating incomplete final response as failed attempt: %s",
+                    sid[:8],
+                    final_text[:200],
+                )
+                result = {
+                    "status": "failed",
+                    "reason": "Agent returned an incomplete response and stopped before completing the requested action.",
+                    "content": "",
+                    "run_dir": str(run_dir),
+                    "run_id": run_dir.name,
+                }
+            else:
+                if final_text and ((not is_backtest_task and saw_reportable_tool_run) or saw_successful_backtest):
+                    try:
+                        (run_dir / "report.md").write_text(final_text, encoding="utf-8")
+                    except Exception:
+                        logger.warning("Failed to persist report.md for run_dir=%s", run_dir, exc_info=True)
+                result: Dict[str, Any] = {
+                    "status": "success",
+                    "content": final_text,
+                    "run_dir": str(run_dir),
+                    "run_id": run_dir.name,
+                }
         except Exception as exc:
             logger.error("[%s] agent exception in run_dir=%s: %s", sid[:8], run_dir, exc, exc_info=True)
             state_store.mark_failure(run_dir, str(exc))
@@ -1122,6 +1193,18 @@ class SessionService:
         return None
 
     @staticmethod
+    def _is_reportable_tool_result(tool_name: str, parsed_result: Optional[Dict[str, Any]]) -> bool:
+        """Return whether a successful tool result is user-reportable on its own."""
+        data = parsed_result if isinstance(parsed_result, dict) else {}
+        if tool_name == "read_document":
+            status = str(data.get("status") or "").strip().lower()
+            return status in {"ok", "success"} and any(
+                isinstance(data.get(key), str) and data.get(key, "").strip()
+                for key in ("text", "summary", "report", "message", "analysis", "file")
+            )
+        return False
+
+    @staticmethod
     def _extract_useful_tool_output(
         tool_name: str,
         parsed_result: Optional[Dict[str, Any]],
@@ -1129,6 +1212,13 @@ class SessionService:
     ) -> str:
         """Extract readable fallback content from a successful tool result."""
         data = parsed_result if isinstance(parsed_result, dict) else {}
+
+        if tool_name in _FILE_MUTATION_TOOL_NAMES:
+            if tool_name == "delete_file":
+                return "File deletion completed successfully."
+            if tool_name == "mkdir":
+                return "Directory creation completed successfully."
+            return "File update completed successfully."
 
         if tool_name == "run_swarm":
             final_report = str(data.get("final_report") or "").strip()

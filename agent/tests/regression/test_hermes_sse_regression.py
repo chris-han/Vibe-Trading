@@ -700,6 +700,100 @@ class TestHermesSessionEvents:
 
         _run(_t())
 
+    def test_incomplete_colon_terminated_plan_response_fails(self, tmp_path):
+        """Colon-terminated action preambles must not be recorded as successful completions."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Build a resume wiki from these uploaded docs")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "resume-wiki"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        def _agent_factory(*args, **kwargs):
+            inst = MagicMock()
+            inst.run_conversation.return_value = {
+                "final_response": "成功提取了简历内容。现在让我创建简历库的 Wiki 结构。首先初始化 Wiki 目录：",
+                "status": "success",
+            }
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.mark_failure.return_value = None
+                store.save_request.return_value = {}
+
+                result = await svc._run_with_agent(attempt)
+
+                assert result["status"] == "failed"
+                assert "incomplete response" in result["reason"].lower()
+                assert result["content"] == ""
+                assert not (run_dir / "report.md").exists()
+                store.mark_failure.assert_called()
+                store.mark_success.assert_not_called()
+
+        _run(_t())
+
+    def test_incomplete_file_workflow_preamble_uses_file_tool_fallback(self, tmp_path):
+        """Successful file writes should survive a trailing colon-ended action preamble."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Build a resume wiki from these uploaded docs")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "resume-wiki"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        def _agent_factory(*args, **kwargs):
+            progress_cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                if progress_cb:
+                    progress_cb("tool.started", "write_file", "", {"path": "wiki/index.md"})
+                    progress_cb(
+                        "tool.completed",
+                        "write_file",
+                        json.dumps({"bytes_written": 407, "dirs_created": True}),
+                        {},
+                        is_error=False,
+                    )
+                return {
+                    "final_response": "Now let me create the log.md:",
+                    "status": "success",
+                }
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                store = MockStore.return_value
+                store.create_run_dir.return_value = run_dir
+                store.mark_success.return_value = None
+                store.mark_failure.return_value = None
+                store.save_request.return_value = {}
+
+                result = await svc._run_with_agent(attempt)
+
+                assert result["status"] == "success"
+                assert result["content"] == "File update completed successfully."
+                store.mark_success.assert_called()
+                store.mark_failure.assert_not_called()
+
+        _run(_t())
+
     def test_plain_chat_attempt_completed_omits_run_id_without_artifact(self, tmp_path):
         """Completed plain-chat attempts should not attach run_id metadata or a run card trigger."""
         from src.session.models import Attempt
