@@ -6,7 +6,6 @@
       "name": "vibe-trading-frontend",
       "dependencies": {
         "@visactor/vchart": "^2.0.21",
-        "@visactor/vchart-extension": "^2.0.21",
         "axios": "^1.15.0",
         "chrome-remote-interface": "^0.34.0",
         "clsx": "^2.1.0",
@@ -404,8 +403,6 @@
     "@upsetjs/venn.js": ["@upsetjs/venn.js@2.0.0", "", { "optionalDependencies": { "d3-selection": "^3.0.0", "d3-transition": "^3.0.1" } }, "sha512-WbBhLrooyePuQ1VZxrJjtLvTc4NVfpOyKx0sKqioq9bX1C1m7Jgykkn8gLrtwumBioXIqam8DLxp88Adbue6Hw=="],
 
     "@visactor/vchart": ["@visactor/vchart@2.0.21", "", { "dependencies": { "@visactor/vdataset": "~1.0.23", "@visactor/vlayouts": "~1.0.23", "@visactor/vrender-animate": "1.0.45", "@visactor/vrender-components": "1.0.45", "@visactor/vrender-core": "1.0.45", "@visactor/vrender-kits": "1.0.45", "@visactor/vscale": "~1.0.23", "@visactor/vutils": "~1.0.23", "@visactor/vutils-extension": "2.0.21" } }, "sha512-jYrSwTS8EkV2qB3c+/iW9YBta4dCJSsbuxQzacHnhVuH2XAn7b+33wLdFHbG1h84L1EbVPMle6LrUoXe+CZjYw=="],
-
-    "@visactor/vchart-extension": ["@visactor/vchart-extension@2.0.21", "", { "dependencies": { "@visactor/vchart": "2.0.21", "@visactor/vdataset": "~1.0.23", "@visactor/vlayouts": "~1.0.23", "@visactor/vrender-animate": "1.0.45", "@visactor/vrender-components": "1.0.45", "@visactor/vrender-core": "1.0.45", "@visactor/vrender-kits": "1.0.45", "@visactor/vutils": "~1.0.23" } }, "sha512-c930SfptDFmRUVrc2tf5sX3uw6EOg7eUFHENYlMmN80ufjoSUqX6MqOXgK/fsZh3lnQi3vzBQI6+9TtY81T4wg=="],
 
     "@visactor/vdataset": ["@visactor/vdataset@1.0.23", "", { "dependencies": { "@turf/flatten": "^6.5.0", "@turf/helpers": "^6.5.0", "@turf/rewind": "^6.5.0", "@visactor/vutils": "1.0.23", "d3-dsv": "^2.0.0", "d3-geo": "^1.12.1", "d3-hexbin": "^0.2.2", "d3-hierarchy": "^3.1.1", "eventemitter3": "^4.0.7", "geobuf": "^3.0.1", "geojson-dissolve": "^3.1.0", "path-browserify": "^1.0.1", "pbf": "^3.2.1", "point-at-length": "^1.1.0", "simple-statistics": "^7.7.3", "simplify-geojson": "^1.0.4", "topojson-client": "^3.1.0" } }, "sha512-zrLk9FBUWJoW6b30XnPKzXwAXl8USdLDfed6QZLsmdkylRU8V7yZeXE2aKwU8Lg1U4HmQngqmqOx7/QlbX44Tg=="],
 

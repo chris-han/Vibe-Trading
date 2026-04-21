@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@visactor/vchart": "^2.0.21",
-    "@visactor/vchart-extension": "^2.0.21",
     "axios": "^1.15.0",
     "chrome-remote-interface": "^0.34.0",
     "clsx": "^2.1.0",
