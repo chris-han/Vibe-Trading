@@ -32,6 +32,13 @@ _INCOMPLETE_RESPONSE_PATTERNS = (
     re.compile(r"(?:^|\n)\s*(?:now let me|let me|first(?:,|\s)|first step|starting by).*(?:[:：])\s*$", re.IGNORECASE),
     re.compile(r"(?:^|\n)\s*(?:现在让我|让我|首先|先|第一步).*(?:[:：])\s*$"),
 )
+_INCOMPLETE_CONTINUATION_PATTERNS = (
+    re.compile(
+        r"^\s*(?:now let me|let me|starting by)\s+(?:set up|create|check|load|run|compare|analy[sz]e|inspect|debug|prepare|build|generate|review|look at|verify|summari[sz]e)\b.*(?:[.!?])?\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*(?:现在让我|让我)\s*(?:设置|创建|检查|加载|运行|比较|分析|查看|调试|准备|构建|生成|验证|总结).*(?:[。！？])?\s*$"),
+)
 _INCOMPLETE_RESPONSE_KEYWORDS = (
     "let me",
     "now let me",
@@ -582,12 +589,19 @@ class SessionService:
         normalized = str(text or "").strip()
         if not normalized:
             return False
-        if not normalized.endswith((":", "：")):
-            return False
         lowered = normalized.casefold()
-        if any(keyword in lowered for keyword in _INCOMPLETE_RESPONSE_KEYWORDS):
+        if normalized.endswith((":", "：")) and any(keyword in lowered for keyword in _INCOMPLETE_RESPONSE_KEYWORDS):
             return True
-        return any(pattern.search(normalized) for pattern in _INCOMPLETE_RESPONSE_PATTERNS)
+        if any(pattern.search(normalized) for pattern in _INCOMPLETE_RESPONSE_PATTERNS):
+            return True
+        if len(normalized) > 240 or "\n" in normalized:
+            return False
+        trailing_segment = re.split(r"(?<=[.!?。！？])\s+", normalized)[-1].strip()
+        return any(
+            pattern.search(candidate)
+            for candidate in (normalized, trailing_segment)
+            for pattern in _INCOMPLETE_CONTINUATION_PATTERNS
+        )
 
     async def _run_attempt(self, session: Session, attempt: Attempt) -> None:
         """Execute an Attempt in the background."""

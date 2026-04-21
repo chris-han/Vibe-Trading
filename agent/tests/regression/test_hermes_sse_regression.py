@@ -858,6 +858,74 @@ class TestHermesSessionEvents:
 
         _run(_t())
 
+    def test_incomplete_backtest_continuation_sentence_uses_metrics_report_fallback(self, tmp_path):
+        """Short continuation sentences must not be treated as final backtest reports."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(
+            session_id=session.session_id,
+            prompt="Backtest a risk-parity portfolio of MSFT, BTC-USDT, and AAPL for full-year 2025, compare against equal-weight baseline",
+        )
+        svc.store.create_attempt(attempt)
+
+        session_run_dir = tmp_path / "runs" / "session-risk-parity"
+        actual_run_dir = tmp_path / "runs" / "actual-risk-parity"
+        (actual_run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        (actual_run_dir / "artifacts" / "metrics.csv").write_text(
+            "final_value,total_return,annual_return,max_drawdown,sharpe,trade_count,benchmark_return,excess_return\n"
+            "1003182.0536545012,0.0031820536545013045,0.0013047664490011268,-0.050892387701701354,0.05329446975236752,57,0.092701,-0.089519\n",
+            encoding="utf-8",
+        )
+
+        backtest_payload = json.dumps({
+            "status": "ok",
+            "run_dir": str(actual_run_dir),
+            "resolved_run_dir": str(actual_run_dir),
+        })
+
+        def _agent_factory(*args, **kwargs):
+            progress_cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                if progress_cb:
+                    progress_cb("tool.started", "backtest", "", {"run_dir": str(actual_run_dir)})
+                    progress_cb("tool.completed", "backtest", backtest_payload, {}, is_error=False)
+                return {
+                    "final_response": "The risk-parity backtest is working. Now let me set up the equal-weight baseline for comparison.",
+                    "status": "success",
+                }
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore, patch(
+                "src.session.service.bootstrap_run_from_prompt",
+                return_value={"status": "ok"},
+            ):
+                store = MockStore.return_value
+                store.create_run_dir.return_value = session_run_dir
+                store.mark_success.return_value = None
+                store.mark_failure.return_value = None
+                store.save_request.return_value = {}
+
+                result = await svc._run_with_agent(attempt)
+
+                assert result["status"] == "success"
+                assert result["run_dir"] == str(actual_run_dir)
+                assert "# Backtest Report" in result["content"]
+                assert "equal-weight" in result["content"].lower()
+                assert (actual_run_dir / "report.md").exists()
+                store.mark_success.assert_called()
+                store.mark_failure.assert_not_called()
+
+        _run(_t())
+
     def test_plain_chat_attempt_completed_omits_run_id_without_artifact(self, tmp_path):
         """Completed plain-chat attempts should not attach run_id metadata or a run card trigger."""
         from src.session.models import Attempt
