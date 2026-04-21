@@ -64,6 +64,7 @@ ensure_runtime_env()
 # ---------------------------------------------------------------------------
 _AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = _AGENT_DIR.parent
+_CONTAINER_FRONTEND_ROOT = Path("/app/frontend")
 DATA_ROOT = get_data_root()
 WORKSPACES_DIR = REPO_ROOT / "workspaces"
 AUTH_CONTROL_DIR = _AGENT_DIR / ".auth"
@@ -207,6 +208,32 @@ class SPAStaticFiles(StaticFiles):
                 raise
             response = await super().get_response("index.html", scope)
             return self._apply_html_cache_headers(response, "index.html")
+
+
+def _resolve_frontend_paths(current_file: Path | None = None) -> tuple[Path, Path]:
+    """Prefer container-baked frontend assets over host checkout paths."""
+    resolved_file = (current_file or Path(__file__)).resolve()
+    inferred_repo_root = resolved_file.parent.parent
+    inferred_frontend_root = inferred_repo_root / "frontend"
+
+    configured_root = (os.getenv("VIBE_TRADING_FRONTEND_ROOT") or "").strip()
+    configured_dist = (os.getenv("VIBE_TRADING_FRONTEND_DIST") or "").strip()
+
+    frontend_root_candidates: list[Path] = []
+    if configured_root:
+        frontend_root_candidates.append(Path(configured_root))
+    frontend_root_candidates.extend((_CONTAINER_FRONTEND_ROOT, inferred_frontend_root))
+
+    frontend_dist_candidates: list[Path] = []
+    if configured_dist:
+        frontend_dist_candidates.append(Path(configured_dist))
+    if configured_root:
+        frontend_dist_candidates.append(Path(configured_root) / "dist")
+    frontend_dist_candidates.extend((_CONTAINER_FRONTEND_ROOT / "dist", inferred_frontend_root / "dist"))
+
+    frontend_root = next((path for path in frontend_root_candidates if path.exists()), frontend_root_candidates[0])
+    frontend_dist = next((path for path in frontend_dist_candidates if path.exists()), frontend_dist_candidates[0])
+    return frontend_root, frontend_dist
 
 
 class Artifact(BaseModel):
@@ -2750,8 +2777,7 @@ def serve_main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 2
 
-    frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-    frontend_root = Path(__file__).resolve().parent.parent / "frontend"
+    frontend_root, frontend_dist = _resolve_frontend_paths()
 
     vite_proc = None
     if args.dev and frontend_root.exists():
@@ -2773,7 +2799,7 @@ def serve_main(argv: list[str] | None = None) -> int:
         print(f"[prod] Frontend served from {frontend_dist}")
     else:
         print(f"[warn] No frontend build found at {frontend_dist}")
-        print("[warn] Run: cd frontend && npm run build")
+        print("[warn] Run: cd frontend && bun run build")
 
     _kill_process_on_port(args.port)
 

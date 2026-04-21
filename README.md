@@ -229,6 +229,11 @@ docker compose up --build
 
 Open `http://localhost:8899`. Backend + frontend in one container.
 
+If you start the image with plain `docker run`, you must also pass the env file,
+for example `docker run --env-file .env -p 8899:8899 semantier:vibe-trading`.
+The image does not embed local `.env` files, so provider config and Feishu OAuth
+will be unavailable without explicit environment injection.
+
 ### Path B: Local install
 
 ```bash

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from pathlib import Path
 
-from src.ui_services import expand_artifact_markdown
+from src.ui_services import build_backtest_report, expand_artifact_markdown
 from src.runtime_prompt_policy import (
     BACKTEST_WORKFLOW_PROMPT,
     OUTPUT_FORMAT_PROMPT,
@@ -1004,6 +1004,7 @@ class SessionService:
         except Exception:
             _hermes_overrides_set = False
         (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        incomplete_final_response = False
         try:
             loop = asyncio.get_event_loop()
             run_context = contextvars.copy_context()
@@ -1035,6 +1036,7 @@ class SessionService:
                 incomplete_final_text = False
 
             if incomplete_final_text:
+                incomplete_final_response = True
                 logger.warning(
                     "[%s] treating incomplete final response as failed attempt: %s",
                     sid[:8],
@@ -1088,13 +1090,31 @@ class SessionService:
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics
+
+        backtest_completed = saw_successful_backtest or bool(result.get("metrics"))
+        final_run_dir = Path(result.get("run_dir") or run_dir)
+
+        if result.get("status") == "failed" and incomplete_final_response and is_backtest_task and backtest_completed:
+            fallback_report = build_backtest_report(
+                final_run_dir,
+                prompt=attempt.prompt,
+                metrics=result.get("metrics"),
+            )
+            if fallback_report:
+                try:
+                    (final_run_dir / "report.md").write_text(fallback_report, encoding="utf-8")
+                except Exception:
+                    logger.warning("Failed to persist synthesized report.md for run_dir=%s", final_run_dir, exc_info=True)
+                result["status"] = "success"
+                result["content"] = fallback_report
+                result.pop("reason", None)
+
         result["has_run_artifact"] = self._has_run_artifact(
             result.get("run_dir"),
             result.get("metrics"),
         )
 
         if result.get("status") == "success" and is_backtest_task:
-            backtest_completed = saw_successful_backtest or bool(result.get("metrics"))
             if not backtest_completed:
                 result["status"] = "failed"
                 result["reason"] = (
@@ -1102,7 +1122,6 @@ class SessionService:
                 )
                 result["content"] = ""
 
-        final_run_dir = Path(result.get("run_dir") or run_dir)
         if result.get("status") == "success":
             state_store.mark_success(run_dir)
             if final_run_dir != run_dir:

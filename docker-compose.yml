@@ -12,6 +12,9 @@ services:
         - ALL_PROXY=${DOCKER_ALL_PROXY:-}
         - NO_PROXY=${DOCKER_NO_PROXY:-}
     environment:
+      # These values come from the shell or the repo-root .env when using
+      # docker compose. A plain `docker run` must pass `--env-file .env`
+      # (or equivalent `-e` flags), otherwise Feishu OAuth stays disabled.
       # Proxy settings
       HTTP_PROXY: ${DOCKER_HTTP_PROXY:-}
       HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
@@ -20,6 +23,8 @@ services:
       # Application constants
       HERMES_HOME: /app/agent/.hermes
       VIBE_TRADING_ROOT: /app
+      VIBE_TRADING_FRONTEND_ROOT: /app/frontend
+      VIBE_TRADING_FRONTEND_DIST: /app/frontend/dist
       # LLM Provider (set the ones you use in Dokploy UI)
       HERMES_INFERENCE_PROVIDER: ${HERMES_INFERENCE_PROVIDER:-}
       HERMES_MODEL: ${HERMES_MODEL:-}

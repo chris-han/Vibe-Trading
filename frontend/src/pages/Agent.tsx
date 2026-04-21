@@ -213,10 +213,13 @@ export function Agent() {
         const ts = new Date(m.created_at).getTime();
         if (m.role === "user") {
           agentMsgs.push({ id: m.message_id, type: "user", content: m.content, timestamp: ts });
-        } else if (runId && status === "completed" && (hasRunArtifact || !!metrics)) {
-          // Show text answer first (if non-empty), then chart card
-          if (m.content && m.content !== "Strategy execution completed.") {
+        } else if (runId && (hasRunArtifact || !!metrics)) {
+          const showError = status === "failed" && !!m.content;
+          if (m.content && m.content !== "Strategy execution completed." && !showError) {
             agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, timestamp: ts });
+          }
+          if (showError) {
+            agentMsgs.push({ id: m.message_id + "_err", type: "error", content: m.content, timestamp: ts });
           }
           agentMsgs.push({ id: m.message_id, type: "run_complete", content: "", runId, metrics, timestamp: ts + 1 });
         } else {
@@ -364,6 +367,20 @@ export function Agent() {
         act().clearStreaming();
         act().clearReasoning();
         act().addMessage({ id: "", type: "error", content: String(d.error || "Execution failed"), timestamp: Date.now() });
+        const runDir = String(d.run_dir || "");
+        const runId = runDir ? runDir.split(/[/\\]/).pop() : undefined;
+        const hasRunArtifact = Boolean(d.has_run_artifact);
+        const metrics = (d.metrics as Record<string, number> | undefined) || undefined;
+        if (runId && (hasRunArtifact || !!metrics)) {
+          act().addMessage({
+            id: "",
+            type: "run_complete",
+            content: "",
+            runId,
+            metrics,
+            timestamp: Date.now(),
+          });
+        }
         act().setStatus("idle");
         scrollToBottom();
       },

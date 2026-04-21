@@ -253,3 +253,36 @@ def test_get_env_bool_accepts_numeric_truthy(monkeypatch):
     monkeypatch.setenv("ENABLE_SESSION_RUNTIME", "1")
 
     assert api_server._get_env_bool("ENABLE_SESSION_RUNTIME") is True
+
+
+def test_resolve_frontend_paths_prefers_container_assets_over_host_checkout(tmp_path, monkeypatch):
+    container_frontend = tmp_path / "app" / "frontend"
+    host_repo = tmp_path / "home" / "chris" / "repo" / "Vibe-Trading"
+    host_frontend = host_repo / "frontend"
+
+    (container_frontend / "dist").mkdir(parents=True)
+    host_frontend.mkdir(parents=True)
+
+    monkeypatch.setattr(api_server, "_CONTAINER_FRONTEND_ROOT", container_frontend)
+    monkeypatch.delenv("VIBE_TRADING_FRONTEND_ROOT", raising=False)
+    monkeypatch.delenv("VIBE_TRADING_FRONTEND_DIST", raising=False)
+
+    frontend_root, frontend_dist = api_server._resolve_frontend_paths(host_repo / "agent" / "api_server.py")
+
+    assert frontend_root == container_frontend
+    assert frontend_dist == container_frontend / "dist"
+
+
+def test_resolve_frontend_paths_falls_back_to_repo_layout_without_container_assets(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_frontend = repo_root / "frontend"
+    (repo_frontend / "dist").mkdir(parents=True)
+
+    monkeypatch.setattr(api_server, "_CONTAINER_FRONTEND_ROOT", tmp_path / "missing-container-frontend")
+    monkeypatch.delenv("VIBE_TRADING_FRONTEND_ROOT", raising=False)
+    monkeypatch.delenv("VIBE_TRADING_FRONTEND_DIST", raising=False)
+
+    frontend_root, frontend_dist = api_server._resolve_frontend_paths(repo_root / "agent" / "api_server.py")
+
+    assert frontend_root == repo_frontend
+    assert frontend_dist == repo_frontend / "dist"

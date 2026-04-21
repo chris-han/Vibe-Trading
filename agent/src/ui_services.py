@@ -64,6 +64,113 @@ def load_json_file(path: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    """Best-effort float parsing for persisted metric values."""
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_backtest_metric(metric_name: str, value: float) -> str:
+    """Format a backtest metric for Markdown presentation."""
+    if metric_name == "final_value":
+        return f"${value:,.2f}"
+    if metric_name in {
+        "total_return",
+        "annual_return",
+        "max_drawdown",
+        "win_rate",
+        "benchmark_return",
+        "excess_return",
+    }:
+        return f"{value * 100:.2f}%"
+    if metric_name in {"trade_count", "max_consecutive_loss", "avg_holding_days"}:
+        return f"{value:.0f}" if float(value).is_integer() else f"{value:.2f}"
+    return f"{value:.4f}" if abs(value) < 100 else f"{value:,.2f}"
+
+
+def build_backtest_report(
+    run_dir: Path,
+    prompt: Optional[str] = None,
+    metrics: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Build a deterministic Markdown report from persisted backtest artifacts."""
+    metric_values = dict(metrics or {})
+    if not metric_values:
+        rows = load_csv_records(run_dir / "artifacts" / "metrics.csv")
+        if rows:
+            metric_values = {k: v for k, v in rows[0].items() if v not in (None, "")}
+    if not metric_values:
+        return None
+
+    request_data = load_json_file(run_dir / "req.json") or {}
+    prompt_text = str(prompt or request_data.get("prompt") or "").strip()
+
+    total_return = _coerce_float(metric_values.get("total_return"))
+    annual_return = _coerce_float(metric_values.get("annual_return"))
+    sharpe = _coerce_float(metric_values.get("sharpe"))
+    max_drawdown = _coerce_float(metric_values.get("max_drawdown"))
+    benchmark_return = _coerce_float(metric_values.get("benchmark_return"))
+    excess_return = _coerce_float(metric_values.get("excess_return"))
+    trade_count = _coerce_float(metric_values.get("trade_count"))
+
+    lines: List[str] = ["# Backtest Report", ""]
+    if prompt_text:
+        lines.extend(["## Request", prompt_text, ""])
+
+    lines.append("## Summary")
+    if total_return is not None:
+        direction = "gain" if total_return >= 0 else "loss"
+        lines.append(f"- The strategy finished with a {direction} of {_format_backtest_metric('total_return', total_return)}.")
+    if annual_return is not None:
+        lines.append(f"- Annualized return was {_format_backtest_metric('annual_return', annual_return)}.")
+    if max_drawdown is not None:
+        lines.append(f"- Maximum drawdown reached {_format_backtest_metric('max_drawdown', max_drawdown)}.")
+    if sharpe is not None:
+        lines.append(f"- Sharpe ratio closed at {_format_backtest_metric('sharpe', sharpe)}.")
+    if benchmark_return is not None and excess_return is not None:
+        relative = "outperformed" if excess_return >= 0 else "lagged"
+        lines.append(
+            f"- The run {relative} its benchmark by {_format_backtest_metric('excess_return', excess_return)} "
+            f"against a benchmark return of {_format_backtest_metric('benchmark_return', benchmark_return)}."
+        )
+    if trade_count is not None:
+        lines.append(f"- The engine executed {_format_backtest_metric('trade_count', trade_count)} trades.")
+
+    metric_rows = [
+        ("final_value", "Final Value"),
+        ("total_return", "Total Return"),
+        ("annual_return", "Annualized Return"),
+        ("max_drawdown", "Max Drawdown"),
+        ("sharpe", "Sharpe"),
+        ("sortino", "Sortino"),
+        ("calmar", "Calmar"),
+        ("win_rate", "Win Rate"),
+        ("trade_count", "Trade Count"),
+        ("benchmark_return", "Benchmark Return"),
+        ("excess_return", "Excess Return"),
+        ("information_ratio", "Information Ratio"),
+        ("profit_factor", "Profit Factor"),
+    ]
+    lines.extend(["", "## Metrics", "| Metric | Value |", "| --- | --- |"])
+    for metric_name, label in metric_rows:
+        metric_value = _coerce_float(metric_values.get(metric_name))
+        if metric_value is None:
+            continue
+        lines.append(f"| {label} | {_format_backtest_metric(metric_name, metric_value)} |")
+
+    lines.extend(
+        [
+            "",
+            "_This report was reconstructed from saved run artifacts because the interactive final response did not complete._",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def expand_artifact_markdown(text: str, run_dir: Path) -> str:
     """Inline a referenced markdown artifact when the current text is only a pointer.
 
@@ -198,36 +305,39 @@ def load_run_report(run_dir: Path) -> Optional[str]:
         if text:
             return expand_artifact_markdown(text, run_dir)
 
+    fallback: Optional[str] = None
     request_data = load_json_file(run_dir / "req.json") or {}
     context = request_data.get("context") or {}
     session_id = str(context.get("session_id") or "").strip()
-    if not session_id:
-        return None
+    if session_id:
+        events_path = run_dir.parent.parent / "sessions" / session_id / "events.jsonl"
+        if events_path.exists():
+            try:
+                for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if not line.strip():
+                        continue
+                    event = json.loads(line)
+                    if event.get("event_type") != "message.created" or event.get("role") != "assistant":
+                        continue
 
-    events_path = run_dir.parent.parent / "sessions" / session_id / "events.jsonl"
-    if not events_path.exists():
-        return None
+                    content = str(event.get("content") or "").strip()
+                    if not content or content == "Strategy execution completed.":
+                        continue
 
-    fallback: Optional[str] = None
-    try:
-        for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            if event.get("event_type") != "message.created" or event.get("role") != "assistant":
-                continue
+                    metadata = event.get("metadata") or {}
+                    inner_meta = metadata.get("metadata") or {}
+                    if inner_meta.get("run_id") == run_dir.name:
+                        return expand_artifact_markdown(content, run_dir)
+                    fallback = expand_artifact_markdown(content, run_dir)
+            except Exception:
+                fallback = None
 
-            content = str(event.get("content") or "").strip()
-            if not content or content == "Strategy execution completed.":
-                continue
+    if fallback and not fallback.startswith("Execution failed:"):
+        return fallback
 
-            metadata = event.get("metadata") or {}
-            inner_meta = metadata.get("metadata") or {}
-            if inner_meta.get("run_id") == run_dir.name:
-                return expand_artifact_markdown(content, run_dir)
-            fallback = expand_artifact_markdown(content, run_dir)
-    except Exception:
-        return None
+    synthesized = build_backtest_report(run_dir)
+    if synthesized:
+        return synthesized
 
     return fallback
 

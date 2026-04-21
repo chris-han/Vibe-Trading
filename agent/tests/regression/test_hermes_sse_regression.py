@@ -794,6 +794,70 @@ class TestHermesSessionEvents:
 
         _run(_t())
 
+    def test_incomplete_backtest_preamble_uses_metrics_report_fallback(self, tmp_path):
+        """Successful backtests should recover with a synthesized report when the narrative stalls."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Backtest AAPL for 2025")
+        svc.store.create_attempt(attempt)
+
+        session_run_dir = tmp_path / "runs" / "session-backtest"
+        actual_run_dir = tmp_path / "runs" / "actual-backtest"
+        (actual_run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        (actual_run_dir / "artifacts" / "metrics.csv").write_text(
+            "final_value,total_return,annual_return,max_drawdown,sharpe,trade_count,benchmark_return,excess_return\n"
+            "1012500.0,0.0125,0.0125,-0.034,0.61,18,0.009,-0.0035\n",
+            encoding="utf-8",
+        )
+
+        backtest_payload = json.dumps({
+            "status": "ok",
+            "run_dir": str(actual_run_dir),
+            "resolved_run_dir": str(actual_run_dir),
+        })
+
+        def _agent_factory(*args, **kwargs):
+            progress_cb = kwargs.get("tool_progress_callback")
+            inst = MagicMock()
+
+            def run_conv(**kw):
+                if progress_cb:
+                    progress_cb("tool.started", "backtest", "", {"run_dir": str(actual_run_dir)})
+                    progress_cb("tool.completed", "backtest", backtest_payload, {}, is_error=False)
+                return {
+                    "final_response": "Now let me check the trade distribution to understand what's actually being traded:",
+                    "status": "success",
+                }
+
+            inst.run_conversation = run_conv
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore, patch(
+                "src.session.service.bootstrap_run_from_prompt",
+                return_value={"status": "ok"},
+            ):
+                store = MockStore.return_value
+                store.create_run_dir.return_value = session_run_dir
+                store.mark_success.return_value = None
+                store.mark_failure.return_value = None
+                store.save_request.return_value = {}
+
+                result = await svc._run_with_agent(attempt)
+
+                assert result["status"] == "success"
+                assert result["run_dir"] == str(actual_run_dir)
+                assert "# Backtest Report" in result["content"]
+                assert (actual_run_dir / "report.md").exists()
+                store.mark_success.assert_called()
+                store.mark_failure.assert_not_called()
+
+        _run(_t())
+
     def test_plain_chat_attempt_completed_omits_run_id_without_artifact(self, tmp_path):
         """Completed plain-chat attempts should not attach run_id metadata or a run card trigger."""
         from src.session.models import Attempt

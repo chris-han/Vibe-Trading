@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import api_server
 from fastapi.testclient import TestClient
+from src.ui_services import load_run_report
 
 
 def test_resolve_run_dir_uses_configured_root(tmp_path: Path, monkeypatch):
@@ -76,3 +77,27 @@ def test_get_run_result_returns_404_when_run_only_exists_in_public_root(tmp_path
     response = client.get(f"/runs/{run_dir.name}")
 
     assert response.status_code == 404, response.text
+
+
+def test_load_run_report_synthesizes_backtest_report_from_metrics(tmp_path: Path):
+    run_dir = tmp_path / "runs" / "20260421_171206_49_2cfa61"
+    artifacts_dir = run_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+
+    (run_dir / "req.json").write_text(
+        '{"prompt": "Backtest a risk-parity portfolio of MSFT, BTC-USDT, and AAPL for full-year 2025"}',
+        encoding="utf-8",
+    )
+    (artifacts_dir / "metrics.csv").write_text(
+        "final_value,total_return,annual_return,max_drawdown,sharpe,trade_count,benchmark_return,excess_return\n"
+        "1003372.3238935024,0.0033723238935023936,0.0013827073249346178,-0.05654206268889818,0.05382347424523173,57,0.092701,-0.089329\n",
+        encoding="utf-8",
+    )
+
+    report = load_run_report(run_dir)
+
+    assert report is not None
+    assert "# Backtest Report" in report
+    assert "risk-parity portfolio" in report
+    assert "57" in report
+    assert "-8.93%" in report
