@@ -881,18 +881,64 @@ export function Agent() {
   }, [showUploadMenu]);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
+  const workspaceState = status === "streaming"
+    ? "Live reasoning, tool execution, and streaming output are active in this thread."
+    : messages.length > 0
+      ? "Continue refining the current research thread, attach files, or rerun with a tighter brief."
+      : "Start with a focused prompt and let the workspace turn it into runnable research.";
+  const workspaceCards = [
+    {
+      label: "State",
+      value: status === "streaming" ? "Working live" : messages.length > 0 ? "Ready to iterate" : "Waiting for brief",
+    },
+    {
+      label: "Files",
+      value: attachments.length > 0 ? `${attachments.length} attached` : "No files yet",
+    },
+    {
+      label: "Mode",
+      value: swarmPreset?.title ?? "Single agent",
+    },
+  ];
 
   return (
-    <div className="flex h-full min-h-0 flex-1 min-w-0 flex-col overflow-hidden">
-      <div ref={listRef} className="relative min-h-0 flex-1 overflow-auto p-6 scroll-smooth">
-        <div className="max-w-3xl mx-auto space-y-4">
+    <div className="flex h-full min-h-0 flex-1 min-w-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.14),transparent_24%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.4))]">
+      <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-4 px-4 py-4 md:px-6 md:py-6">
+        <section className="shrink-0 rounded-section border border-border/80 bg-card/88 p-5 shadow-sm backdrop-blur-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Research workspace
+              </div>
+              <div className="space-y-2">
+                <div className="text-headline text-foreground">Build, test, and iterate in one thread.</div>
+                <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{workspaceState}</p>
+                {sessionId && (
+                  <p className="text-xs text-muted-foreground">Session {sessionId.slice(0, 8)} is currently loaded.</p>
+                )}
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[24rem]">
+              {workspaceCards.map((card) => (
+                <div key={card.label} className="rounded-card border border-border bg-background/82 px-3 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{card.label}</div>
+                  <div className="mt-2 text-sm font-semibold text-foreground">{card.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-hero border border-border/80 bg-card/82 shadow-sm backdrop-blur-sm">
+          <div ref={listRef} className="relative min-h-0 flex-1 overflow-auto px-4 py-6 scroll-smooth md:px-8 md:py-8">
+            <div className="mx-auto w-full max-w-4xl space-y-4">
           {!sessionLoading && messages.length > 0 && hasMoreHistory && (
             <div className="flex justify-center py-1">
               <button
                 type="button"
                 onClick={handleLoadMoreHistory}
                 disabled={loadingMoreHistory}
-                className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-button border border-border bg-background px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loadingMoreHistory && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {loadingMoreHistory ? t.loadingMoreHistory : t.loadMoreHistory}
@@ -947,9 +993,9 @@ export function Agent() {
           {(streamingText || (status === "streaming" && toolCalls.length > 0)) && (
             <div className="flex gap-3">
               <AgentAvatar />
-          <div className="flex-1 min-w-0 space-y-1.5">
+              <div className="min-w-0 flex-1 space-y-1.5">
                 {reasoningText && (
-                  <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground italic whitespace-pre-wrap leading-relaxed">
+                  <div className="rounded-card border border-border bg-muted/30 px-3 py-2 text-xs italic leading-relaxed text-muted-foreground whitespace-pre-wrap">
                     <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
                       Reasoning
                     </div>
@@ -987,26 +1033,26 @@ export function Agent() {
             </div>
           )}
 
-        </div>
+            </div>
 
-        {/* Scroll to bottom button */}
-        {showScrollBtn && (
-          <button
-            onClick={forceScrollToBottom}
-            className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:bg-primary/90 transition-colors z-10"
-          >
-            <ArrowDown className="h-3 w-3" /> New messages
-          </button>
-        )}
-        <ConversationTimeline messages={messages} containerRef={listRef} />
-      </div>
+            {showScrollBtn && (
+              <button
+                onClick={forceScrollToBottom}
+                className="sticky bottom-5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-button bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-lg transition-colors hover:bg-primary/90"
+              >
+                <ArrowDown className="h-3 w-3" /> New messages
+              </button>
+            )}
+            <ConversationTimeline messages={messages} containerRef={listRef} />
+          </div>
+        </section>
 
-      <form onSubmit={handleSubmit} className="shrink-0 border-t border-border bg-background/80 p-4 backdrop-blur-sm">
-        <div className="max-w-3xl mx-auto space-y-2">
+        <form onSubmit={handleSubmit} className="shrink-0 rounded-section border border-border/80 bg-background/92 p-4 shadow-sm backdrop-blur-sm">
+          <div className="mx-auto max-w-4xl space-y-3">
           {/* Swarm preset badge */}
           {swarmPreset && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-button bg-primary text-primary-foreground text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 rounded-button bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground">
                 <Users className="h-3 w-3" />
                 {swarmPreset.title}
                 <button type="button" onClick={() => setSwarmPreset(null)} className="hover:text-destructive hover:bg-destructive/20 rounded p-0.5 transition-colors">
@@ -1019,7 +1065,7 @@ export function Agent() {
           {attachments.length > 0 && (
             <div className="flex flex-wrap items-center gap-1">
               {attachments.map((attachment) => (
-                <span key={attachment.filePath} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-button bg-primary text-primary-foreground text-xs font-medium">
+                <span key={attachment.filePath} className="inline-flex items-center gap-1.5 rounded-button border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground">
                   <Paperclip className="h-3 w-3" />
                   {attachment.filename}
                   <button
@@ -1047,13 +1093,13 @@ export function Agent() {
                 type="button"
                 onClick={() => setShowUploadMenu(prev => !prev)}
                 disabled={status === "streaming" || uploading}
-                className="w-9 h-9 rounded-full border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-button border border-border bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
                 title="More options"
               >
                 <Plus className="h-4 w-4" />
               </button>
               {showUploadMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-card border border-border bg-background/95 backdrop-blur-sm shadow-lg py-1 z-50">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-52 rounded-card border border-border bg-background/95 py-1 shadow-lg backdrop-blur-sm">
                   <button
                     type="button"
                     onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
@@ -1104,14 +1150,14 @@ export function Agent() {
                 }
               }}
               placeholder={t.prompt}
-              className="flex-1 px-4 py-2.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-shadow resize-none max-h-32 overflow-hidden text-foreground placeholder:text-muted-foreground"
+              className="max-h-32 flex-1 resize-none overflow-hidden rounded-card border border-border bg-card px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
               disabled={status === "streaming"}
             />
             {status === "streaming" ? (
               <button
                 type="button"
                 onClick={handleCancel}
-                className="w-9 h-9 rounded-full bg-destructive text-destructive-foreground font-medium hover:bg-destructive/90 transition-colors flex items-center justify-center"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
                 title="Stop generation"
               >
                 <Square className="h-4 w-4" />
@@ -1120,14 +1166,15 @@ export function Agent() {
               <button
                 type="submit"
                 disabled={!input.trim() && attachments.length === 0}
-                className="w-9 h-9 rounded-full bg-primary text-primary-foreground font-medium disabled:opacity-40 hover:bg-primary/90 transition-colors flex items-center justify-center"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40"
               >
                 <ArrowUp className="h-4 w-4" />
               </button>
             )}
           </div>
-        </div>
-      </form>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

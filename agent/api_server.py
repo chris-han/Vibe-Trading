@@ -21,7 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Security, UploadFile, status
+import yaml
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Security, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -56,6 +57,8 @@ for _s in ("stdout", "stderr"):
         _r(encoding="utf-8", errors="replace")
 
 ensure_runtime_env()
+
+from hermes_constants import reset_active_hermes_home, set_active_hermes_home
 
 # ---------------------------------------------------------------------------
 # Data root: unauthenticated runtime files live under the shared public
@@ -647,6 +650,337 @@ def _get_env_float(name: str, default: float) -> float:
         return default
 
 
+_SKILL_SCAN_EXCLUDED_DIRS = frozenset({".git", ".github", ".hub"})
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_skill_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        raw = str(item).strip()
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        normalized.append(raw)
+    return normalized
+
+
+def _parse_skill_frontmatter(skill_file: Path) -> tuple[dict[str, Any], str]:
+    text = skill_file.read_text(encoding="utf-8")
+    if text.startswith("---\n"):
+        _, rest = text.split("---\n", 1)
+        if "\n---\n" in rest:
+            frontmatter_text, body = rest.split("\n---\n", 1)
+            try:
+                parsed = yaml.safe_load(frontmatter_text) or {}
+            except Exception:
+                parsed = {}
+            return parsed if isinstance(parsed, dict) else {}, body
+    return {}, text
+
+
+def _first_skill_body_line(body: str) -> str:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped
+    return ""
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _load_workspace_skill_settings(hermes_home: Path) -> tuple[list[Path], set[str]]:
+    config = _load_yaml_mapping(hermes_home / "config.yaml")
+    skills_cfg = config.get("skills")
+    if not isinstance(skills_cfg, dict):
+        return [], set()
+
+    external_dirs: list[Path] = []
+    seen_dirs: set[Path] = set()
+    for entry in _normalize_skill_string_list(skills_cfg.get("external_dirs")):
+        expanded = Path(os.path.expandvars(os.path.expanduser(entry))).resolve()
+        if expanded in seen_dirs or not expanded.is_dir():
+            continue
+        seen_dirs.add(expanded)
+        external_dirs.append(expanded)
+
+    disabled = set(_normalize_skill_string_list(skills_cfg.get("disabled")))
+    return external_dirs, disabled
+
+
+def _skill_source_metadata(skill_dir: Path, workspace_skills_dir: Path) -> dict[str, Any]:
+    hermes_builtin_root = (REPO_ROOT / "hermes-agent" / "skills").resolve()
+    app_shared_root = (REPO_ROOT / "agent" / "src" / "skills").resolve()
+
+    if _path_is_within(skill_dir, workspace_skills_dir):
+        return {
+            "sourceTier": "workspace",
+            "sourceLabel": "Workspace",
+            "author": "Workspace",
+            "icon": "✍️",
+            "builtin": False,
+            "canEdit": True,
+            "canUninstall": True,
+            "canModify": True,
+        }
+
+    if _path_is_within(skill_dir, app_shared_root):
+        return {
+            "sourceTier": "application",
+            "sourceLabel": "Application Shared",
+            "author": "Semantier",
+            "icon": "🧩",
+            "builtin": False,
+            "canEdit": False,
+            "canUninstall": False,
+            "canModify": False,
+        }
+
+    if _path_is_within(skill_dir, hermes_builtin_root):
+        return {
+            "sourceTier": "builtin",
+            "sourceLabel": "Hermes Built-in",
+            "author": "Hermes",
+            "icon": "🛠️",
+            "builtin": True,
+            "canEdit": False,
+            "canUninstall": False,
+            "canModify": False,
+        }
+
+    return {
+        "sourceTier": "external",
+        "sourceLabel": "External Shared",
+        "author": "External",
+        "icon": "🧩",
+        "builtin": False,
+        "canEdit": False,
+        "canUninstall": False,
+        "canModify": False,
+    }
+
+
+def _infer_skill_category(frontmatter: dict[str, Any], skill_dir: Path, source_root: Path) -> str:
+    direct = str(frontmatter.get("category") or "").strip()
+    if direct:
+        return direct
+    try:
+        relative_parts = skill_dir.relative_to(source_root).parts
+    except ValueError:
+        return "Productivity"
+    if len(relative_parts) >= 2:
+        return relative_parts[-2].replace("-", " ").title()
+    if relative_parts:
+        return relative_parts[0].replace("-", " ").title()
+    return "Productivity"
+
+
+def _build_workspace_skill_inventory(workspace: WorkspacePaths) -> list[dict[str, Any]]:
+    workspace_skills_dir = (workspace.hermes_home / "skills").resolve()
+    external_dirs, disabled = _load_workspace_skill_settings(workspace.hermes_home)
+
+    scan_roots: list[Path] = []
+    if workspace_skills_dir.exists():
+        scan_roots.append(workspace_skills_dir)
+    scan_roots.extend(external_dirs)
+
+    inventory: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    for scan_root in scan_roots:
+        for skill_file in sorted(scan_root.rglob("SKILL.md")):
+            if any(part in _SKILL_SCAN_EXCLUDED_DIRS for part in skill_file.parts):
+                continue
+
+            skill_dir = skill_file.parent
+            try:
+                frontmatter, body = _parse_skill_frontmatter(skill_file)
+            except Exception:
+                continue
+
+            name = str(frontmatter.get("name") or skill_dir.name).strip()
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+
+            description = str(frontmatter.get("description") or "").strip() or _first_skill_body_line(body)
+            tags = _normalize_skill_string_list(frontmatter.get("tags"))
+            triggers = _normalize_skill_string_list(frontmatter.get("triggers"))
+            metadata = _skill_source_metadata(skill_dir, workspace_skills_dir)
+
+            file_count = 0
+            try:
+                file_count = sum(1 for child in skill_dir.rglob("*") if child.is_file())
+            except Exception:
+                file_count = 1
+
+            inventory.append(
+                {
+                    "id": name,
+                    "slug": name,
+                    "name": name,
+                    "description": description,
+                    "author": str(frontmatter.get("author") or metadata["author"]),
+                    "triggers": triggers,
+                    "tags": tags,
+                    "homepage": None,
+                    "category": _infer_skill_category(frontmatter, skill_dir, scan_root),
+                    "icon": metadata["icon"],
+                    "content": "",
+                    "fileCount": file_count,
+                    "sourcePath": str(skill_dir),
+                    "installed": True,
+                    "enabled": name not in disabled,
+                    "builtin": metadata["builtin"],
+                    "sourceTier": metadata["sourceTier"],
+                    "sourceLabel": metadata["sourceLabel"],
+                    "canEdit": metadata["canEdit"],
+                    "canUninstall": metadata["canUninstall"],
+                    "canModify": metadata["canModify"],
+                    "security": {
+                        "level": "safe",
+                        "flags": [],
+                        "score": 0,
+                    },
+                }
+            )
+
+    source_order = {"workspace": 0, "application": 1, "builtin": 2, "external": 3}
+    inventory.sort(key=lambda item: (source_order.get(str(item.get("sourceTier")), 99), str(item.get("name") or "")))
+    return inventory
+
+
+def _build_workspace_tool_inventory() -> list[dict[str, Any]]:
+    from hermes_cli.tools_config import _get_effective_configurable_toolsets, _get_platform_tools, _toolset_has_keys
+    from hermes_cli.web_server import load_config
+    from toolsets import resolve_toolset
+
+    config = load_config()
+    enabled_toolsets = _get_platform_tools(
+        config,
+        "cli",
+        include_default_mcp_servers=False,
+    )
+
+    inventory: list[dict[str, Any]] = []
+    for name, label, description in _get_effective_configurable_toolsets():
+        try:
+            tools = sorted(set(resolve_toolset(name)))
+        except Exception:
+            tools = []
+
+        source_tier = "application" if name == "vibe_trading" else "builtin"
+        source_label = "Application Shared" if source_tier == "application" else "Hermes Built-in"
+        inventory.append(
+            {
+                "id": name,
+                "name": name,
+                "label": label,
+                "description": description,
+                "tools": tools,
+                "enabled": name in enabled_toolsets,
+                "available": name in enabled_toolsets,
+                "configured": _toolset_has_keys(name, config),
+                "sourceTier": source_tier,
+                "sourceLabel": source_label,
+                "builtin": source_tier == "builtin",
+                "canModify": False,
+            }
+        )
+
+    source_order = {"application": 0, "builtin": 1}
+    inventory.sort(key=lambda item: (source_order.get(str(item.get("sourceTier")), 99), str(item.get("label") or item.get("name") or "")))
+    return inventory
+
+
+def _install_skill_into_workspace(
+    workspace: WorkspacePaths,
+    *,
+    identifier: str,
+    category: str = "",
+    force: bool = False,
+) -> dict[str, Any]:
+    from hermes_cli.web_server import _install_skill_from_hub
+
+    token = set_active_hermes_home(workspace.hermes_home)
+    try:
+        result = _install_skill_from_hub(
+            identifier,
+            category=category,
+            force=force,
+            invalidate_cache=True,
+        )
+    finally:
+        reset_active_hermes_home(token)
+
+    install_path = str(result.get("install_path") or "").strip()
+    if install_path:
+        result["absolute_install_path"] = str((workspace.hermes_home / "skills" / install_path).resolve())
+    result["sourceTier"] = "workspace"
+    result["sourceLabel"] = "Workspace"
+    return result
+
+
+def _toggle_workspace_skill(
+    workspace: WorkspacePaths,
+    *,
+    name: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    from hermes_cli.skills_config import get_disabled_skills, save_disabled_skills
+    from hermes_cli.web_server import load_config
+
+    token = set_active_hermes_home(workspace.hermes_home)
+    try:
+        config = load_config()
+        disabled = get_disabled_skills(config)
+        if enabled:
+            disabled.discard(name)
+        else:
+            disabled.add(name)
+        save_disabled_skills(config, disabled)
+    finally:
+        reset_active_hermes_home(token)
+
+    return {"ok": True, "name": name, "enabled": enabled}
+
+
+def _uninstall_workspace_skill(
+    workspace: WorkspacePaths,
+    *,
+    name: str,
+) -> dict[str, Any]:
+    from hermes_cli.web_server import _uninstall_skill_from_hub
+
+    token = set_active_hermes_home(workspace.hermes_home)
+    try:
+        return _uninstall_skill_from_hub(name, invalidate_cache=True)
+    finally:
+        reset_active_hermes_home(token)
+
+
 
 def _build_response_from_run_dir(run_dir: Path, elapsed: float, *, include_analysis: bool = False) -> RunResponse:
     """Build a run response from a persisted run directory."""
@@ -991,6 +1325,21 @@ async def api_info():
     }
 
 
+class SystemSkillInstallRequest(BaseModel):
+    identifier: str = Field(..., min_length=1)
+    category: str = Field(default="")
+    force: bool = Field(default=False)
+
+
+class SystemSkillToggleRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    enabled: bool
+
+
+class SystemSkillUninstallRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+
+
 @app.get("/system/paths")
 async def system_paths(request: Request):
     """Return backend-owned runtime paths used by this API process."""
@@ -1010,6 +1359,72 @@ async def system_paths(request: Request):
         "currentSessionsDir": str(ctx.workspace.sessions_dir),
         "currentRunsDir": str(ctx.workspace.runs_dir),
         "currentUploadsDir": str(ctx.workspace.uploads_dir),
+    }
+
+
+@app.get("/system/skills")
+async def system_skills(request: Request):
+    """Return the installed skill inventory for the active workspace.
+
+    This endpoint is Semantier-owned and augments Hermes skill discovery with
+    source-tier and mutability metadata for the workspace UI.
+    """
+    ctx = _resolve_request_context(request, require_login=False)
+    skills = _build_workspace_skill_inventory(ctx.workspace)
+    categories = sorted({str(skill.get("category") or "") for skill in skills if skill.get("category")})
+    return {
+        "skills": skills,
+        "total": len(skills),
+        "page": 1,
+        "categories": categories,
+        "workspaceId": ctx.workspace.workspace_id,
+        "workspaceSlug": ctx.workspace.workspace_slug,
+    }
+
+
+@app.post("/system/skills/install", dependencies=[Depends(require_auth)])
+async def system_install_skill(request: Request, body: SystemSkillInstallRequest = Body(...)):
+    """Install a marketplace skill directly into the active workspace Hermes home."""
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    return _install_skill_into_workspace(
+        ctx.workspace,
+        identifier=body.identifier.strip(),
+        category=body.category.strip(),
+        force=body.force,
+    )
+
+
+@app.put("/system/skills/toggle", dependencies=[Depends(require_auth)])
+async def system_toggle_skill(request: Request, body: SystemSkillToggleRequest = Body(...)):
+    """Toggle skill enabled state inside the active workspace Hermes home."""
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    return _toggle_workspace_skill(
+        ctx.workspace,
+        name=body.name.strip(),
+        enabled=body.enabled,
+    )
+
+
+@app.post("/system/skills/uninstall", dependencies=[Depends(require_auth)])
+async def system_uninstall_skill(request: Request, body: SystemSkillUninstallRequest = Body(...)):
+    """Uninstall a hub-installed workspace skill from the active workspace Hermes home."""
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    return _uninstall_workspace_skill(
+        ctx.workspace,
+        name=body.name.strip(),
+    )
+
+
+@app.get("/system/tools")
+async def system_tools(request: Request):
+    """Return toolset inventory with Semantier source-tier metadata."""
+    ctx = _resolve_request_context(request, require_login=False)
+    tools = _build_workspace_tool_inventory()
+    return {
+        "tools": tools,
+        "total": len(tools),
+        "workspaceId": ctx.workspace.workspace_id,
+        "workspaceSlug": ctx.workspace.workspace_slug,
     }
 
 

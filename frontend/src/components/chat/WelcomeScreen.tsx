@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from "react";
-import { Bot, TrendingUp, Bitcoin, Globe, Sparkles, Users } from "lucide-react";
+import { ArrowRight, Bot, Globe, Sparkles, TrendingUp, Users } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
 interface Example {
@@ -11,7 +11,6 @@ interface Example {
 interface Category {
   label: string;
   icon: React.ReactNode;
-  color: string;
   examples: Example[];
 }
 
@@ -19,7 +18,6 @@ const CATEGORIES: Category[] = [
   {
     label: "Multi-Market Backtest",
     icon: <TrendingUp className="h-4 w-4" />,
-    color: "text-red-400 border-red-500/30 hover:border-red-500/60 hover:bg-red-500/5",
     examples: [
       {
         title: "Cross-Market Portfolio",
@@ -41,7 +39,6 @@ const CATEGORIES: Category[] = [
   {
     label: "Research & Analysis",
     icon: <Sparkles className="h-4 w-4" />,
-    color: "text-amber-400 border-amber-500/30 hover:border-amber-500/60 hover:bg-amber-500/5",
     examples: [
       {
         title: "Multi-Factor Alpha Model",
@@ -58,7 +55,6 @@ const CATEGORIES: Category[] = [
   {
     label: "Swarm Teams",
     icon: <Users className="h-4 w-4" />,
-    color: "text-violet-400 border-violet-500/30 hover:border-violet-500/60 hover:bg-violet-500/5",
     examples: [
       {
         title: "Investment Committee Review",
@@ -75,7 +71,6 @@ const CATEGORIES: Category[] = [
   {
     label: "Document & Web Research",
     icon: <Globe className="h-4 w-4" />,
-    color: "text-blue-400 border-blue-500/30 hover:border-blue-500/60 hover:bg-blue-500/5",
     examples: [
       {
         title: "Analyze an Earnings Report",
@@ -91,17 +86,10 @@ const CATEGORIES: Category[] = [
   },
 ];
 
-const CAPABILITY_CHIPS = [
-  "56 Finance Skills",
-  "25 Swarm Presets",
-  "19 Agent Tools",
-  "3 Markets: A-Share · Crypto · HK/US",
-  "Minute to Daily Timeframes",
-  "4 Portfolio Optimizers",
-  "15+ Risk Metrics",
-  "Options & Derivatives",
-  "Documents & Web Research",
-  "Factor Analysis & ML",
+const CAPABILITY_CARDS = [
+  { label: "Markets", value: "A-Share, HK/US, Crypto" },
+  { label: "Modes", value: "Single agent and swarm presets" },
+  { label: "Outputs", value: "Code, runs, metrics, reports" },
 ];
 
 interface Props {
@@ -130,77 +118,123 @@ export function WelcomeScreen({ onExampleSelect }: Props) {
   }, []);
 
   const visibleCategories = isShortViewport && !showAllCategories ? CATEGORIES.slice(0, 2) : CATEGORIES;
+  const [featuredCategory, ...secondaryCategories] = visibleCategories;
+  const featuredPrimary = featuredCategory.examples[0];
+  const featuredSecondary = featuredCategory.examples[1];
 
   return (
-    <div className="flex min-h-full flex-col items-center justify-start gap-4 py-4 text-center md:gap-5 md:py-5">
-      {/* Header */}
-      <div className="space-y-2">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-button bg-primary shadow-sm">
-          <img src="/logo-wireframe.svg" alt="semantier logo" className="block h-14 w-14 object-contain object-center" />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold tracking-tight text-foreground md:text-2xl">semantier</h2>
-          <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
-            vibe trading with your professional financial agent team
-          </p>
-          <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-muted-foreground">
-            {t.describeStrategy}
-          </p>
-        </div>
-      </div>
-
-      {/* Capability chips */}
-      <div className="flex max-w-3xl flex-wrap justify-center gap-1.5">
-        {CAPABILITY_CHIPS.map((chip) => (
-          <span
-            key={chip}
-            className="rounded-full border border-border bg-muted/50 px-2.5 py-0.5 text-[11px] text-muted-foreground"
-          >
-            {chip}
-          </span>
-        ))}
-      </div>
-
-      {/* Example categories grid */}
-      <div className="w-full max-w-4xl space-y-2.5 text-left">
-        <p className="text-xs text-muted-foreground px-1">{t.examples}</p>
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {visibleCategories.map((cat) => (
-            <div key={cat.label} className="space-y-1.5">
-              <div className={`flex items-center gap-1.5 px-1 text-[11px] font-medium ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
-                {cat.icon}
-                <span>{cat.label}</span>
+    <div className="flex min-h-full flex-col justify-center py-3 md:py-6">
+      <div className="mx-auto w-full max-w-6xl space-y-6">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] lg:items-stretch">
+          <section className="rounded-hero border border-border/80 bg-card p-6 shadow-sm md:p-8">
+            <div className="space-y-6">
+              <div className="space-y-4">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-button bg-primary shadow-sm lg:mx-0">
+                  <img src="/logo-wireframe.svg" alt="semantier logo" className="block h-14 w-14 object-contain object-center" />
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                  <Bot className="h-3.5 w-3.5" />
+                  Research workspace
+                </div>
+                <div className="space-y-3">
+                  <h2 className="text-section max-w-xl text-foreground">Start with a brief. Keep only the ideas that hold up.</h2>
+                  <p className="max-w-xl text-subhead text-muted-foreground">vibe trading with your professional financial agent team</p>
+                  <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{t.describeStrategy}</p>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                {cat.examples.map((ex) => (
+
+              <div className="grid gap-3 md:grid-cols-3">
+                {CAPABILITY_CARDS.map((card) => (
+                  <div key={card.label} className="rounded-card border border-border bg-background/80 p-4">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{card.label}</div>
+                    <div className="mt-2 text-sm font-semibold text-foreground">{card.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                {[featuredPrimary, featuredSecondary].map((example, index) => (
                   <button
-                    key={ex.title}
-                    onClick={() => onExampleSelect(ex.prompt)}
-                    className={`block w-full rounded-button border bg-card px-3 py-1.5 text-left transition-colors hover:shadow-sm ${cat.color}`}
+                    key={example.title}
+                    type="button"
+                    onClick={() => onExampleSelect(example.prompt)}
+                    className={index === 0
+                      ? "rounded-section bg-primary p-5 text-left text-primary-foreground transition-transform hover:scale-[1.01]"
+                      : "rounded-section border border-border bg-background/80 p-5 text-left transition-colors hover:border-primary/50 hover:bg-muted/35"
+                    }
                   >
-                    <span className="text-[13px] font-medium leading-snug text-foreground md:text-sm">
-                      {ex.title}
-                    </span>
-                    <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground md:text-xs">
-                      {ex.desc}
-                    </span>
+                    <div className={index === 0 ? "text-[11px] font-medium uppercase tracking-[0.18em] text-primary-foreground/80" : "text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground"}>
+                      {index === 0 ? "Featured prompt" : "Fast start"}
+                    </div>
+                    <div className={index === 0 ? "mt-3 text-lg font-semibold leading-tight" : "mt-3 text-base font-semibold leading-tight text-foreground"}>
+                      {example.title}
+                    </div>
+                    <p className={index === 0 ? "mt-2 text-sm leading-relaxed text-primary-foreground/80" : "mt-2 text-sm leading-relaxed text-muted-foreground"}>
+                      {example.desc}
+                    </p>
+                    <div className={index === 0 ? "mt-4 inline-flex items-center gap-2 rounded-button bg-primary-foreground/10 px-3 py-1.5 text-xs font-medium text-primary-foreground" : "mt-4 inline-flex items-center gap-2 rounded-button border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground"}>
+                      Load prompt
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </div>
                   </button>
                 ))}
               </div>
             </div>
-          ))}
+          </section>
+
+          <section className="rounded-hero border border-border/80 bg-card p-6 shadow-sm md:p-8">
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{t.examples}</div>
+                <h3 className="text-headline text-foreground">Choose a lane, then let the workspace open the right tools.</h3>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onExampleSelect(featuredPrimary.prompt)}
+                className="block w-full rounded-section border border-border bg-background/80 p-5 text-left transition-colors hover:border-primary/50 hover:bg-muted/35"
+              >
+                <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                  {featuredCategory.icon}
+                  {featuredCategory.label}
+                </div>
+                <div className="mt-4 text-lg font-semibold leading-tight text-foreground">{featuredPrimary.title}</div>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{featuredPrimary.desc}</p>
+              </button>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                {secondaryCategories.map((category) => {
+                  const example = category.examples[0];
+                  return (
+                    <button
+                      key={category.label}
+                      type="button"
+                      onClick={() => onExampleSelect(example.prompt)}
+                      className="block rounded-card border border-border bg-background/80 p-4 text-left transition-colors hover:border-primary/50 hover:bg-muted/35"
+                    >
+                      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                        {category.icon}
+                        {category.label}
+                      </div>
+                      <div className="mt-3 text-sm font-semibold leading-snug text-foreground">{example.title}</div>
+                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{example.desc}</p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {isShortViewport && !showAllCategories && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllCategories(true)}
+                  className="rounded-button border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+                >
+                  Show more examples
+                </button>
+              )}
+            </div>
+          </section>
         </div>
-        {isShortViewport && !showAllCategories && (
-          <div className="flex justify-center pt-1">
-            <button
-              type="button"
-              onClick={() => setShowAllCategories(true)}
-              className="rounded-full border border-border bg-background px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              Show more examples
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
