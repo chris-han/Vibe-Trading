@@ -85,16 +85,25 @@ def _candidate_runs_dirs(runs_dir: Optional[Path] = None) -> List[Path]:
     """Return run roots in lookup order.
 
     The canonical root lives under workspaces/<workspace_id>/runs.
+    Callers must always pass runs_dir — falling back to the global RUNS_DIR
+    would silently route requests to the wrong workspace.
     """
-    if runs_dir is not None:
-        return [runs_dir]
-
-    return [RUNS_DIR]
+    if runs_dir is None:
+        raise RuntimeError(
+            "_candidate_runs_dirs: runs_dir is required but was not provided. "
+            "Pass ctx.workspace.runs_dir from the request context."
+        )
+    return [runs_dir]
 
 
 def _session_run_roots(sessions_dir: Optional[Path] = None) -> List[Path]:
     """Yield runs/ subdirectories for all existing sessions (nested hierarchy)."""
-    current_sessions = sessions_dir or SESSIONS_DIR
+    if sessions_dir is None:
+        raise RuntimeError(
+            "_session_run_roots: sessions_dir is required but was not provided. "
+            "Pass ctx.workspace.sessions_dir from the request context."
+        )
+    current_sessions = sessions_dir
     if not current_sessions.exists():
         return []
     roots: List[Path] = []
@@ -156,10 +165,20 @@ def _resolve_upload_dir(
 ) -> Path:
     """Store user uploads under the most specific artifact scope available."""
     if run_id:
-        return (runs_dir or RUNS_DIR) / run_id / "artifacts" / "uploads"
+        if runs_dir is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Upload routing error: runs_dir was not resolved (workspace context missing)",
+            )
+        return runs_dir / run_id / "artifacts" / "uploads"
 
     if session_id:
-        session_dir = (sessions_dir or SESSIONS_DIR) / session_id
+        if sessions_dir is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Upload routing error: sessions_dir was not resolved (workspace context missing)",
+            )
+        session_dir = sessions_dir / session_id
         return session_dir / "uploads"
 
     raise HTTPException(status_code=400, detail="session_id or run_id is required for uploads")
@@ -1473,8 +1492,11 @@ def _resolve_effective_upload_scope(
         or request.headers.get("x-run-id")
     )
     ctx = _resolve_request_context(request, require_login=False)
-    active_runs_dir = ctx.workspace.runs_dir if _feishu_oauth_enabled() else RUNS_DIR
-    active_sessions_dir = ctx.workspace.sessions_dir if _feishu_oauth_enabled() else SESSIONS_DIR
+    # Always route uploads into the request's workspace directory. Workspace routing
+    # is independent of Feishu OAuth — falling back to the global public workspace
+    # dirs here would silently lose files for authenticated users.
+    active_runs_dir = ctx.workspace.runs_dir
+    active_sessions_dir = ctx.workspace.sessions_dir
     return effective_session_id, effective_run_id, active_runs_dir, active_sessions_dir
 
 
@@ -1509,9 +1531,9 @@ def _resolve_upload_target_dir(
             )
         raise
 
-    if _feishu_oauth_enabled() and effective_session_id and not (active_sessions_dir / effective_session_id).exists():
+    if effective_session_id and not (active_sessions_dir / effective_session_id).exists():
         raise HTTPException(status_code=404, detail=f"Session {effective_session_id} not found")
-    if _feishu_oauth_enabled() and effective_run_id and _resolve_run_dir(
+    if effective_run_id and _resolve_run_dir(
         effective_run_id,
         runs_dir=active_runs_dir,
         sessions_dir=active_sessions_dir,
