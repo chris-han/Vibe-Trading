@@ -177,10 +177,15 @@ The following files exist in `public/` but are **not referenced** anywhere in th
 ### Wordmark
 The brand name "semantier" is rendered as **plain text**, not as an image.
 
+Wordmark rules:
+- Always render it as lowercase `semantier`
+- Always use Autaut Grotesk for the wordmark on UI surfaces
+- Never title-case or uppercase the wordmark in navigation, splash, auth, or empty states
+
 **Sidebar (expanded)**
 - Layout: `flex items-center gap-2`
 - Mark: `h-8 w-8 rounded-button object-contain shrink-0 bg-transparent`
-- Wordmark: `font-bold text-base text-foreground`
+- Wordmark: lowercase `semantier` in Autaut Grotesk, `font-bold text-base text-foreground`
 
 **Sidebar (collapsed)**
 - Layout: `flex items-center justify-center`
@@ -190,7 +195,7 @@ The brand name "semantier" is rendered as **plain text**, not as an image.
 **Welcome / Hero screen**
 - Container: `mx-auto flex h-14 w-14 items-center justify-center rounded-button bg-primary shadow-sm`
 - Mark: `block h-14 w-14 object-contain object-center`
-- Wordmark: `text-xl font-bold tracking-tight text-foreground md:text-2xl`
+- Wordmark: lowercase `semantier` in Autaut Grotesk, `text-xl font-bold tracking-tight text-foreground md:text-2xl`
 
 ### Logo Styling Rules
 - **Never** use a PNG logo for the UI wordmark — always use plain text with `font-bold`

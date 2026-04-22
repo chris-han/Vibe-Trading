@@ -23,6 +23,7 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
         "Artifacts directory: /tmp/run-123/artifacts\n"
         "Uploads directory: /workspace/sessions/session-abc/uploads\n"
         "Use relative paths for terminal work.\n"
+        "Use the Uploads directory alias only with file-style tools, not terminal commands.\n"
         "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
         "Do not rely on host absolute paths.\n"
         "Session: session-abc\n"
@@ -47,6 +48,7 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert f"Uploaded document types accepted by this runtime: {format_supported_upload_extensions()}." in prompt
     assert 'skill_view(name="ocr-and-documents")' in prompt
     assert "For DOCX, XLSX, or similar local document formats" in prompt
+    assert "Never use terminal ls/cd commands against the /workspace upload alias" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
     assert prompt.endswith("skill-body-for:web\n")
 

@@ -138,6 +138,13 @@
     line-height: 1.8;
   }
 
+  .brand-wordmark {
+    font-family: 'Autaut Grotesk', 'Noto Sans SC', -apple-system, system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
+    font-feature-settings: "calt" 1;
+    letter-spacing: -0.02em;
+    text-transform: lowercase;
+  }
+
   /* Generous border-radius scale */
   .rounded-button { border-radius: 16px; }
   .rounded-card { border-radius: 20px; }

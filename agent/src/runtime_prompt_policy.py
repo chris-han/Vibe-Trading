@@ -34,7 +34,8 @@ def _document_workflow_rules() -> tuple[str, ...]:
         "For DOCX, XLSX, or similar local document formats, prefer the relevant loaded skill guidance before concluding whether the runtime can read them.",
         "If the user provides an uploaded document reference, prefer the relevant reader for that local file path.",
         "Never invent an uploaded filename; only call a local document reader when the exact local path is known.",
-        "If the filename is unknown, list the Uploads directory shown above for candidate documents before searching elsewhere.",
+        "If the filename is unknown, ask for the uploaded filename or inspect only the current workspace upload area with non-terminal file tools before searching elsewhere.",
+        "Never use terminal ls/cd commands against the /workspace upload alias shown above; that uploads path is a virtual display alias, not a terminal cwd target.",
         "Never search Desktop, Downloads, /mnt, or other host filesystem locations for uploaded documents.",
         "If no local path is available, use read_url or browser tools to fetch the report from the source site.",
         "Prefer reading the first relevant pages first with pages='1-5' when the document is long.",
@@ -126,6 +127,7 @@ def build_session_runtime_prompt(
         f"Artifacts directory: {visible_artifacts_dir}\n"
         f"Uploads directory: {visible_uploads_dir}\n"
         "Use relative paths for terminal work.\n"
+        "Use the Uploads directory alias only with file-style tools, not terminal commands.\n"
         "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
         "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"

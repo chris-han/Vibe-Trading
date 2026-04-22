@@ -92,9 +92,9 @@ export function Layout() {
       )}>
         {/* Brand */}
         <div className={cn("border-b border-border", collapsed ? "p-2 flex justify-center" : "p-4")}>
-          <Link to="/" className={cn("flex items-center font-bold text-base text-foreground", collapsed ? "justify-center" : "gap-2")}>
+          <Link to="/" className={cn("flex items-center text-base text-foreground", collapsed ? "justify-center" : "gap-2")}>
             <img src="/logo.svg" alt="semantier logo" className="h-8 w-8 rounded-button object-contain shrink-0 bg-transparent" />
-            {!collapsed && "semantier"}
+            {!collapsed && <span className="brand-wordmark text-base font-bold tracking-tight">semantier</span>}
           </Link>
         </div>
 
