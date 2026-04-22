@@ -20,7 +20,7 @@ export default {
         info: "hsl(var(--info))",
         // Wise & Pinterest-inspired design tokens - Light mode
         "near-black": "#0e0f0c",
-        "wise-green": "#9fe870",
+        "semantier-green": "#9fe870",
         "dark-green": "#163300",
         "light-mint": "#e2f6d5",
         "pastel-green": "#cdffad",

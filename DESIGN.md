@@ -24,7 +24,7 @@ The typography uses **Autaut Grotesk** and **Noto Sans SC** (思源黑体) as th
 | Token | Hex | Role |
 |-------|-----|------|
 | `--near-black` | `#0e0f0c` | Primary text, code surface bg, deep shadows |
-| `--wise-green` | `#9fe870` | Primary CTA, brand accent, keyword highlights |
+| `--semantier-green` | `#9fe870` | Primary CTA, brand accent, keyword highlights |
 | `--dark-green` | `#163300` | Button text on green, deep green accent, active nav indicator |
 | `--light-mint` | `#e2f6d5` | Soft green surface, badge backgrounds |
 | `--pastel-green` | `#cdffad` | Interactive contrast hover, code title/class colors |
@@ -77,8 +77,8 @@ These are the core shadcn/ui-style tokens. **Light mode values are HSL triplets*
 
 ### Semantier Morandi Swatch Principle
 - Large surfaces stay muted and warm: near-black, off-white, light-surface, warm-dark, and warm-gray carry structure.
-- Accent color is reserved for decisive interaction only: `--wise-green` is the active state, selected state, and primary CTA in both light and dark themes.
-- Accent-adjacent UI must keep a dark structural edge: when `--wise-green` sits on a light or dark field, pair it with `--dark-green` for borders, icon strokes, or label text so the state remains legible at a glance.
+- Accent color is reserved for decisive interaction only: `--semantier-green` is the active state, selected state, and primary CTA in both light and dark themes.
+- Accent-adjacent UI must keep a dark structural edge: when `--semantier-green` sits on a light or dark field, pair it with `--dark-green` for borders, icon strokes, or label text so the state remains legible at a glance.
 - Focus indication is not green: interactive focus rings use `--focus-blue` so focus and selection do not collapse into the same signal.
 - When a component needs an unselected fill that the base palette does not explicitly name, use the quiet surface swatch first: `--light-surface` in light mode and the dark card/card2 family in dark mode.
 
@@ -262,7 +262,7 @@ Wordmark rules:
 - Purpose: the off state must remain visible against the page background without borrowing accent color
 
 **Switch Track — On**
-- Background: `--wise-green` in both light and dark modes
+- Background: `--semantier-green` in both light and dark modes
 - Border: `--dark-green`
 - Purpose: the active state should read as a branded affirmative control, not a generic neutral toggle
 
@@ -397,7 +397,7 @@ Dark mode is **warm-tinted**, not cool/blue:
 - Background: `80 6% 10%` (warm dark with olive tint)
 - Foreground: `60 10% 94%` (warm off-white)
 - Borders: `80 5% 22%` (olive-tinted)
-- Primary (`wise-green`): **identical** in both modes for brand consistency
+- Primary (`semantier-green`): **identical** in both modes for brand consistency
 - Semantic colors soften in dark mode (success: `96 60% 55%`, danger: `356 55% 60%`)
 
 ---

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import json
 
 import api_server
 
@@ -103,3 +104,82 @@ def test_messaging_platform_crud_flow(tmp_path, monkeypatch):
     delete_response = client.delete("/messaging/feishu")
     assert delete_response.status_code == 200, delete_response.text
     assert delete_response.json()["deleted"] is True
+
+
+def test_weixin_qrcode_flow(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    class _StubResponse:
+        def __init__(self, payload: dict):
+            self.status_code = 200
+            self.text = json.dumps(payload)
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _stub_get(url, params=None, headers=None, timeout=10):
+        if url.endswith("/ilink/bot/get_bot_qrcode"):
+            assert params == {"bot_type": "3"}
+            return _StubResponse(
+                {
+                    "qrcode": "qr_abc",
+                    "qrcode_img_content": "https://qr.example.com/abc",
+                }
+            )
+        if url.endswith("/ilink/bot/get_qrcode_status"):
+            assert params == {"qrcode": "qr_abc"}
+            return _StubResponse(
+                {
+                    "status": "confirmed",
+                    "ilink_bot_id": "wx_account_2",
+                    "bot_token": "wx_token_2",
+                    "baseurl": "https://ilinkai.weixin.qq.com",
+                    "ilink_user_id": "wx_user_2",
+                }
+            )
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(api_server.requests, "get", _stub_get)
+
+    qr_response = client.post("/messaging/weixin/qrcode", json={})
+    assert qr_response.status_code == 200, qr_response.text
+    qr_payload = qr_response.json()
+    assert qr_payload["qrcode"] == "qr_abc"
+    assert qr_payload["qrcode_url"] == "https://qr.example.com/abc"
+
+    status_response = client.get(
+        "/messaging/weixin/qrcode/status",
+        params={"qrcode": "qr_abc", "base_url": "https://ilinkai.weixin.qq.com"},
+    )
+    assert status_response.status_code == 200, status_response.text
+    status_payload = status_response.json()
+    assert status_payload["status"] == "confirmed"
+    assert status_payload["credentials"]["account_id"] == "wx_account_2"
+    assert status_payload["credentials"]["token"] == "wx_token_2"
+
+
+def test_weixin_qrcode_status_timeout_is_transient_wait(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    def _stub_get(url, params=None, headers=None, timeout=10):
+        if url.endswith("/ilink/bot/get_qrcode_status"):
+            raise api_server.requests.Timeout("read timed out")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(api_server.requests, "get", _stub_get)
+
+    status_response = client.get(
+        "/messaging/weixin/qrcode/status",
+        params={"qrcode": "qr_timeout", "base_url": "https://ilinkai.weixin.qq.com"},
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    payload = status_response.json()
+    assert payload["status"] == "wait"
+    assert payload["credentials"] is None
+    assert payload["raw"].get("transient_error") == "timeout"

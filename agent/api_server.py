@@ -1460,6 +1460,12 @@ _MESSAGING_DOCS: Dict[str, str] = {
     "weixin": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/weixin",
 }
 
+_WEIXIN_DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
+_WEIXIN_ILINK_APP_ID = "bot"
+_WEIXIN_ILINK_APP_CLIENT_VERSION = str((2 << 16) | (2 << 8) | 0)
+_WEIXIN_QR_STATUS_TIMEOUT_SECONDS = 35
+_WEIXIN_VALIDATE_TIMEOUT_SECONDS = 40
+
 
 def _normalize_messaging_platform(platform: str) -> MessagingPlatform:
     normalized = (platform or "").strip().lower()
@@ -1506,6 +1512,102 @@ def _build_weixin_headers(token: str, body: str) -> Dict[str, str]:
         "X-WECHAT-UIN": random_uin,
         "iLink-App-Id": "bot",
         "iLink-App-ClientVersion": str((2 << 16) | (2 << 8) | 0),
+    }
+
+
+def _build_weixin_public_headers() -> Dict[str, str]:
+    return {
+        "iLink-App-Id": _WEIXIN_ILINK_APP_ID,
+        "iLink-App-ClientVersion": _WEIXIN_ILINK_APP_CLIENT_VERSION,
+    }
+
+
+def _normalize_weixin_base_url(value: Any) -> str:
+    base_url = str(value or _WEIXIN_DEFAULT_BASE_URL).strip().rstrip("/")
+    if not base_url.startswith("http://") and not base_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Weixin base_url must start with http:// or https://.")
+    return base_url
+
+
+def _request_weixin_qrcode(*, base_url: str, bot_type: str) -> Dict[str, Any]:
+    try:
+        response = requests.get(
+            f"{base_url}/ilink/bot/get_bot_qrcode",
+            params={"bot_type": bot_type},
+            headers=_build_weixin_public_headers(),
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Weixin QR request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Weixin QR request HTTP {response.status_code}: {response.text[:200]}")
+
+    payload = response.json() if response.text else {}
+    qrcode = str(payload.get("qrcode") or "").strip()
+    qrcode_url = str(payload.get("qrcode_img_content") or "").strip()
+    if not qrcode:
+        raise HTTPException(status_code=400, detail="Weixin QR response missing qrcode.")
+
+    return {
+        "qrcode": qrcode,
+        "qrcode_url": qrcode_url,
+        "qr_scan_data": qrcode_url or qrcode,
+        "base_url": base_url,
+        "bot_type": bot_type,
+    }
+
+
+def _check_weixin_qrcode_status(*, base_url: str, qrcode: str) -> Dict[str, Any]:
+    try:
+        response = requests.get(
+            f"{base_url}/ilink/bot/get_qrcode_status",
+            params={"qrcode": qrcode},
+            headers=_build_weixin_public_headers(),
+            timeout=_WEIXIN_QR_STATUS_TIMEOUT_SECONDS,
+        )
+    except requests.Timeout:
+        # Weixin QR status polling may hold the request; treat timeouts as
+        # transient "wait" instead of hard failures.
+        return {
+            "status": "wait",
+            "base_url": base_url,
+            "redirect_base_url": None,
+            "raw": {"transient_error": "timeout"},
+            "credentials": None,
+        }
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Weixin QR status request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Weixin QR status HTTP {response.status_code}: {response.text[:200]}")
+
+    payload = response.json() if response.text else {}
+    status_text = str(payload.get("status") or "wait").strip().lower()
+    redirect_host = str(payload.get("redirect_host") or "").strip()
+    redirect_base_url = f"https://{redirect_host}" if redirect_host else None
+
+    credentials = None
+    if status_text == "confirmed":
+        account_id = str(payload.get("ilink_bot_id") or "").strip()
+        token = str(payload.get("bot_token") or "").strip()
+        confirmed_base_url = _normalize_weixin_base_url(payload.get("baseurl") or base_url)
+        user_id = str(payload.get("ilink_user_id") or "").strip()
+        if not account_id or not token:
+            raise HTTPException(status_code=400, detail="Weixin QR confirmed but account_id/token is missing.")
+        credentials = {
+            "account_id": account_id,
+            "token": token,
+            "base_url": confirmed_base_url,
+            "user_id": user_id,
+        }
+
+    return {
+        "status": status_text,
+        "base_url": base_url,
+        "redirect_base_url": redirect_base_url,
+        "raw": payload,
+        "credentials": credentials,
     }
 
 
@@ -1556,7 +1658,7 @@ def _validate_feishu_config(config: Dict[str, Any]) -> Dict[str, Any]:
 def _validate_weixin_config(config: Dict[str, Any]) -> Dict[str, Any]:
     account_id = str(config.get("account_id") or "").strip()
     token = str(config.get("token") or "").strip()
-    base_url = str(config.get("base_url") or "https://ilinkai.weixin.qq.com").strip().rstrip("/")
+    base_url = _normalize_weixin_base_url(config.get("base_url"))
     if not account_id or not token:
         raise HTTPException(status_code=400, detail="Weixin account_id and token are required.")
 
@@ -1566,7 +1668,7 @@ def _validate_weixin_config(config: Dict[str, Any]) -> Dict[str, Any]:
             f"{base_url}/ilink/bot/getupdates",
             data=body,
             headers=_build_weixin_headers(token, body),
-            timeout=10,
+            timeout=_WEIXIN_VALIDATE_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Weixin validation request failed: {exc}") from exc
@@ -1642,6 +1744,27 @@ class MessagingValidateResponse(BaseModel):
     summary: str
     details: Dict[str, Any] = Field(default_factory=dict)
     masked_config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WeixinQRCodeStartRequest(BaseModel):
+    base_url: Optional[str] = None
+    bot_type: str = "3"
+
+
+class WeixinQRCodeStartResponse(BaseModel):
+    qrcode: str
+    qrcode_url: Optional[str] = None
+    qr_scan_data: str
+    base_url: str
+    bot_type: str
+
+
+class WeixinQRCodeStatusResponse(BaseModel):
+    status: str
+    base_url: str
+    redirect_base_url: Optional[str] = None
+    credentials: Optional[Dict[str, str]] = None
+    raw: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _messaging_state_payload(
@@ -1849,6 +1972,51 @@ async def validate_messaging_platform(
         summary=str(result.get("summary") or "Validation succeeded."),
         details=result.get("details") if isinstance(result.get("details"), dict) else {},
         masked_config=_mask_messaging_config(normalized, body.config),
+    )
+
+
+@app.post(
+    "/messaging/weixin/qrcode",
+    response_model=WeixinQRCodeStartResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def request_weixin_qrcode(
+    request: Request,
+    body: WeixinQRCodeStartRequest = Body(default_factory=WeixinQRCodeStartRequest),
+):
+    _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    base_url = _normalize_weixin_base_url(body.base_url)
+    bot_type = str(body.bot_type or "3").strip() or "3"
+    result = _request_weixin_qrcode(base_url=base_url, bot_type=bot_type)
+    return WeixinQRCodeStartResponse(
+        qrcode=str(result.get("qrcode") or ""),
+        qrcode_url=str(result.get("qrcode_url") or "") or None,
+        qr_scan_data=str(result.get("qr_scan_data") or ""),
+        base_url=base_url,
+        bot_type=bot_type,
+    )
+
+
+@app.get(
+    "/messaging/weixin/qrcode/status",
+    response_model=WeixinQRCodeStatusResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def get_weixin_qrcode_status(
+    request: Request,
+    qrcode: str = Query(..., min_length=1),
+    base_url: Optional[str] = Query(default=None),
+):
+    _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    normalized_base_url = _normalize_weixin_base_url(base_url)
+    result = _check_weixin_qrcode_status(base_url=normalized_base_url, qrcode=qrcode)
+    credentials = result.get("credentials") if isinstance(result.get("credentials"), dict) else None
+    return WeixinQRCodeStatusResponse(
+        status=str(result.get("status") or "wait"),
+        base_url=normalized_base_url,
+        redirect_base_url=result.get("redirect_base_url") if isinstance(result.get("redirect_base_url"), str) else None,
+        credentials=credentials,
+        raw=result.get("raw") if isinstance(result.get("raw"), dict) else {},
     )
 
 

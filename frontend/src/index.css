@@ -28,7 +28,7 @@
 
     /* Brand Colors */
     --near-black: #0e0f0c;
-    --wise-green: #9fe870;
+    --semantier-green: #9fe870;
     --dark-green: #163300;
     --light-mint: #e2f6d5;
     --pastel-green: #cdffad;
@@ -240,7 +240,7 @@
   .run-code-surface .hljs-built_in,
   .run-code-surface .hljs-name,
   .run-code-surface .hljs-tag {
-    color: var(--wise-green);
+    color: var(--semantier-green);
   }
 
   .run-code-surface .hljs-string,
@@ -265,7 +265,7 @@
   .run-code-surface .hljs-variable,
   .run-code-surface .hljs-property,
   .run-code-surface .hljs-params {
-    color: color-mix(in srgb, var(--light-surface) 84%, var(--wise-green));
+    color: color-mix(in srgb, var(--light-surface) 84%, var(--semantier-green));
   }
 
   /* Smooth scrollbar for webkit */
