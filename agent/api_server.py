@@ -1465,6 +1465,8 @@ _WEIXIN_ILINK_APP_ID = "bot"
 _WEIXIN_ILINK_APP_CLIENT_VERSION = str((2 << 16) | (2 << 8) | 0)
 _WEIXIN_QR_STATUS_TIMEOUT_SECONDS = 35
 _WEIXIN_VALIDATE_TIMEOUT_SECONDS = 40
+_HERMES_GATEWAY_HEALTH_URL = "http://127.0.0.1:8642/health"
+_HERMES_GATEWAY_START_ATTEMPTS = 10
 
 
 def _normalize_messaging_platform(platform: str) -> MessagingPlatform:
@@ -1588,11 +1590,27 @@ def _check_weixin_qrcode_status(*, base_url: str, qrcode: str) -> Dict[str, Any]
     redirect_base_url = f"https://{redirect_host}" if redirect_host else None
 
     credentials = None
+
+    def _extract_weixin_user_id(raw: Dict[str, Any]) -> str:
+        candidate_keys = (
+            "ilink_user_id",
+            "user_id",
+            "ilinkUserId",
+            "wx_user_id",
+            "wechat_user_id",
+            "ilink_userid",
+        )
+        for key in candidate_keys:
+            value = str(raw.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
     if status_text == "confirmed":
         account_id = str(payload.get("ilink_bot_id") or "").strip()
         token = str(payload.get("bot_token") or "").strip()
         confirmed_base_url = _normalize_weixin_base_url(payload.get("baseurl") or base_url)
-        user_id = str(payload.get("ilink_user_id") or "").strip()
+        user_id = _extract_weixin_user_id(payload)
         if not account_id or not token:
             raise HTTPException(status_code=400, detail="Weixin QR confirmed but account_id/token is missing.")
         credentials = {
@@ -1730,6 +1748,111 @@ class MessagingPlatformState(BaseModel):
     validated_at: Optional[str] = None
     last_error: Optional[str] = None
     config: Dict[str, Any] = Field(default_factory=dict)
+    gateway_applied: bool = False
+
+
+def _is_gateway_healthy(timeout_seconds: float = 2.0) -> bool:
+    try:
+        response = requests.get(_HERMES_GATEWAY_HEALTH_URL, timeout=timeout_seconds)
+        return response.ok
+    except Exception:
+        return False
+
+
+def _resolve_hermes_agent_dir() -> Optional[Path]:
+    candidates: List[Path] = []
+    env_path = str(os.getenv("HERMES_AGENT_PATH") or "").strip()
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    candidates.extend(
+        [
+            REPO_ROOT / "hermes-agent",
+            REPO_ROOT.parent / "hermes-agent",
+        ]
+    )
+
+    for candidate in candidates:
+        if (candidate / "gateway" / "run.py").exists():
+            return candidate
+    return None
+
+
+def _resolve_hermes_python(agent_dir: Path) -> str:
+    for candidate in (agent_dir / ".venv" / "bin" / "python", agent_dir / "venv" / "bin" / "python"):
+        if candidate.exists():
+            return str(candidate)
+    return "python3"
+
+
+def _ensure_gateway_health_webhook(hermes_home: Path) -> None:
+    """Ensure config.yaml has a webhook platform so the gateway exposes /health on port 8642.
+
+    The Weixin (and other long-poll) adapters run entirely outbound and expose no HTTP
+    endpoint.  The webhook platform provides the /health route checked by the dev server
+    proxy and by ``_is_gateway_healthy()``.  When no webhook entry is present, this
+    function injects a minimal one (no routes, localhost-only) without touching any
+    user-managed settings.
+    """
+    config_path = hermes_home / "config.yaml"
+    cfg = _load_yaml_mapping(config_path)
+    platforms = cfg.setdefault("platforms", {})
+    if "webhook" not in platforms:
+        gateway_port = int(_HERMES_GATEWAY_HEALTH_URL.rsplit(":", 1)[-1].split("/")[0])
+        platforms["webhook"] = {
+            "enabled": True,
+            "extra": {
+                "host": "127.0.0.1",
+                "port": gateway_port,
+            },
+        }
+        try:
+            import yaml as _yaml
+            with open(config_path, "w", encoding="utf-8") as _fh:
+                _yaml.dump(cfg, _fh, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Could not inject webhook platform into config.yaml: %s", exc)
+
+
+def _start_workspace_hermes_gateway(hermes_home: Path, skip_health_check: bool = False) -> Dict[str, Any]:
+    import subprocess
+
+    if not skip_health_check and _is_gateway_healthy():
+        return {"ok": True, "message": "already running"}
+
+    _ensure_gateway_health_webhook(hermes_home)
+
+    agent_dir = _resolve_hermes_agent_dir()
+    if agent_dir is None:
+        return {
+            "ok": False,
+            "error": "hermes-agent not found",
+            "hint": "Expected ../hermes-agent or set HERMES_AGENT_PATH.",
+        }
+
+    python = _resolve_hermes_python(agent_dir)
+    env = dict(os.environ)
+    env["HERMES_HOME"] = str(hermes_home)
+    env["API_SERVER_ENABLED"] = "true"
+    env["PATH"] = (
+        f"{agent_dir / '.venv' / 'bin'}:{agent_dir / 'venv' / 'bin'}:{env.get('PATH', '')}"
+    )
+
+    proc = subprocess.Popen(
+        [python, "-m", "hermes_cli.main", "gateway", "run", "--replace"],
+        cwd=str(agent_dir),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    for _ in range(_HERMES_GATEWAY_START_ATTEMPTS):
+        time.sleep(1)
+        if _is_gateway_healthy():
+            return {"ok": True, "pid": proc.pid, "message": "started"}
+
+    return {"ok": True, "pid": proc.pid, "message": "starting"}
 
 
 class MessagingPlatformsResponse(BaseModel):
@@ -1765,6 +1888,30 @@ class WeixinQRCodeStatusResponse(BaseModel):
     redirect_base_url: Optional[str] = None
     credentials: Optional[Dict[str, str]] = None
     raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MessagingPairingPendingEntry(BaseModel):
+    code: str
+    user_id: str
+    user_name: str = ""
+    age_minutes: int = 0
+
+
+class MessagingPairingPendingResponse(BaseModel):
+    platform: MessagingPlatform
+    pending: List[MessagingPairingPendingEntry] = Field(default_factory=list)
+
+
+class MessagingPairingApproveRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+
+
+class MessagingPairingApproveResponse(BaseModel):
+    ok: bool
+    platform: MessagingPlatform
+    user_id: Optional[str] = None
+    user_name: str = ""
+    message: str = ""
 
 
 def _messaging_state_payload(
@@ -1923,6 +2070,13 @@ async def auth_me(request: Request):
     )
 
 
+@app.post("/api/start-hermes", dependencies=[Depends(require_auth)])
+async def start_hermes_gateway(request: Request):
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    result = _start_workspace_hermes_gateway(ctx.workspace.hermes_home)
+    return JSONResponse(result, status_code=200 if bool(result.get("ok")) else 500)
+
+
 @app.get("/messaging/platforms", response_model=MessagingPlatformsResponse, dependencies=[Depends(require_auth)])
 async def list_messaging_platforms(request: Request):
     ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
@@ -2007,10 +2161,45 @@ async def get_weixin_qrcode_status(
     qrcode: str = Query(..., min_length=1),
     base_url: Optional[str] = Query(default=None),
 ):
-    _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
     normalized_base_url = _normalize_weixin_base_url(base_url)
     result = _check_weixin_qrcode_status(base_url=normalized_base_url, qrcode=qrcode)
     credentials = result.get("credentials") if isinstance(result.get("credentials"), dict) else None
+
+    # Auto-persist credentials on successful QR confirmation so gateway pairing
+    # works immediately even if users skip a separate manual "Save" click.
+    if credentials and str(result.get("status") or "").strip().lower() == "confirmed":
+        try:
+            owner_id = _resolve_messaging_owner_id(ctx)
+            store = _get_auth_store()
+            existing = store.get_messaging_config(user_id=owner_id, platform="weixin")
+            merged_config: Dict[str, Any] = dict(existing.config) if existing else {}
+            merged_config.update(
+                {
+                    "account_id": str(credentials.get("account_id") or "").strip(),
+                    "token": str(credentials.get("token") or "").strip(),
+                    "base_url": str(credentials.get("base_url") or normalized_base_url).strip(),
+                }
+            )
+            confirmed_user_id = str(credentials.get("user_id") or "").strip()
+            if confirmed_user_id:
+                merged_config["user_id"] = confirmed_user_id
+            merged_config.setdefault("dm_policy", "pairing")
+
+            validated_at = datetime.utcnow().isoformat() + "Z"
+            store.upsert_messaging_config(
+                user_id=owner_id,
+                platform="weixin",
+                config=merged_config,
+                validated_at=validated_at,
+                last_error=None,
+            )
+            _apply_messaging_config_to_gateway_yaml(ctx.workspace.hermes_home, "weixin", merged_config)
+            _persist_weixin_account_file(ctx.workspace.hermes_home, merged_config)
+            _ensure_workspace_gateway_running(ctx.workspace.hermes_home, force_restart=True)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Failed to auto-persist confirmed Weixin QR credentials: %s", exc)
+
     return WeixinQRCodeStatusResponse(
         status=str(result.get("status") or "wait"),
         base_url=normalized_base_url,
@@ -2018,6 +2207,322 @@ async def get_weixin_qrcode_status(
         credentials=credentials,
         raw=result.get("raw") if isinstance(result.get("raw"), dict) else {},
     )
+
+
+def _with_workspace_pairing_store(workspace: WorkspacePaths):
+    """Create PairingStore bound to the request workspace's Hermes home."""
+    token = set_active_hermes_home(workspace.hermes_home)
+    try:
+        from hermes_constants import get_hermes_dir
+        from gateway import pairing as pairing_module  # type: ignore[import]
+
+        pairing_module.PAIRING_DIR = get_hermes_dir("platforms/pairing", "pairing")
+        return pairing_module.PairingStore()
+    finally:
+        reset_active_hermes_home(token)
+
+
+@app.get(
+    "/messaging/{platform}/pairing/pending",
+    response_model=MessagingPairingPendingResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def list_messaging_pairing_pending(request: Request, platform: str):
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    normalized = _normalize_messaging_platform(platform)
+
+    try:
+        pairing_store = _with_workspace_pairing_store(ctx.workspace)
+        pending = pairing_store.list_pending(normalized)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to load pairing requests: {exc}") from exc
+
+    return MessagingPairingPendingResponse(
+        platform=normalized,
+        pending=[MessagingPairingPendingEntry(**item) for item in pending],
+    )
+
+
+@app.post(
+    "/messaging/{platform}/pairing/approve",
+    response_model=MessagingPairingApproveResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def approve_messaging_pairing_code(
+    request: Request,
+    platform: str,
+    body: MessagingPairingApproveRequest = Body(...),
+):
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    normalized = _normalize_messaging_platform(platform)
+
+    try:
+        pairing_store = _with_workspace_pairing_store(ctx.workspace)
+        approved = pairing_store.approve_code(normalized, body.code)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to approve pairing code: {exc}") from exc
+
+    if approved is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired pairing code.")
+
+    user_id = str(approved.get("user_id") or "") or None
+    user_name = str(approved.get("user_name") or "")
+
+    if normalized == "weixin" and user_id:
+        try:
+            _send_weixin_welcome(ctx.workspace.hermes_home, user_id, user_name)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Failed to send Weixin welcome message: %s", exc)
+
+    return MessagingPairingApproveResponse(
+        ok=True,
+        platform=normalized,
+        user_id=user_id,
+        user_name=user_name,
+        message="Pairing approved.",
+    )
+
+
+def _send_weixin_welcome(hermes_home: Path, to_user_id: str, user_name: str) -> None:
+    """Send a welcome message to a newly-paired Weixin user.
+
+    Reads credentials from the workspace account file and posts directly to
+    the iLink sendmessage API using the existing ``requests`` library so no
+    new dependencies are needed.  Failures are non-fatal — the caller logs
+    and continues.
+    """
+    import base64 as _base64
+    import struct as _struct
+
+    config_path = hermes_home / "config.yaml"
+    cfg = _load_yaml_mapping(config_path)
+    weixin_cfg = (cfg.get("platforms") or {}).get("weixin") or {}
+    extra = weixin_cfg.get("extra") or {}
+    account_id = str(extra.get("account_id") or "").strip()
+    token = str(weixin_cfg.get("token") or "").strip()
+    base_url = str(extra.get("base_url") or "https://ilinkai.weixin.qq.com").strip().rstrip("/")
+
+    # Fall back to the account file if the config.yaml token is absent
+    if account_id and not token:
+        account_file = hermes_home / "weixin" / "accounts" / f"{account_id}.json"
+        if account_file.exists():
+            try:
+                acct = json.loads(account_file.read_text(encoding="utf-8"))
+                token = str(acct.get("token") or "").strip()
+                base_url = str(acct.get("base_url") or base_url).strip().rstrip("/")
+            except Exception:
+                pass
+
+    if not token or not to_user_id:
+        return
+
+    # Build a minimal iLink sendmessage payload
+    def _rand_uin() -> str:
+        value = _struct.unpack(">I", os.urandom(4))[0]
+        return _base64.b64encode(str(value).encode()).decode("ascii")
+
+    greeting = f"Hi {user_name}! 👋 Pairing confirmed — I'm ready to chat." if user_name else "Hi! 👋 Pairing confirmed — I'm ready to chat."
+    client_id = _base64.b64encode(os.urandom(8)).decode("ascii")
+    payload = {
+        "msg": {
+            "from_user_id": "",
+            "to_user_id": to_user_id,
+            "client_id": client_id,
+            "message_type": 2,   # MSG_TYPE_BOT
+            "message_state": 2,  # MSG_STATE_FINISH
+            "item_list": [{"type": 1, "text_item": {"text": greeting}}],
+        },
+        "base_info": {"channel_version": "2.2.0"},
+    }
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    headers = {
+        "Content-Type": "application/json",
+        "AuthorizationType": "ilink_bot_token",
+        "Authorization": f"Bearer {token}",
+        "Content-Length": str(len(body.encode("utf-8"))),
+        "X-WECHAT-UIN": _rand_uin(),
+        "iLink-App-Id": "bot",
+        "iLink-App-ClientVersion": str((2 << 16) | (2 << 8) | 0),
+    }
+    url = f"{base_url}/ilink/bot/sendmessage"
+    resp = requests.post(url, data=body, headers=headers, timeout=10, verify=False)
+    if not resp.ok:
+        raise RuntimeError(f"iLink sendmessage HTTP {resp.status_code}: {resp.text[:200]}")
+
+
+def _try_signal_gateway(hermes_home: Path, signal_name: str = "SIGTERM") -> None:
+    """Send a signal to the running gateway process.
+
+    Reads the PID from the JSON gateway.pid file and sends *signal_name*
+    (default: SIGTERM).  Failures are silently swallowed so callers don't
+    need to handle errors from a missing or stale PID file.
+    """
+    import signal as _signal
+
+    pid_path = hermes_home / "gateway.pid"
+    if not pid_path.exists():
+        return
+    try:
+        raw = pid_path.read_text(encoding="utf-8").strip()
+        try:
+            pid = int(json.loads(raw)["pid"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            pid = int(raw)
+        sig = getattr(_signal, signal_name, _signal.SIGTERM)
+        os.kill(pid, sig)
+    except Exception:
+        pass
+
+
+def _apply_messaging_config_to_gateway_yaml(
+    hermes_home: Path, platform: MessagingPlatform, config: Dict[str, Any]
+) -> bool:
+    """Persist SQLite messaging config into the gateway's config.yaml platforms block.
+
+    Returns True if the file was written successfully.
+    """
+    try:
+        config_path = hermes_home / "config.yaml"
+        existing = _load_yaml_mapping(config_path)
+        if not isinstance(existing.get("platforms"), dict):
+            existing["platforms"] = {}
+
+        if platform == "weixin":
+            platform_block: Dict[str, Any] = existing["platforms"].get("weixin") or {}
+            if not isinstance(platform_block, dict):
+                platform_block = {}
+
+            platform_block["enabled"] = True
+            token = str(config.get("token") or "").strip()
+            if token:
+                platform_block["token"] = token
+
+            extra: Dict[str, Any] = platform_block.get("extra") or {}
+            if not isinstance(extra, dict):
+                extra = {}
+
+            extra["account_id"] = str(config.get("account_id") or "").strip()
+            extra["base_url"] = str(config.get("base_url") or _WEIXIN_DEFAULT_BASE_URL).strip()
+
+            for key in ("cdn_base_url", "dm_policy", "group_policy"):
+                val = str(config.get(key) or "").strip()
+                if val:
+                    extra[key] = val
+
+            for key in ("allow_from", "group_allow_from"):
+                val = config.get(key)
+                if isinstance(val, list):
+                    extra[key] = val
+                elif isinstance(val, str) and val.strip():
+                    extra[key] = [s.strip() for s in val.split(",") if s.strip()]
+
+            home_channel = str(config.get("home_channel") or "").strip()
+            if home_channel:
+                platform_block["home_channel"] = {
+                    "platform": "weixin",
+                    "chat_id": home_channel,
+                    "name": "Home",
+                }
+
+            platform_block["extra"] = extra
+            existing["platforms"]["weixin"] = platform_block
+
+        elif platform == "feishu":
+            platform_block = existing["platforms"].get("feishu") or {}
+            if not isinstance(platform_block, dict):
+                platform_block = {}
+
+            platform_block["enabled"] = True
+            extra = platform_block.get("extra") or {}
+            if not isinstance(extra, dict):
+                extra = {}
+
+            for key in ("app_id", "app_secret", "domain", "connection_mode"):
+                val = str(config.get(key) or "").strip()
+                if val:
+                    extra[key] = val
+
+            platform_block["extra"] = extra
+            existing["platforms"]["feishu"] = platform_block
+
+        tmp_path = config_path.with_suffix(".yaml.tmp")
+        tmp_path.write_text(
+            yaml.dump(existing, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+        tmp_path.rename(config_path)
+        return True
+    except Exception:
+        return False
+
+
+def _persist_weixin_account_file(hermes_home: Path, config: Dict[str, Any]) -> bool:
+    """Persist Weixin credentials to the workspace account cache file."""
+    account_id = str(config.get("account_id") or "").strip()
+    token = str(config.get("token") or "").strip()
+    if not account_id or not token:
+        return False
+
+    try:
+        account_dir = hermes_home / "weixin" / "accounts"
+        account_dir.mkdir(parents=True, exist_ok=True)
+        account_path = account_dir / f"{account_id}.json"
+        user_id = str(config.get("user_id") or "").strip()
+        if not user_id and account_path.exists():
+            try:
+                existing_payload = json.loads(account_path.read_text(encoding="utf-8"))
+                if isinstance(existing_payload, dict):
+                    user_id = str(existing_payload.get("user_id") or "").strip()
+            except Exception:
+                pass
+
+        payload: Dict[str, Any] = {
+            "token": token,
+            "base_url": str(config.get("base_url") or _WEIXIN_DEFAULT_BASE_URL).strip(),
+            "user_id": user_id,
+            "saved_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+        tmp_path = account_path.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        tmp_path.replace(account_path)
+        try:
+            account_path.chmod(0o600)
+        except OSError:
+            pass
+        return True
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Failed to persist Weixin account file for %s: %s", account_id, exc)
+        return False
+
+
+def _ensure_workspace_gateway_running(hermes_home: Path, force_restart: bool = False) -> bool:
+    """Best-effort gateway bootstrap after messaging config changes.
+
+    When *force_restart* is True the existing gateway process is killed via
+    SIGTERM before a fresh one is launched with ``--replace``, so it picks up
+    the latest config.yaml / account files.  This avoids the SIGUSR1 path
+    which exits expecting a systemd-style service manager to relaunch the
+    process.
+    """
+    if force_restart:
+        _try_signal_gateway(hermes_home, signal_name="SIGTERM")
+        import time as _time
+        _time.sleep(1.5)  # give the old process a moment to exit before --replace
+    try:
+        result = _start_workspace_hermes_gateway(hermes_home, skip_health_check=force_restart)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Failed to start workspace gateway: %s", exc)
+        return False
+
+    if bool(result.get("ok")):
+        return True
+
+    logging.getLogger(__name__).warning("Workspace gateway start failed: %s", result)
+    return False
 
 
 @app.put(
@@ -2034,15 +2539,29 @@ async def save_messaging_platform(
     normalized = _normalize_messaging_platform(platform)
     owner_id = _resolve_messaging_owner_id(ctx)
 
+    # If token is blank (user editing existing config without re-entering it),
+    # merge the stored token so validation and storage are not broken.
+    effective_config = dict(body.config)
+    if normalized == "weixin":
+        existing_record = _get_auth_store().get_messaging_config(user_id=owner_id, platform=normalized)
+        if existing_record is not None and not str(effective_config.get("token") or "").strip():
+            stored_token = str(existing_record.config.get("token") or "").strip()
+            if stored_token:
+                effective_config["token"] = stored_token
+        if existing_record is not None:
+            stored_user_id = str(existing_record.config.get("user_id") or "").strip()
+            if stored_user_id and not str(effective_config.get("user_id") or "").strip():
+                effective_config["user_id"] = stored_user_id
+
     # Save is gated by live credential validation.
-    _validate_messaging_config(normalized, body.config)
+    _validate_messaging_config(normalized, effective_config)
     validated_at = datetime.utcnow().isoformat() + "Z"
 
     try:
         record = _get_auth_store().upsert_messaging_config(
             user_id=owner_id,
             platform=normalized,
-            config=body.config,
+            config=effective_config,
             validated_at=validated_at,
             last_error=None,
         )
@@ -2051,7 +2570,15 @@ async def save_messaging_platform(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _messaging_state_payload(platform=normalized, record=record)
+    gateway_applied = _apply_messaging_config_to_gateway_yaml(
+        ctx.workspace.hermes_home, normalized, effective_config
+    )
+    if normalized == "weixin":
+        _persist_weixin_account_file(ctx.workspace.hermes_home, effective_config)
+        _ensure_workspace_gateway_running(ctx.workspace.hermes_home, force_restart=True)
+    state = _messaging_state_payload(platform=normalized, record=record)
+    state.gateway_applied = gateway_applied
+    return state
 
 
 @app.delete(

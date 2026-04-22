@@ -110,6 +110,23 @@ def test_weixin_qrcode_flow(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
     client = TestClient(api_server.app)
     _login(client, monkeypatch)
+    applied_configs: list[dict] = []
+    started_gateway_homes: list[str] = []
+
+    def _stub_apply(hermes_home, platform, config):
+        assert platform == "weixin"
+        applied_configs.append(dict(config))
+        return True
+
+    monkeypatch.setattr(api_server, "_apply_messaging_config_to_gateway_yaml", _stub_apply)
+    monkeypatch.setattr(
+        api_server,
+        "_start_workspace_hermes_gateway",
+        lambda hermes_home, **kwargs: (
+            started_gateway_homes.append(str(hermes_home))
+            or {"ok": True, "message": "started"}
+        ),
+    )
 
     class _StubResponse:
         def __init__(self, payload: dict):
@@ -160,6 +177,74 @@ def test_weixin_qrcode_flow(tmp_path, monkeypatch):
     assert status_payload["credentials"]["account_id"] == "wx_account_2"
     assert status_payload["credentials"]["token"] == "wx_token_2"
 
+    list_response = client.get("/messaging/platforms")
+    assert list_response.status_code == 200, list_response.text
+    list_payload = list_response.json()
+    weixin = next(item for item in list_payload["platforms"] if item["platform"] == "weixin")
+    assert weixin["configured"] is True
+    assert weixin["config"]["account_id"] == "wx_account_2"
+    assert weixin["config"]["base_url"] == "https://ilinkai.weixin.qq.com"
+    assert weixin["config"]["token"] != "wx_token_2"
+    assert applied_configs and applied_configs[0]["token"] == "wx_token_2"
+
+    workspace_dirs = [item for item in (tmp_path / "workspaces").iterdir() if item.is_dir()]
+    assert len(workspace_dirs) == 1
+    account_file = workspace_dirs[0] / ".hermes" / "weixin" / "accounts" / "wx_account_2.json"
+    assert account_file.exists()
+    account_payload = json.loads(account_file.read_text(encoding="utf-8"))
+    assert account_payload["token"] == "wx_token_2"
+    assert account_payload["base_url"] == "https://ilinkai.weixin.qq.com"
+    assert account_payload["user_id"] == "wx_user_2"
+    assert started_gateway_homes
+
+
+def test_weixin_save_creates_account_cache_file(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    monkeypatch.setattr(
+        api_server,
+        "_validate_messaging_config",
+        lambda platform, config: {
+            "platform": platform,
+            "valid": True,
+            "summary": "ok",
+            "details": {},
+        },
+    )
+    started_gateway_homes: list[str] = []
+    monkeypatch.setattr(
+        api_server,
+        "_start_workspace_hermes_gateway",
+        lambda hermes_home, **kwargs: (
+            started_gateway_homes.append(str(hermes_home))
+            or {"ok": True, "message": "started"}
+        ),
+    )
+
+    response = client.put(
+        "/messaging/weixin",
+        json={
+            "config": {
+                "account_id": "wx_account_direct",
+                "token": "wx_token_direct",
+                "base_url": "https://ilinkai.weixin.qq.com",
+                "dm_policy": "pairing",
+            }
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    workspace_dirs = [item for item in (tmp_path / "workspaces").iterdir() if item.is_dir()]
+    assert len(workspace_dirs) == 1
+    account_file = workspace_dirs[0] / ".hermes" / "weixin" / "accounts" / "wx_account_direct.json"
+    assert account_file.exists()
+    payload = json.loads(account_file.read_text(encoding="utf-8"))
+    assert payload["token"] == "wx_token_direct"
+    assert payload["base_url"] == "https://ilinkai.weixin.qq.com"
+    assert started_gateway_homes
+
 
 def test_weixin_qrcode_status_timeout_is_transient_wait(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
@@ -183,3 +268,126 @@ def test_weixin_qrcode_status_timeout_is_transient_wait(tmp_path, monkeypatch):
     assert payload["status"] == "wait"
     assert payload["credentials"] is None
     assert payload["raw"].get("transient_error") == "timeout"
+
+
+def test_weixin_qrcode_flow_accepts_alternate_user_id_key(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    monkeypatch.setattr(api_server, "_apply_messaging_config_to_gateway_yaml", lambda *args, **kwargs: True)
+    monkeypatch.setattr(api_server, "_start_workspace_hermes_gateway", lambda *args, **kwargs: {"ok": True})
+
+    class _StubResponse:
+        def __init__(self, payload: dict):
+            self.status_code = 200
+            self.text = json.dumps(payload)
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _stub_get(url, params=None, headers=None, timeout=10):
+        if url.endswith("/ilink/bot/get_qrcode_status"):
+            return _StubResponse(
+                {
+                    "status": "confirmed",
+                    "ilink_bot_id": "wx_account_alt",
+                    "bot_token": "wx_token_alt",
+                    "baseurl": "https://ilinkai.weixin.qq.com",
+                    "user_id": "wx_user_alt",
+                }
+            )
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(api_server.requests, "get", _stub_get)
+
+    status_response = client.get(
+        "/messaging/weixin/qrcode/status",
+        params={"qrcode": "qr_alt", "base_url": "https://ilinkai.weixin.qq.com"},
+    )
+    assert status_response.status_code == 200, status_response.text
+    payload = status_response.json()
+    assert payload["credentials"]["user_id"] == "wx_user_alt"
+
+    workspace_dirs = [item for item in (tmp_path / "workspaces").iterdir() if item.is_dir()]
+    assert len(workspace_dirs) == 1
+    account_file = workspace_dirs[0] / ".hermes" / "weixin" / "accounts" / "wx_account_alt.json"
+    assert account_file.exists()
+    account_payload = json.loads(account_file.read_text(encoding="utf-8"))
+    assert account_payload["user_id"] == "wx_user_alt"
+
+
+def test_weixin_pairing_pending_and_approve_api(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    class _StubPairingStore:
+        def __init__(self):
+            self.approved_codes: list[str] = []
+
+        def list_pending(self, platform: str):
+            assert platform == "weixin"
+            return [
+                {
+                    "platform": "weixin",
+                    "code": "ABCD2345",
+                    "user_id": "wx_user_1",
+                    "user_name": "Alice",
+                    "age_minutes": 3,
+                }
+            ]
+
+        def approve_code(self, platform: str, code: str):
+            assert platform == "weixin"
+            normalized = code.strip().upper()
+            if normalized != "ABCD2345":
+                return None
+            self.approved_codes.append(normalized)
+            return {"user_id": "wx_user_1", "user_name": "Alice"}
+
+    stub_store = _StubPairingStore()
+    monkeypatch.setattr(api_server, "_with_workspace_pairing_store", lambda workspace: stub_store)
+
+    pending_response = client.get("/messaging/weixin/pairing/pending")
+    assert pending_response.status_code == 200, pending_response.text
+    pending_payload = pending_response.json()
+    assert pending_payload["platform"] == "weixin"
+    assert len(pending_payload["pending"]) == 1
+    assert pending_payload["pending"][0]["code"] == "ABCD2345"
+
+    approve_response = client.post(
+        "/messaging/weixin/pairing/approve",
+        json={"code": "ABCD2345"},
+    )
+    assert approve_response.status_code == 200, approve_response.text
+    approve_payload = approve_response.json()
+    assert approve_payload["ok"] is True
+    assert approve_payload["platform"] == "weixin"
+    assert approve_payload["user_id"] == "wx_user_1"
+
+    bad_response = client.post(
+        "/messaging/weixin/pairing/approve",
+        json={"code": "BADCODE"},
+    )
+    assert bad_response.status_code == 400, bad_response.text
+
+
+def test_start_hermes_gateway_api(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    monkeypatch.setattr(
+        api_server,
+        "_start_workspace_hermes_gateway",
+        lambda hermes_home, **kwargs: {"ok": True, "pid": 12345, "message": "started"},
+    )
+
+    response = client.post("/api/start-hermes")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["pid"] == 12345
+    assert payload["message"] == "started"
