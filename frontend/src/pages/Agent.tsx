@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useMemo, useCallback, useDeferredValue, type FormEvent } from "react";
-import { useSearchParams } from "react-router-dom";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ArrowUp, Loader2, ArrowDown, CheckCircle2, Square, Plus, Paperclip, X, Users } from "lucide-react";
 import { toast } from "sonner";
