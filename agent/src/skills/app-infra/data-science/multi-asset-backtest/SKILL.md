@@ -249,6 +249,19 @@ Both optimizers produced **byte-identical results** (verified via `diff`):
 - Positions pattern: alternated `0.0,1.0,0.0` (100% BTC) ↔ `0.5,0.0,0.5` (50% AAPL + 50% MSFT)
 - Benchmark: 53.24% (portfolio underperformed by 32%)
 
+### Real Example: MSFT/BTC/AAPL 2025 (Risk-Parity vs Equal-Weight) — Issue Confirmed
+
+Same timestamp alignment issue persisted in 2025 backtest:
+- **Risk-Parity**: Final $1,003,182 (+0.32%), Max DD -5.09%, Sharpe 0.053
+- **Equal-Weight**: Final $1,003,372 (+0.34%), Max DD -5.65%, Sharpe 0.054
+- **Trade distribution**: 114 trades, ALL in BTC-USDT (zero in AAPL/MSFT)
+- **Individual asset returns 2025**: MSFT +16.5%, AAPL +12.0%, BTC -8.8%
+- **Benchmark**: +9.27% (both portfolios underperformed by ~9% due to BTC drag)
+
+Risk-parity weights calculated (full-period vol): AAPL ~30%, BTC ~30%, MSFT ~40%
+
+**Conclusion**: The timestamp misalignment issue is systematic, not year-specific. Mixed portfolios cannot be properly backtested with the daily engine.
+
 **Verification commands**:
 ```bash
 # Confirm identical outputs

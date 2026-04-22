@@ -75,6 +75,13 @@ These are the core shadcn/ui-style tokens. **Light mode values are HSL triplets*
 | `--positive-green` | `#054d28` | Success states |
 | `--danger-red` | `#d03238` | Error / destructive |
 
+### Semantier Morandi Swatch Principle
+- Large surfaces stay muted and warm: near-black, off-white, light-surface, warm-dark, and warm-gray carry structure.
+- Accent color is reserved for decisive interaction only: `--wise-green` is the active state, selected state, and primary CTA in both light and dark themes.
+- Accent-adjacent UI must keep a dark structural edge: when `--wise-green` sits on a light or dark field, pair it with `--dark-green` for borders, icon strokes, or label text so the state remains legible at a glance.
+- Focus indication is not green: interactive focus rings use `--focus-blue` so focus and selection do not collapse into the same signal.
+- When a component needs an unselected fill that the base palette does not explicitly name, use the quiet surface swatch first: `--light-surface` in light mode and the dark card/card2 family in dark mode.
+
 ---
 
 ## 3. Typography Rules
@@ -241,6 +248,27 @@ The brand name "semantier" is rendered as **plain text**, not as an image.
 - Disabled: `disabled:opacity-40`
 - Hover: `hover:bg-primary/90`
 - Transition: `transition-colors`
+
+### Toggle / Switch
+
+**Switch Track — Off**
+- Background: light mode uses `--light-surface`; dark mode uses the elevated dark card swatch, not pure black
+- Border: `--warm-gray` in light mode, `--warm-dark` in dark mode
+- Purpose: the off state must remain visible against the page background without borrowing accent color
+
+**Switch Track — On**
+- Background: `--wise-green` in both light and dark modes
+- Border: `--dark-green`
+- Purpose: the active state should read as a branded affirmative control, not a generic neutral toggle
+
+**Switch Thumb**
+- Fill: white or card-white equivalent
+- Border: a subtle neutral edge so the thumb stays visible on warm light surfaces
+- Motion: translate only; avoid glow effects and decorative gradients
+
+**Switch Focus**
+- Ring: `--focus-blue`
+- Do not reuse the green active state for keyboard focus
 
 ### Cards & Containers
 
