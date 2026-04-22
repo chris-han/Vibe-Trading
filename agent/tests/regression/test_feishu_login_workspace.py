@@ -161,6 +161,20 @@ def test_feishu_login_auto_enables_when_oauth_config_is_present(monkeypatch):
     assert "open-apis/authen/v1/authorize" in response.headers["location"]
 
 
+def test_feishu_login_requires_session_secret_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("FEISHU_OAUTH_ENABLED", "true")
+    monkeypatch.setenv("FEISHU_OAUTH_APP_ID", "cli_test_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "oauth-secret")
+    monkeypatch.setenv("FEISHU_OAUTH_REDIRECT_URI", "http://testserver/auth/feishu/callback")
+    monkeypatch.delenv("FEISHU_SESSION_SECRET", raising=False)
+
+    client = TestClient(api_server.app)
+    response = client.get("/auth/feishu/login", follow_redirects=False)
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"] == "Feishu OAuth is not fully configured"
+
+
 def test_feishu_login_respects_explicit_disable_even_when_config_exists(monkeypatch):
     monkeypatch.setenv("FEISHU_OAUTH_ENABLED", "false")
     monkeypatch.setenv("FEISHU_OAUTH_APP_ID", "cli_test_app")

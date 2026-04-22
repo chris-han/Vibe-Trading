@@ -517,6 +517,10 @@ def _get_feishu_oauth_redirect_uri() -> str:
     return (os.getenv("FEISHU_OAUTH_REDIRECT_URI") or "").strip() or _DEFAULT_FEISHU_OAUTH_REDIRECT_URI
 
 
+def _feishu_session_secret_configured() -> bool:
+    return bool(os.getenv("FEISHU_SESSION_SECRET", "").strip())
+
+
 def _get_auth_store() -> AuthStore:
     global _auth_store, _auth_store_path
     db_path = AUTH_CONTROL_DIR / "auth.sqlite3"
@@ -1606,7 +1610,7 @@ async def auth_feishu_login(request: Request):
     app_id = (os.getenv("FEISHU_OAUTH_APP_ID") or os.getenv("FEISHU_APP_ID") or "").strip()
     redirect_uri = _get_feishu_oauth_redirect_uri()
 
-    if not app_id or not redirect_uri:
+    if not app_id or not redirect_uri or not _feishu_session_secret_configured():
         raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
     state = uuid.uuid4().hex
     url = (
@@ -1622,6 +1626,8 @@ async def auth_feishu_callback(request: Request, code: str, state: Optional[str]
         raise HTTPException(status_code=404, detail="Feishu OAuth is not enabled")
 
     redirect_uri = _get_feishu_oauth_redirect_uri()
+    if not _feishu_session_secret_configured():
+        raise HTTPException(status_code=500, detail="Feishu OAuth is not fully configured")
 
     token_data = _feishu_exchange_oauth_code(code, redirect_uri=redirect_uri)
     profile = _feishu_fetch_user_profile(str(token_data.get("access_token") or ""))
