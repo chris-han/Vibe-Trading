@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback, useDeferredValue, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ArrowUp, Loader2, ArrowDown, CheckCircle2, Square, Plus, Paperclip, X, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
@@ -62,6 +63,7 @@ const act = () => useAgentStore.getState();
 /* ---------- Component ---------- */
 export function Agent() {
   const [input, setInput] = useState("");
+  const { sessionId: routeSessionId } = useParams<{ sessionId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -100,7 +102,7 @@ export function Agent() {
   const { t } = useI18n();
   const deferredStreamingText = useDeferredValue(streamingText);
 
-  const urlSessionId = searchParams.get("session");
+  const urlSessionId = searchParams.get("session") || routeSessionId || null;
 
   const syncInputHeight = useCallback(() => {
     const el = inputRef.current;

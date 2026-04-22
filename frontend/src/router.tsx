@@ -25,6 +25,7 @@ export const router = createBrowserRouter([
     children: [
       { path: "/", element: <Suspense fallback={<PageLoader />}><Home /></Suspense> },
       { path: "/agent", element: <Suspense fallback={<PageLoader />}><Agent /></Suspense> },
+      { path: "/chat/:sessionId", element: <Suspense fallback={<PageLoader />}><Agent /></Suspense> },
       { path: "/session-events", element: <Suspense fallback={<PageLoader />}><SessionEvents /></Suspense> },
       { path: "/runs/:runId", element: <Suspense fallback={<PageLoader />}><RunDetail /></Suspense> },
       { path: "/compare", element: <Suspense fallback={<PageLoader />}><Compare /></Suspense> },
