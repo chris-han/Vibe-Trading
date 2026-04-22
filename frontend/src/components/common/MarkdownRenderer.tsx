@@ -54,12 +54,31 @@ type CodeProps = React.ComponentPropsWithoutRef<"code"> & {
   children?: ReactNode;
 };
 
+function shouldInsertBoundarySpace(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  const leftChar = left[left.length - 1];
+  const rightChar = right[0];
+  return /[A-Za-z0-9]/.test(leftChar) && /[A-Za-z0-9]/.test(rightChar);
+}
+
+function mergeTextParts(parts: string[]): string {
+  let merged = "";
+  for (const part of parts) {
+    if (!part) continue;
+    if (shouldInsertBoundarySpace(merged, part)) {
+      merged += " ";
+    }
+    merged += part;
+  }
+  return merged;
+}
+
 function flattenText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") {
     return String(node);
   }
   if (Array.isArray(node)) {
-    return node.map(flattenText).join("");
+    return mergeTextParts(node.map(flattenText));
   }
   if (node && typeof node === "object" && "props" in node) {
     return flattenText((node as { props?: { children?: ReactNode } }).props?.children);
