@@ -5,6 +5,7 @@ import types
 from hermes_constants import get_hermes_home
 from src.session.events import EventBus
 from src.session.models import Attempt
+from src.session.models import AttemptStatus
 from src.session.store import SessionStore
 from src.session.service import SessionService
 
@@ -132,3 +133,34 @@ def test_reportable_tool_result_rejects_non_document_tools():
     parsed = {"status": "ok", "message": "done"}
 
     assert SessionService._is_reportable_tool_result("search_files", parsed) is False
+
+
+def test_format_result_message_appends_full_report_link_for_completed_attempt(tmp_path):
+    run_dir = tmp_path / 'runs' / '20260422_010101_aa11'
+    run_dir.mkdir(parents=True)
+
+    attempt = Attempt(session_id='s1', prompt='p')
+    attempt.status = AttemptStatus.COMPLETED
+    attempt.summary = 'Execution complete.'
+    attempt.run_dir = str(run_dir)
+
+    result = SessionService._format_result_message(attempt)
+
+    assert 'Execution complete.' in result
+    assert '[Full report](/runs/20260422_010101_aa11)' in result
+    assert f'Run directory: {run_dir}' in result
+
+
+def test_format_result_message_keeps_failure_text_and_report_link(tmp_path):
+    run_dir = tmp_path / 'runs' / '20260422_010101_bb22'
+    run_dir.mkdir(parents=True)
+
+    attempt = Attempt(session_id='s1', prompt='p')
+    attempt.status = AttemptStatus.FAILED
+    attempt.error = 'tool crashed'
+    attempt.run_dir = str(run_dir)
+
+    result = SessionService._format_result_message(attempt)
+
+    assert 'Execution failed: tool crashed' in result
+    assert '[Full report](/runs/20260422_010101_bb22)' in result

@@ -1073,7 +1073,9 @@ class SessionService:
                     "run_id": run_dir.name,
                 }
             else:
-                if final_text and ((not is_backtest_task and saw_reportable_tool_run) or saw_successful_backtest):
+                # Persist assistant markdown for every successful response so the
+                # run directory always has a user-visible report artifact.
+                if final_text:
                     try:
                         (run_dir / "report.md").write_text(final_text, encoding="utf-8")
                     except Exception:
@@ -1310,5 +1312,25 @@ class SessionService:
     def _format_result_message(attempt: Attempt) -> str:
         """Format the final execution result message."""
         if attempt.status == AttemptStatus.COMPLETED:
-            return attempt.summary or "Strategy execution completed."
-        return f"Execution failed: {attempt.error or 'unknown error'}"
+            base_message = attempt.summary or "Strategy execution completed."
+        else:
+            base_message = f"Execution failed: {attempt.error or 'unknown error'}"
+
+        run_dir = (attempt.run_dir or "").strip()
+        if not run_dir:
+            return base_message
+
+        run_id = Path(run_dir).name.strip()
+        if not run_id:
+            return base_message
+
+        if "/runs/" in base_message and run_id in base_message:
+            return base_message
+
+        # Keep a stable report entry-point for chat replies and include the
+        # absolute run directory to make filesystem artifacts discoverable.
+        return (
+            f"{base_message}\n\n"
+            f"[Full report](/runs/{run_id})\n\n"
+            f"Run directory: {run_dir}"
+        )
