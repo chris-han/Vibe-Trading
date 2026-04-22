@@ -15,4 +15,4 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: push" \
             -d '{"ref": "${{ github.ref }}", "repository": {"full_name": "${{ github.repository }}"}}' \
-            "https://docker.semantier.com/api/deploy/compose/sOo6yxOPEJgNNOrdVfyt7"
+            "https://docker.semantier.com/api/deploy/compose/vccAIbGloP4TA6s1dxgQ2"           
