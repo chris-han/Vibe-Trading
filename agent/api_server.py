@@ -7,6 +7,7 @@ V5: ReAct Agent + async /run + CORS env + SSE tool events.
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import hashlib
 import hmac as _hmac
@@ -19,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Security, UploadFile, status
@@ -28,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+import requests
 from rich.console import Console
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -1451,6 +1453,152 @@ async def system_tools(request: Request):
     }
 
 
+MessagingPlatform = Literal["feishu", "weixin"]
+
+_MESSAGING_DOCS: Dict[str, str] = {
+    "feishu": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/feishu",
+    "weixin": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/weixin",
+}
+
+
+def _normalize_messaging_platform(platform: str) -> MessagingPlatform:
+    normalized = (platform or "").strip().lower()
+    if normalized in {"feishu", "weixin"}:
+        return normalized  # type: ignore[return-value]
+    raise HTTPException(status_code=404, detail=f"Unsupported messaging platform: {platform}")
+
+
+def _resolve_messaging_owner_id(ctx: RequestContext) -> str:
+    # Use authenticated user ID when available; otherwise bind to workspace for
+    # single-user/local setups where OAuth is intentionally disabled.
+    if ctx.user is not None and ctx.authenticated:
+        return ctx.user.user_id
+    return f"workspace:{ctx.workspace.workspace_id}"
+
+
+def _mask_secret_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return "*" * len(text)
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def _mask_messaging_config(platform: MessagingPlatform, config: Dict[str, Any]) -> Dict[str, Any]:
+    masked = dict(config)
+    if platform == "feishu":
+        if "app_secret" in masked:
+            masked["app_secret"] = _mask_secret_value(masked.get("app_secret"))
+    if platform == "weixin":
+        if "token" in masked:
+            masked["token"] = _mask_secret_value(masked.get("token"))
+    return masked
+
+
+def _build_weixin_headers(token: str, body: str) -> Dict[str, str]:
+    random_uin = base64.b64encode(str(int.from_bytes(os.urandom(4), "big")).encode("utf-8")).decode("ascii")
+    return {
+        "Content-Type": "application/json",
+        "AuthorizationType": "ilink_bot_token",
+        "Authorization": f"Bearer {token}",
+        "Content-Length": str(len(body.encode("utf-8"))),
+        "X-WECHAT-UIN": random_uin,
+        "iLink-App-Id": "bot",
+        "iLink-App-ClientVersion": str((2 << 16) | (2 << 8) | 0),
+    }
+
+
+def _validate_feishu_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    app_id = str(config.get("app_id") or "").strip()
+    app_secret = str(config.get("app_secret") or "").strip()
+    domain = str(config.get("domain") or "feishu").strip().lower()
+    connection_mode = str(config.get("connection_mode") or "websocket").strip().lower()
+    if not app_id or not app_secret:
+        raise HTTPException(status_code=400, detail="Feishu app_id and app_secret are required.")
+    if domain not in {"feishu", "lark"}:
+        raise HTTPException(status_code=400, detail="Feishu domain must be feishu or lark.")
+    if connection_mode not in {"websocket", "webhook"}:
+        raise HTTPException(status_code=400, detail="Feishu connection_mode must be websocket or webhook.")
+
+    base_url = "https://open.larksuite.com" if domain == "lark" else "https://open.feishu.cn"
+    try:
+        response = requests.post(
+            f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Feishu validation request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Feishu validation HTTP {response.status_code}: {response.text[:200]}")
+
+    payload = response.json() if response.text else {}
+    if int(payload.get("code") or 0) != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feishu validation failed: {payload.get('msg') or 'unknown error'}",
+        )
+
+    return {
+        "platform": "feishu",
+        "valid": True,
+        "summary": "Credentials verified with Feishu tenant token endpoint.",
+        "details": {
+            "domain": domain,
+            "connection_mode": connection_mode,
+            "token_expires_in": payload.get("expire"),
+        },
+    }
+
+
+def _validate_weixin_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    account_id = str(config.get("account_id") or "").strip()
+    token = str(config.get("token") or "").strip()
+    base_url = str(config.get("base_url") or "https://ilinkai.weixin.qq.com").strip().rstrip("/")
+    if not account_id or not token:
+        raise HTTPException(status_code=400, detail="Weixin account_id and token are required.")
+
+    body = json.dumps({"get_updates_buf": "", "base_info": {"channel_version": "2.2.0"}}, separators=(",", ":"))
+    try:
+        response = requests.post(
+            f"{base_url}/ilink/bot/getupdates",
+            data=body,
+            headers=_build_weixin_headers(token, body),
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Weixin validation request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Weixin validation HTTP {response.status_code}: {response.text[:200]}")
+
+    payload = response.json() if response.text else {}
+    ret = int(payload.get("ret") or 0)
+    if ret != 0:
+        err = payload.get("errmsg") or payload.get("retmsg") or payload.get("message") or "unknown error"
+        raise HTTPException(status_code=400, detail=f"Weixin validation failed: {err}")
+
+    return {
+        "platform": "weixin",
+        "valid": True,
+        "summary": "Credentials verified with Weixin iLink getupdates endpoint.",
+        "details": {
+            "base_url": base_url,
+            "ret": ret,
+        },
+    }
+
+
+def _validate_messaging_config(platform: MessagingPlatform, config: Dict[str, Any]) -> Dict[str, Any]:
+    if platform == "feishu":
+        return _validate_feishu_config(config)
+    if platform == "weixin":
+        return _validate_weixin_config(config)
+    raise HTTPException(status_code=404, detail=f"Unsupported messaging platform: {platform}")
+
+
 class AuthUserResponse(BaseModel):
     user_id: str
     name: str
@@ -1465,6 +1613,60 @@ class AuthMeResponse(BaseModel):
     feishu_oauth_enabled: bool
     user: Optional[AuthUserResponse] = None
     workspace_slug: Optional[str] = None
+
+
+class MessagingValidateRequest(BaseModel):
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MessagingPlatformState(BaseModel):
+    platform: MessagingPlatform
+    configured: bool
+    docs_url: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    validated_at: Optional[str] = None
+    last_error: Optional[str] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MessagingPlatformsResponse(BaseModel):
+    platforms: List[MessagingPlatformState]
+    owner_id: str
+    workspace_slug: str
+
+
+class MessagingValidateResponse(BaseModel):
+    platform: MessagingPlatform
+    valid: bool
+    summary: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+    masked_config: Dict[str, Any] = Field(default_factory=dict)
+
+
+def _messaging_state_payload(
+    *,
+    platform: MessagingPlatform,
+    record: Any,
+) -> MessagingPlatformState:
+    if record is None:
+        return MessagingPlatformState(
+            platform=platform,
+            configured=False,
+            docs_url=_MESSAGING_DOCS[platform],
+            config={},
+        )
+
+    return MessagingPlatformState(
+        platform=platform,
+        configured=True,
+        docs_url=_MESSAGING_DOCS[platform],
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        validated_at=record.validated_at,
+        last_error=record.last_error,
+        config=_mask_messaging_config(platform, record.config),
+    )
 
 
 class UploadCapabilitiesResponse(BaseModel):
@@ -1596,6 +1798,109 @@ async def auth_me(request: Request):
             workspace_slug=ctx.user.workspace_slug,
         ),
     )
+
+
+@app.get("/messaging/platforms", response_model=MessagingPlatformsResponse, dependencies=[Depends(require_auth)])
+async def list_messaging_platforms(request: Request):
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    owner_id = _resolve_messaging_owner_id(ctx)
+    store = _get_auth_store()
+
+    try:
+        records = {
+            record.platform: record
+            for record in store.list_messaging_configs(user_id=owner_id)
+        }
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    platforms: List[MessagingPlatformState] = []
+    for platform in ("feishu", "weixin"):
+        platforms.append(
+            _messaging_state_payload(
+                platform=platform,  # type: ignore[arg-type]
+                record=records.get(platform),
+            )
+        )
+
+    return MessagingPlatformsResponse(
+        platforms=platforms,
+        owner_id=owner_id,
+        workspace_slug=ctx.workspace.workspace_slug,
+    )
+
+
+@app.post(
+    "/messaging/{platform}/validate",
+    response_model=MessagingValidateResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def validate_messaging_platform(
+    request: Request,
+    platform: str,
+    body: MessagingValidateRequest = Body(...),
+):
+    _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    normalized = _normalize_messaging_platform(platform)
+    result = _validate_messaging_config(normalized, body.config)
+    return MessagingValidateResponse(
+        platform=normalized,
+        valid=True,
+        summary=str(result.get("summary") or "Validation succeeded."),
+        details=result.get("details") if isinstance(result.get("details"), dict) else {},
+        masked_config=_mask_messaging_config(normalized, body.config),
+    )
+
+
+@app.put(
+    "/messaging/{platform}",
+    response_model=MessagingPlatformState,
+    dependencies=[Depends(require_auth)],
+)
+async def save_messaging_platform(
+    request: Request,
+    platform: str,
+    body: MessagingValidateRequest = Body(...),
+):
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    normalized = _normalize_messaging_platform(platform)
+    owner_id = _resolve_messaging_owner_id(ctx)
+
+    # Save is gated by live credential validation.
+    _validate_messaging_config(normalized, body.config)
+    validated_at = datetime.utcnow().isoformat() + "Z"
+
+    try:
+        record = _get_auth_store().upsert_messaging_config(
+            user_id=owner_id,
+            platform=normalized,
+            config=body.config,
+            validated_at=validated_at,
+            last_error=None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _messaging_state_payload(platform=normalized, record=record)
+
+
+@app.delete(
+    "/messaging/{platform}",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(require_auth)],
+)
+async def delete_messaging_platform(request: Request, platform: str):
+    ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
+    normalized = _normalize_messaging_platform(platform)
+    owner_id = _resolve_messaging_owner_id(ctx)
+    deleted = _get_auth_store().delete_messaging_config(user_id=owner_id, platform=normalized)
+    return {
+        "ok": True,
+        "deleted": deleted,
+        "platform": normalized,
+    }
 
 
 @app.get("/capabilities/uploads", response_model=UploadCapabilitiesResponse)

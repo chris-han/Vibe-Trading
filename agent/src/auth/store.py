@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import sqlite3
 import uuid
+import hashlib
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from cryptography.fernet import Fernet, InvalidToken
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -26,10 +33,42 @@ class AuthUser:
     updated_at: str
 
 
+@dataclass
+class MessagingGatewayConfig:
+    user_id: str
+    platform: str
+    config: dict[str, Any]
+    created_at: str
+    updated_at: str
+    validated_at: str | None
+    last_error: str | None
+
+
 def _slugify(value: str) -> str:
     normalized = (value or "").strip().lower()
     normalized = _SLUG_RE.sub("_", normalized).strip("_")
     return normalized or "user"
+
+
+def _resolve_messaging_encryption_key() -> bytes:
+    configured = (os.getenv("MESSAGING_CONFIG_ENCRYPTION_KEY") or "").strip()
+    if configured:
+        try:
+            Fernet(configured.encode("utf-8"))
+            return configured.encode("utf-8")
+        except Exception:
+            # Allow plain passphrase input by deriving a Fernet-compatible key.
+            return urlsafe_b64encode(hashlib.sha256(configured.encode("utf-8")).digest())
+
+    # Backward-compatible fallback for existing deployments.
+    fallback = (os.getenv("FEISHU_SESSION_SECRET") or "").strip()
+    if fallback:
+        return urlsafe_b64encode(hashlib.sha256(fallback.encode("utf-8")).digest())
+
+    raise RuntimeError(
+        "Messaging encryption key is not configured. Set MESSAGING_CONFIG_ENCRYPTION_KEY (recommended) "
+        "or FEISHU_SESSION_SECRET."
+    )
 
 
 class AuthStore:
@@ -62,7 +101,45 @@ class AuthStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messaging_gateway_configs (
+                    user_id TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    encrypted_config TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    validated_at TEXT,
+                    last_error TEXT,
+                    PRIMARY KEY (user_id, platform),
+                    FOREIGN KEY(user_id) REFERENCES auth_users(user_id) ON DELETE CASCADE
+                )
+                """
+            )
             conn.commit()
+
+    @staticmethod
+    def _normalize_platform(platform: str) -> str:
+        normalized = (platform or "").strip().lower()
+        if normalized not in {"feishu", "weixin"}:
+            raise ValueError(f"Unsupported messaging platform: {platform}")
+        return normalized
+
+    @staticmethod
+    def _encrypt_config(config: dict[str, Any]) -> str:
+        payload = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+        return Fernet(_resolve_messaging_encryption_key()).encrypt(payload.encode("utf-8")).decode("utf-8")
+
+    @staticmethod
+    def _decrypt_config(ciphertext: str) -> dict[str, Any]:
+        try:
+            plain = Fernet(_resolve_messaging_encryption_key()).decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+        except InvalidToken as exc:
+            raise RuntimeError("Failed to decrypt messaging config. Check encryption key configuration.") from exc
+        parsed = json.loads(plain)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Messaging config payload must decode to an object.")
+        return parsed
 
     def _next_workspace_slug(self, conn: sqlite3.Connection, base_slug: str) -> str:
         slug = base_slug
@@ -162,6 +239,97 @@ class AuthStore:
             ).fetchone()
         return self._row_to_user(row) if row else None
 
+    def upsert_messaging_config(
+        self,
+        *,
+        user_id: str,
+        platform: str,
+        config: dict[str, Any],
+        validated_at: str | None = None,
+        last_error: str | None = None,
+    ) -> MessagingGatewayConfig:
+        normalized_platform = self._normalize_platform(platform)
+        now = datetime.now(timezone.utc).isoformat()
+        encrypted = self._encrypt_config(config)
+
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT created_at FROM messaging_gateway_configs WHERE user_id = ? AND platform = ?",
+                (user_id, normalized_platform),
+            ).fetchone()
+            created_at = str(existing["created_at"]) if existing else now
+
+            conn.execute(
+                """
+                INSERT INTO messaging_gateway_configs (
+                    user_id, platform, encrypted_config, created_at, updated_at, validated_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, platform) DO UPDATE SET
+                    encrypted_config = excluded.encrypted_config,
+                    updated_at = excluded.updated_at,
+                    validated_at = excluded.validated_at,
+                    last_error = excluded.last_error
+                """,
+                (
+                    user_id,
+                    normalized_platform,
+                    encrypted,
+                    created_at,
+                    now,
+                    validated_at,
+                    last_error,
+                ),
+            )
+            conn.commit()
+
+            row = conn.execute(
+                """
+                SELECT user_id, platform, encrypted_config, created_at, updated_at, validated_at, last_error
+                FROM messaging_gateway_configs
+                WHERE user_id = ? AND platform = ?
+                """,
+                (user_id, normalized_platform),
+            ).fetchone()
+
+        assert row is not None
+        return self._row_to_messaging_config(row)
+
+    def get_messaging_config(self, *, user_id: str, platform: str) -> MessagingGatewayConfig | None:
+        normalized_platform = self._normalize_platform(platform)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT user_id, platform, encrypted_config, created_at, updated_at, validated_at, last_error
+                FROM messaging_gateway_configs
+                WHERE user_id = ? AND platform = ?
+                """,
+                (user_id, normalized_platform),
+            ).fetchone()
+        return self._row_to_messaging_config(row) if row else None
+
+    def list_messaging_configs(self, *, user_id: str) -> list[MessagingGatewayConfig]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, platform, encrypted_config, created_at, updated_at, validated_at, last_error
+                FROM messaging_gateway_configs
+                WHERE user_id = ?
+                ORDER BY platform ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_messaging_config(row) for row in rows]
+
+    def delete_messaging_config(self, *, user_id: str, platform: str) -> bool:
+        normalized_platform = self._normalize_platform(platform)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM messaging_gateway_configs WHERE user_id = ? AND platform = ?",
+                (user_id, normalized_platform),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> AuthUser:
         return AuthUser(
@@ -174,4 +342,16 @@ class AuthStore:
             workspace_slug=str(row["workspace_slug"]),
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
+        )
+
+    @classmethod
+    def _row_to_messaging_config(cls, row: sqlite3.Row) -> MessagingGatewayConfig:
+        return MessagingGatewayConfig(
+            user_id=str(row["user_id"]),
+            platform=str(row["platform"]),
+            config=cls._decrypt_config(str(row["encrypted_config"])),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            validated_at=str(row["validated_at"]) if row["validated_at"] else None,
+            last_error=str(row["last_error"]) if row["last_error"] else None,
         )
