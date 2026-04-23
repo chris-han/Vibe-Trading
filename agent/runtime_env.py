@@ -84,6 +84,7 @@ def get_swarm_runs_dir(data_root: Path | None = None) -> Path:
 
 
 _FALSEY_STRINGS = {"", "0", "false", "off", "no", "none", "disabled"}
+_TRUTHY_STRINGS = {"1", "true", "on", "yes", "enabled"}
 _VALID_REASONING_EFFORTS = {"xhigh", "high", "medium", "low", "minimal"}
 
 
@@ -368,6 +369,19 @@ def _positive_int_from_env(*names: str) -> int | None:
     return None
 
 
+def _bool_from_env(*names: str) -> bool | None:
+    """Return the first explicit boolean found in the given env vars."""
+    for name in names:
+        raw = os.getenv(name, "").strip().lower()
+        if not raw:
+            continue
+        if raw in _TRUTHY_STRINGS:
+            return True
+        if raw in _FALSEY_STRINGS:
+            return False
+    return None
+
+
 def _cap_max_tokens_for_provider(max_tokens: int) -> int:
     """Clamp provider-specific output token defaults to avoid known API 400s."""
     provider = (os.getenv("HERMES_INFERENCE_PROVIDER") or "").strip().lower()
@@ -480,5 +494,9 @@ def get_hermes_agent_kwargs() -> dict[str, object]:
         kwargs["reasoning_config"] = {"enabled": True, "effort": effort}
     elif effort and effort in _FALSEY_STRINGS:
         kwargs["reasoning_config"] = {"enabled": False}
+
+    save_trajectories = _bool_from_env("SAVE_TRAJECTORIES", "HERMES_SAVE_TRAJECTORIES")
+    if save_trajectories is not None:
+        kwargs["save_trajectories"] = save_trajectories
 
     return kwargs

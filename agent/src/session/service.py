@@ -76,6 +76,7 @@ _load_output_format_skill = load_output_format_skill
 from runtime_env import (
     ensure_runtime_env,
     get_hermes_agent_kwargs,
+    get_hermes_home,
     prepare_hermes_project_context,
 )
 from src.backtest.bootstrap import bootstrap_run_from_prompt, is_backtest_prompt
@@ -795,6 +796,7 @@ class SessionService:
         _HERMES = Path(__file__).resolve().parents[3] / "hermes-agent"
         if str(_HERMES) not in sys.path:
             sys.path.insert(0, str(_HERMES))
+        import run_agent as _hermes_run_agent
         from run_agent import AIAgent
         from src.core.state import RunStateStore
 
@@ -989,6 +991,20 @@ class SessionService:
 
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
+
+        if bool(agent_kwargs.get("save_trajectories")):
+            from agent.trajectory import save_trajectory as _save_trajectory_fn
+
+            trajectories_dir = (get_hermes_home() / "trajectories").resolve()
+            trajectories_dir.mkdir(parents=True, exist_ok=True)
+
+            def _save_wrapper_trajectory(trajectory, model, completed, filename=None):
+                target_name = "trajectory_samples.jsonl" if completed else "failed_trajectories.jsonl"
+                target_file = trajectories_dir / target_name
+                _save_trajectory_fn(trajectory, model, completed, filename=str(target_file))
+
+            # Force trajectory logs into backend wrapper scope regardless of process cwd.
+            _hermes_run_agent._save_trajectory_to_file = _save_wrapper_trajectory
 
         # Configure terminal/file tool root via env var and per-session task
         # override so every session starts in agent/ rather than the full repo

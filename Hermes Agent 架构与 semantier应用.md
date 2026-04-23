@@ -680,3 +680,95 @@ def _check_hermes_path() -> bool:
 * [Nous Research: Hermes Agent 介绍](https://www.google.com/search?q=https://www.youtube.com/watch?v%3DR267X9kY6_0)  
 * [Agent Skill 验证参考](https://www.google.com/search?q=https://www.youtube.com/shorts/R6X5z0p5K9k)
 
+## ---
+
+**10. Wrapper 级 Trajectory 开关与落盘边界（已实现）**
+
+本节记录当前已落地的实现：`save_trajectories` 由 `/agent` 包装层统一控制，不依赖上游 dashboard settings 页面；并且轨迹文件强制写入 wrapper 作用域，避免落到用户 workspace。
+
+### **10.1 设计目标**
+
+* `SAVE_TRAJECTORIES` 作为后端 wrapper feature switch（可选别名：`HERMES_SAVE_TRAJECTORIES`）。
+* 由 `agent` 在构造 `AIAgent(...)` 时显式传递 `save_trajectories`。
+* trajectory JSONL 不写入 `workspaces/<user_id>/...`，统一写到 wrapper 的 Hermes Home 目录。
+* 保持 upstream `hermes-agent` 最小侵入（不改其核心保存逻辑签名）。
+
+### **10.2 已实现的自定义代码（Custom Code）**
+
+**① runtime_env: 环境变量 -> AIAgent kwargs**
+
+文件：`agent/runtime_env.py`
+
+* 增加布尔解析器 `_bool_from_env(...)`，支持 `1/true/on/yes/enabled` 与 `0/false/off/no/none/disabled`。
+* 在 `get_hermes_agent_kwargs()` 中读取：
+    * `SAVE_TRAJECTORIES`
+    * `HERMES_SAVE_TRAJECTORIES`
+* 若解析到显式布尔值，则写入：
+
+```python
+kwargs["save_trajectories"] = True | False
+```
+
+**② SessionService: wrapper 作用域强制落盘**
+
+文件：`agent/src/session/service.py`
+
+* `AIAgent` 构造前读取 `agent_kwargs = get_hermes_agent_kwargs()`。
+* 当 `save_trajectories=True`：
+    * 计算落盘目录：`get_hermes_home() / "trajectories"`
+    * 创建目录（若不存在）
+    * 在 wrapper 内替换 Hermes 轨迹保存函数引用，将默认相对路径写入改为绝对路径写入：
+
+```python
+trajectory_samples.jsonl
+failed_trajectories.jsonl
+```
+
+* 这样即使进程 cwd 变化，也不会把 trajectory 落到用户 workspace。
+
+**③ Regression Tests: 行为锁定**
+
+文件：`agent/tests/regression/test_runtime_env.py`
+
+新增测试：
+
+* `SAVE_TRAJECTORIES=true` -> `kwargs["save_trajectories"] is True`
+* `HERMES_SAVE_TRAJECTORIES=0` -> `kwargs["save_trajectories"] is False`
+
+用于防止后续重构丢失 wrapper feature switch 行为。
+
+### **10.3 Effective Storage Location（生效存储位置）**
+
+当 `save_trajectories=true` 时，落盘位置固定为：
+
+* 成功轨迹：`<HERMES_HOME>/trajectories/trajectory_samples.jsonl`
+* 失败轨迹：`<HERMES_HOME>/trajectories/failed_trajectories.jsonl`
+
+其中：
+
+* `HERMES_HOME` 若显式配置，则使用该值。
+* 未配置时，使用 wrapper 默认值：`agent/.hermes`。
+
+因此默认有效路径为：
+
+* `agent/.hermes/trajectories/trajectory_samples.jsonl`
+* `agent/.hermes/trajectories/failed_trajectories.jsonl`
+
+**边界保证**：上述路径均属于 backend wrapper scope，不属于 `workspaces/<user_id>/...` 用户数据域。
+
+### **10.4 与 Session Events 页面导出的关系**
+
+需要区分两类 JSONL：
+
+* Canonical Session Event Log：`sessions/<sid>/events.jsonl`
+* Atropos 导出：由 `events.jsonl` 投影生成（按需导出）
+* Hermes trajectory_samples：由 `save_trajectories=true` 控制，写入 `<HERMES_HOME>/trajectories/`
+
+三者用途不同，生命周期和存储目录也不同。
+
+### **10.5 运维约定**
+
+* 修改 `.env` 的 `SAVE_TRAJECTORIES` 后，需要重启 backend 进程生效。
+* 若部署多实例，建议每实例使用独立 `HERMES_HOME` 或共享可审计卷（按实例/环境分目录）。
+* 生产环境建议定期归档 `trajectories/*.jsonl`，避免单文件无限增长。
+

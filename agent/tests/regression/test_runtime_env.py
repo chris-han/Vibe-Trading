@@ -151,6 +151,30 @@ def test_get_hermes_agent_kwargs_preserves_primary_runtime(monkeypatch):
     assert kwargs["reasoning_config"] == {"enabled": True, "effort": "medium"}
 
 
+def test_get_hermes_agent_kwargs_reads_save_trajectories_env(monkeypatch):
+    for key in ("SAVE_TRAJECTORIES", "HERMES_SAVE_TRAJECTORIES"):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("SAVE_TRAJECTORIES", "true")
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", True)
+
+    kwargs = runtime_env.get_hermes_agent_kwargs()
+
+    assert kwargs["save_trajectories"] is True
+
+
+def test_get_hermes_agent_kwargs_reads_false_save_trajectories_env(monkeypatch):
+    for key in ("SAVE_TRAJECTORIES", "HERMES_SAVE_TRAJECTORIES"):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("HERMES_SAVE_TRAJECTORIES", "0")
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", True)
+
+    kwargs = runtime_env.get_hermes_agent_kwargs()
+
+    assert kwargs["save_trajectories"] is False
+
+
 def test_ensure_runtime_env_clears_openai_base_url_for_named_provider(monkeypatch, tmp_path):
     hermes_home = tmp_path / ".hermes"
     hermes_home.mkdir(parents=True)
