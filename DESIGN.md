@@ -210,6 +210,46 @@ Wordmark rules:
 
 ### Buttons
 
+### Design Anti-Patterns (Enforce These Rules)
+
+#### No Colored Left-Edge Borders
+Tool call cards, inline tool sections, and any utility card must **not** use a colored `border-left` accent to signal status. Status is communicated through icon color or a small dot — not by painting one edge of the card.
+
+```tsx
+// NG: colored left edge accent
+<div style={{ borderLeftWidth: '4px', borderLeftColor: '#6366f1' }}>
+
+// OK: flat uniform border using theme token
+<div style={{ border: '1px solid var(--tool-card-border)' }}>
+```
+
+#### Never Use Hard Tailwind Border/Background Colors
+All borders and card backgrounds must use semantic theme tokens, not raw Tailwind palette classes like `border-primary-200`, `bg-primary-50`, `text-red-500`, `bg-indigo-500`, etc. These break theme-switching and violate the Morandi soft-color principle.
+
+```tsx
+// NG: hard Tailwind default colors
+<div className="border border-primary-200 bg-primary-50 text-red-500">
+
+// OK: semantic theme tokens
+<div style={{ border: '1px solid var(--tool-card-border)', background: 'var(--tool-card-bg)', color: 'var(--theme-danger)' }}>
+```
+
+Available semantic tokens: `--tool-card-bg`, `--tool-card-border`, `--tool-card-title`, `--tool-card-muted`, `--theme-border`, `--theme-card`, `--theme-card2`, `--theme-success`, `--theme-danger`, `--theme-warning`, `--theme-accent`, `--theme-muted`, `--theme-text`.
+
+#### Selective Radius — Small Components Use `rounded-md` (12px)
+Large radius (`rounded-card` / 20px, `rounded-xl`) is reserved for primary content cards, message bubbles, and modal containers. Small inline components — tool call rows, badge chips, file attachment links, toggle groups — must use `rounded-md` (12px) or smaller. Never apply `rounded-xl` or larger to a compact utility component.
+
+| Component Type | Correct Radius |
+|---|---|
+| Primary content card | `rounded-card` (20px) |
+| Message bubble | `rounded-card rounded-tl-sm` |
+| Tool call card / inline section | `rounded-md` (12px) |
+| File attachment link | `rounded-md` (12px) |
+| Badge / chip | `rounded-md` (12px) or `rounded-full` |
+| Image attachment wrapper | `rounded-md` (12px) |
+
+---
+
 **Primary Green CTA**
 - Background: `bg-primary` (`var(--primary)`, `#9fe870`)
 - Text: `text-primary-foreground` (`var(--primary-foreground)`, `#163300`)
