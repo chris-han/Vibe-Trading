@@ -455,6 +455,95 @@ class TestHermesSessionEvents:
         assert final_overrides["display_safe_read_root"] == "/workspace"
         assert final_overrides["display_safe_write_root"] == "/workspace/run"
 
+    def test_regular_user_sandbox_is_scoped_to_run_dir(self, tmp_path):
+        """Regular-user session gets a run-scoped sandbox (default role)."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        # No sandbox_role in session config → regular_user
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Analyze AAPL")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "r1"
+        register_calls: list[tuple[str, dict]] = []
+
+        def _register(task_id, overrides):
+            register_calls.append((task_id, dict(overrides)))
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
+                run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
+            ))
+            with patch("src.core.state.RunStateStore") as MockStore, \
+                 patch("tools.terminal_tool.register_task_env_overrides", side_effect=_register), \
+                 patch("tools.terminal_tool.clear_task_env_overrides"):
+                MockStore.return_value.create_run_dir.return_value = run_dir
+                MockStore.return_value.mark_success.return_value = None
+                await svc._run_with_agent(attempt)
+
+        _run(_t())
+
+        _, final_overrides = register_calls[-1]
+        assert final_overrides["cwd"] == str(run_dir / "artifacts")
+        assert final_overrides["safe_write_root"] == str(run_dir)
+        # Regular users must NOT have write access above their run_dir
+        assert final_overrides["safe_write_root"] != str(tmp_path)
+        assert final_overrides["display_cwd"] == "/workspace/run/artifacts"
+        assert "env" not in final_overrides  # no upstream env-key leakage
+
+    def test_administrator_sandbox_covers_workspace_file_root(self, tmp_path):
+        """Administrator session gets access to the full workspace file root."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t", config={"sandbox_role": "administrator"})
+        attempt = Attempt(session_id=session.session_id, prompt="Show workspace structure")
+        svc.store.create_attempt(attempt)
+
+        run_dir = tmp_path / "runs" / "r1"
+        register_calls: list[tuple[str, dict]] = []
+
+        def _register(task_id, overrides):
+            register_calls.append((task_id, dict(overrides)))
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = MagicMock(return_value=MagicMock(
+                run_conversation=MagicMock(return_value={"final_response": "ok", "status": "success"})
+            ))
+            with patch("src.core.state.RunStateStore") as MockStore, \
+                 patch("tools.terminal_tool.register_task_env_overrides", side_effect=_register), \
+                 patch("tools.terminal_tool.clear_task_env_overrides"):
+                MockStore.return_value.create_run_dir.return_value = run_dir
+                MockStore.return_value.mark_success.return_value = None
+                await svc._run_with_agent(attempt)
+
+        _run(_t())
+
+        _, final_overrides = register_calls[-1]
+        # Admin sandbox is rooted at file_root (broader than a single run)
+        assert final_overrides["safe_write_root"] != str(run_dir)
+        assert final_overrides["display_cwd"] == "/workspace/admin"
+        assert final_overrides["display_safe_write_root"] == "/workspace/admin"
+        assert "env" not in final_overrides
+
+    def test_resolve_sandbox_role_normalizes_variants(self):
+        """`admin` and `administrator` both resolve to the admin role."""
+        from src.session.service import SessionService
+        from src.session.models import Session
+
+        for raw in ("admin", "administrator", "ADMIN", "Administrator"):
+            s = Session()
+            s.config = {"sandbox_role": raw}
+            assert SessionService._resolve_sandbox_role(s) == "administrator", raw
+
+        for raw in ("user", "regular_user", "", None):
+            s = Session()
+            s.config = {"sandbox_role": raw}
+            assert SessionService._resolve_sandbox_role(s) == "regular_user", raw
+
     def test_hermes_toolset_selection_exposes_legacy_vt_aliases(self):
         """Compat toolset is now empty; all tools are provided by hermes built-in toolsets.
         Vibe-Trading registers finance tools through the installed Hermes entry-point plugin."""

@@ -602,6 +602,11 @@ def _resolve_request_context(request: Request, *, require_login: bool = False) -
     return RequestContext(authenticated=False, user=None, workspace=_get_public_workspace())
 
 
+def _resolve_session_sandbox_role(ctx: RequestContext) -> str:
+    """Map request context to deterministic sandbox role labels."""
+    return "regular_user" if ctx.authenticated else "administrator"
+
+
 async def require_auth(
     request: Request,
     cred: HTTPAuthorizationCredentials = Security(_security),
@@ -3418,7 +3423,9 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
     svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
-    session = svc.create_session(title=request.title, config=request.config)
+    session_config = dict(request.config or {})
+    session_config.setdefault("sandbox_role", _resolve_session_sandbox_role(ctx))
+    session = svc.create_session(title=request.title, config=session_config)
     return SessionResponse(
         session_id=session.session_id,
         title=session.title,
@@ -3552,6 +3559,15 @@ async def send_message(session_id: str, request: SendMessageRequest, http_reques
     svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
+
+    session = svc.get_session(session_id)
+    if session is not None:
+        session_config = dict(session.config or {})
+        if not str(session_config.get("sandbox_role") or "").strip():
+            session_config["sandbox_role"] = _resolve_session_sandbox_role(ctx)
+            session.config = session_config
+            svc.store.update_session(session)
+
     try:
         result = await svc.send_message(session_id=session_id, content=request.content)
         return result

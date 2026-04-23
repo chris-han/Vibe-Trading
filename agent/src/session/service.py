@@ -189,6 +189,15 @@ class SessionService:
         self.message_projection_hook = message_projection_hook
         self._active_loops: Dict[str, "AgentLoop"] = {}
 
+    @staticmethod
+    def _resolve_sandbox_role(session: Optional[Session]) -> str:
+        """Return normalized sandbox role for the active session."""
+        cfg = session.config if isinstance(getattr(session, "config", None), dict) else {}
+        role = str(cfg.get("sandbox_role") or "").strip().lower()
+        if role in {"admin", "administrator"}:
+            return "administrator"
+        return "regular_user"
+
     def _persist_message(self, session: Session, message: Message) -> None:
         self.store.append_message(message)
         if self.message_projection_hook is None:
@@ -1067,6 +1076,9 @@ class SessionService:
                     sid[:8],
                 )
 
+        active_session = self.store.get_session(sid) or Session()
+        sandbox_role = self._resolve_sandbox_role(active_session)
+
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
 
@@ -1150,7 +1162,7 @@ class SessionService:
             ephemeral_system_prompt=build_session_runtime_prompt(
                 str(run_dir),
                 sid,
-                (self.store.get_session(sid) or Session()).config.get("channel", ""),
+                active_session.config.get("channel", ""),
             ),
             skip_context_files=True,
             **agent_kwargs,
@@ -1168,14 +1180,24 @@ class SessionService:
         try:
             from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
             workspace_root = self.runs_dir.parent.resolve()
-            register_task_env_overrides(sid, {
-                "cwd": str(run_dir / "artifacts"),
-                "safe_read_root": str(workspace_root),
-                "safe_write_root": str(run_dir),
-                "display_cwd": "/workspace/run/artifacts",
-                "display_safe_read_root": "/workspace",
-                "display_safe_write_root": "/workspace/run",
-            })
+            if sandbox_role == "administrator":
+                register_task_env_overrides(sid, {
+                    "cwd": str(file_root),
+                    "safe_read_root": str(file_root),
+                    "safe_write_root": str(file_root),
+                    "display_cwd": "/workspace/admin",
+                    "display_safe_read_root": "/workspace/admin",
+                    "display_safe_write_root": "/workspace/admin",
+                })
+            else:
+                register_task_env_overrides(sid, {
+                    "cwd": str(run_dir / "artifacts"),
+                    "safe_read_root": str(workspace_root),
+                    "safe_write_root": str(run_dir),
+                    "display_cwd": "/workspace/run/artifacts",
+                    "display_safe_read_root": "/workspace",
+                    "display_safe_write_root": "/workspace/run",
+                })
             _hermes_overrides_set = True
         except Exception:
             _hermes_overrides_set = False

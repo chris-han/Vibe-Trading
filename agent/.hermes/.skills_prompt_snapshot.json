@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "manifest": {
+    "domain/china-training-pricing-research/SKILL.md": [
+      1776850684352434556,
+      6786
+    ],
+    "productivity/feishu-cli-setup/SKILL.md": [
+      1776956452503735511,
+      6876
+    ],
+    "productivity/lark-cli-calendar/SKILL.md": [
+      1776938993897223558,
+      3898
+    ]
+  },
+  "skills": [
+    {
+      "skill_name": "china-training-pricing-research",
+      "category": "domain",
+      "frontmatter_name": "china-training-pricing-research",
+      "description": "Research methodology for China government/enterprise trai...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "feishu-cli-setup",
+      "category": "productivity",
+      "frontmatter_name": "feishu-cli-setup",
+      "description": "Install and configure Feishu/Lark CLI for automation - in...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "lark-cli-calendar",
+      "category": "productivity",
+      "frontmatter_name": "lark-cli-calendar",
+      "description": "Create, query, and manage Feishu/Lark calendar events usi...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    }
+  ],
+  "category_descriptions": {}
+}

@@ -17,6 +17,7 @@ def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
     hermes_home.mkdir(parents=True)
 
     captured: dict[str, str] = {}
+    register_calls: list[dict[str, str]] = []
 
     fake_run_agent = types.ModuleType('run_agent')
 
@@ -59,6 +60,13 @@ def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
     monkeypatch.setattr('src.session.service.get_hermes_agent_kwargs', lambda: {})
     monkeypatch.setattr('src.session.service.build_session_runtime_prompt', lambda *args: '')
     monkeypatch.setattr('src.session.service.is_backtest_prompt', lambda prompt: False)
+    monkeypatch.delenv('TERMINAL_CWD', raising=False)
+
+    def _register(_task_id, overrides):
+        register_calls.append(dict(overrides))
+
+    monkeypatch.setattr('tools.terminal_tool.register_task_env_overrides', _register)
+    monkeypatch.setattr('tools.terminal_tool.clear_task_env_overrides', lambda _task_id: None)
 
     store = SessionStore(tmp_path / 'sessions')
     event_bus = EventBus()
@@ -68,14 +76,91 @@ def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
         runs_dir=tmp_path / 'runs',
         hermes_home=hermes_home,
     )
-    session = service.create_session()
+    session = service.create_session(config={'sandbox_role': 'regular_user'})
     attempt = Attempt(session_id=session.session_id, prompt='list workspace skills')
 
     result = asyncio.run(service._run_with_agent(attempt, messages=[]))
 
     assert result['status'] == 'success'
     assert captured['hermes_home'] == str(hermes_home)
+    assert register_calls
+    assert register_calls[-1]['safe_write_root'] == str(tmp_path / 'runs' / 'run-1')
+    assert register_calls[-1]['env'] == {'HERMES_HOME': str(hermes_home)}
 
+
+
+def test_run_with_agent_uses_admin_sandbox_root(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'repo'
+    hermes_home = tmp_path / 'workspace' / '.hermes'
+    hermes_home.mkdir(parents=True)
+
+    register_calls: list[dict[str, str]] = []
+
+    fake_run_agent = types.ModuleType('run_agent')
+
+    class FakeAIAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def run_conversation(self, **kwargs):
+            return {'final_response': 'admin sandbox active'}
+
+    fake_run_agent.AIAgent = FakeAIAgent
+    monkeypatch.setitem(sys.modules, 'run_agent', fake_run_agent)
+
+    fake_state_module = types.ModuleType('src.core.state')
+
+    class FakeRunStateStore:
+        def create_run_dir(self, runs_dir):
+            run_dir = runs_dir / 'run-1'
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
+
+        def save_request(self, run_dir, prompt, metadata):
+            return None
+
+        def mark_success(self, run_dir):
+            return None
+
+        def mark_failure(self, run_dir, reason):
+            return None
+
+    fake_state_module.RunStateStore = FakeRunStateStore
+    monkeypatch.setitem(sys.modules, 'src.core.state', fake_state_module)
+
+    monkeypatch.setattr(
+        'src.session.service.prepare_hermes_project_context',
+        lambda chdir=False: repo_root,
+    )
+    monkeypatch.setattr('src.session.service.ensure_runtime_env', lambda: None)
+    monkeypatch.setattr('src.session.service.get_hermes_agent_kwargs', lambda: {})
+    monkeypatch.setattr('src.session.service.build_session_runtime_prompt', lambda *args: '')
+    monkeypatch.setattr('src.session.service.is_backtest_prompt', lambda prompt: False)
+    monkeypatch.delenv('TERMINAL_CWD', raising=False)
+
+    def _register(_task_id, overrides):
+        register_calls.append(dict(overrides))
+
+    monkeypatch.setattr('tools.terminal_tool.register_task_env_overrides', _register)
+    monkeypatch.setattr('tools.terminal_tool.clear_task_env_overrides', lambda _task_id: None)
+
+    store = SessionStore(tmp_path / 'sessions')
+    event_bus = EventBus()
+    service = SessionService(
+        store=store,
+        event_bus=event_bus,
+        runs_dir=tmp_path / 'runs',
+        hermes_home=hermes_home,
+    )
+    session = service.create_session(config={'sandbox_role': 'administrator'})
+    attempt = Attempt(session_id=session.session_id, prompt='check admin config')
+
+    result = asyncio.run(service._run_with_agent(attempt, messages=[]))
+
+    assert result['status'] == 'success'
+    assert register_calls
+    assert register_calls[-1]['safe_write_root'] == str(repo_root / 'agent')
+    assert register_calls[-1]['display_safe_write_root'] == '/workspace/admin'
 
 
 def test_extract_useful_tool_output_prefers_swarm_final_report():

@@ -156,6 +156,10 @@ def ensure_workspace(
     env_dest = paths.hermes_home / ".env"
     if env_src.exists() and not env_dest.exists():
         shutil.copy2(env_src, env_dest)
+    elif not env_dest.exists():
+        # Some downstream tooling expects HERMES_HOME/.env to exist even when
+        # no template env file is provided.
+        env_dest.touch()
 
     for child in ("skills", "memories", "logs", "home", "profiles"):
         (paths.hermes_home / child).mkdir(parents=True, exist_ok=True)
