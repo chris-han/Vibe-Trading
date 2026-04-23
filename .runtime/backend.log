@@ -115,3 +115,12 @@ requests.exceptions.HTTPError: 400 Client Error: Bad Request for url: https://op
 INFO:     127.0.0.1:60534 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60548 - "GET /auth/me HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60562 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60342 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60352 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60364 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58052 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60670 - "GET /health HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1620793]

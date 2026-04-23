@@ -209,6 +209,18 @@ graph LR
 4. Gateway 写入 `.hermes/sessions`，后端 backfill 到 SessionStore，WebUI 可见。
 5. 删除配置时必须同时清理 SQLite + workspace runtime surfaces，并重启 Gateway，避免 stale 凭据继续连通。
 
+### **6.1.1 当前统一策略（2026-04 已落地）**
+
+- `agent` 是工作空间会话与消息历史的唯一控制面；Weixin / Feishu / WebUI 只是入口与投递通道，不应各自维护独立的 canonical transcript store。
+- 现状采用双向投影而非双 canonical store：
+    - Gateway -> WebUI：`agent/api_server.py` 中 `_sync_gateway_session_messages_to_store(...)` 会把 `.hermes/state.db` 的 gateway 消息增量镜像到 `SessionStore`，并用 `gateway_last_state_message_id` 做游标去重。
+    - WebUI -> Gateway：`SessionService` 现在会把 gateway-backed session 上由 WebUI 继续产生的 `user` / `assistant` 消息回写到 workspace `.hermes/state.db`，这样 Weixin/Feishu 恢复上下文时能看到 WebUI 续聊后的会话历史。
+- 关键边界：
+    - canonical ownership 仍在 `agent`；
+    - `.hermes/state.db` 只作为 gateway runtime 恢复历史与跨入口连续性的投影面；
+    - 平台差异应落在 `channel`、`gateway_session_key`、delivery cursor 等 metadata，而不是拆成每个平台一份 transcript store。
+- 这也解释了此前的问题根因：之前只实现了 Gateway -> SessionStore 的单向同步，所以 WebUI 里继续聊的内容不会出现在 Weixin 恢复历史里。
+
 ## ---
 
 **7\. 架构评审 (Review: Vibe-Trading Swarm vs. Hermes)**

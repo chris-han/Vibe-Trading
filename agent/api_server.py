@@ -2878,6 +2878,11 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         )
         runs_dir = workspace.runs_dir
         swarm_dir = workspace.swarm_dir
+        message_projection_hook = lambda session, message: _append_message_to_gateway_state_db(
+            workspace,
+            session,
+            message,
+        )
     else:
         global _session_service
         if _session_service is not None:
@@ -2888,6 +2893,7 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         )
         runs_dir = RUNS_DIR
         swarm_dir = None
+        message_projection_hook = None
     event_bus = EventBus()
 
     try:
@@ -2902,6 +2908,7 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         runs_dir=runs_dir,
         swarm_dir=swarm_dir,
         hermes_home=workspace.hermes_home if workspace is not None else None,
+        message_projection_hook=message_projection_hook,
     )
     if workspace is not None:
         _session_service_by_workspace[workspace.workspace_id] = svc
@@ -2983,13 +2990,15 @@ def _backfill_weixin_gateway_sessions_to_store(
         if platform != "weixin":
             continue
 
-        if session_key and session_key in deleted_session_keys:
-            continue
-
         session_id = str(payload.get("session_id") or "").strip()
         if not session_id:
             continue
         if session_id in deleted_session_ids:
+            continue
+        # Only suppress by session_key when the current session_id was also explicitly
+        # deleted. A stale key-only marker must not block new sessions started by the
+        # same gateway chat after the old session was removed from the WebUI.
+        if session_key and session_key in deleted_session_keys and session_id in deleted_session_ids:
             continue
 
         created_at = str(payload.get("created_at") or payload.get("session_start") or datetime.now().isoformat())
@@ -3053,6 +3062,226 @@ def _backfill_weixin_gateway_sessions_to_store(
 
 def _weixin_deleted_sessions_path(workspace: WorkspacePaths) -> Path:
     return workspace.hermes_home / "sessions" / "deleted_sessions.json"
+
+
+def _read_gateway_state_db_messages(
+    workspace: WorkspacePaths,
+    session_id: str,
+    limit: int = 200,
+    after_message_id: int = 0,
+) -> List[Dict[str, Any]]:
+    """Read raw messages from the Hermes gateway state.db for a given session_id.
+
+    Returns a list of dicts with keys: id, role, content, timestamp.
+    Excludes internal 'session_meta' pseudo-rows.
+    """
+    state_db = workspace.hermes_home / "state.db"
+    if not state_db.exists():
+        return []
+    try:
+        import sqlite3 as _sqlite3
+
+        con = _sqlite3.connect(str(state_db))
+        try:
+            cur = con.cursor()
+            cur.execute(
+                """
+                SELECT id, role, content, timestamp
+                FROM messages
+                WHERE session_id = ?
+                  AND role NOT IN ('session_meta')
+                                    AND id > ?
+                ORDER BY id
+                LIMIT ?
+                """,
+                                (session_id, max(0, int(after_message_id)), limit),
+            )
+            rows = cur.fetchall()
+        finally:
+            con.close()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed to read state.db messages for session %s", session_id, exc_info=True
+        )
+        return []
+
+    result = []
+    for row_id, role, content, timestamp in rows:
+        result.append(
+            {
+                "id": row_id,
+                "role": role or "user",
+                "content": content or "",
+                "timestamp": timestamp,
+            }
+        )
+    return result
+
+
+def _timestamp_to_iso8601(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return datetime.utcfromtimestamp(float(value)).isoformat() + "Z"
+    text = str(value or "").strip()
+    return text
+
+
+def _iso8601_to_timestamp(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return datetime.utcnow().timestamp()
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        return datetime.utcnow().timestamp()
+
+
+def _append_message_to_gateway_state_db(
+    workspace: WorkspacePaths,
+    session: Any,
+    message: Any,
+) -> bool:
+    """Project a locally-created message into the workspace gateway transcript store."""
+    config = dict(getattr(session, "config", {}) or {})
+    if str(config.get("source") or "").strip().lower() != "gateway":
+        return False
+
+    metadata = dict(getattr(message, "metadata", {}) or {})
+    if str(metadata.get("source") or "").strip().lower() == "gateway":
+        return False
+
+    role = str(getattr(message, "role", "") or "").strip().lower()
+    if role not in {"user", "assistant", "system"}:
+        return False
+
+    content = str(getattr(message, "content", "") or "")
+    if not content.strip():
+        return False
+
+    state_db = workspace.hermes_home / "state.db"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import sqlite3 as _sqlite3
+
+        con = _sqlite3.connect(str(state_db))
+        try:
+            cur = con.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT,
+                    content TEXT,
+                    timestamp REAL
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO messages (session_id, role, content, timestamp)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    str(getattr(session, "session_id", "") or ""),
+                    role,
+                    content,
+                    _iso8601_to_timestamp(getattr(message, "created_at", None)),
+                ),
+            )
+            con.commit()
+            return True
+        finally:
+            con.close()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Failed to append gateway state.db message for session %s",
+            getattr(session, "session_id", ""),
+            exc_info=True,
+        )
+        return False
+
+
+def _sync_gateway_session_messages_to_store(
+    workspace: WorkspacePaths,
+    store: Any,
+    session_id: str,
+    *,
+    limit: int = 1000,
+) -> int:
+    """Mirror gateway state.db messages into the backend session store.
+
+    This keeps WebUI message/event APIs unified on SessionStore while the gateway
+    remains the source of truth for runtime transport.
+    """
+    try:
+        from src.session.models import Message
+    except Exception:
+        return 0
+
+    session = store.get_session(session_id)
+    if not session:
+        return 0
+
+    config = dict(session.config or {})
+    if str(config.get("source") or "").strip().lower() != "gateway":
+        return 0
+
+    raw_cursor = config.get("gateway_last_state_message_id", 0)
+    try:
+        cursor = int(raw_cursor)
+    except Exception:
+        cursor = 0
+
+    rows = _read_gateway_state_db_messages(
+        workspace,
+        session_id,
+        limit=limit,
+        after_message_id=cursor,
+    )
+    if not rows:
+        return 0
+
+    created = 0
+    max_seen = cursor
+    for row in rows:
+        try:
+            message_id_num = int(row.get("id") or 0)
+        except Exception:
+            continue
+        role = str(row.get("role") or "").strip().lower()
+        if role not in {"user", "assistant", "system"}:
+            max_seen = max(max_seen, message_id_num)
+            continue
+        content_text = str(row.get("content") or "")
+        if not content_text.strip():
+            max_seen = max(max_seen, message_id_num)
+            continue
+        message = Message(
+            message_id=f"gw-{message_id_num}",
+            session_id=session_id,
+            role=role,
+            content=content_text,
+            created_at=_timestamp_to_iso8601(row.get("timestamp")),
+            metadata={
+                "source": "gateway",
+                "gateway_state_message_id": message_id_num,
+            },
+        )
+        store.append_message(message)
+        created += 1
+        max_seen = max(max_seen, message_id_num)
+
+    if max_seen > cursor:
+        config["gateway_last_state_message_id"] = max_seen
+        if created > 0:
+            session.updated_at = datetime.now().isoformat()
+        session.config = config
+        store.update_session(session)
+
+    return created
 
 
 def _load_weixin_deleted_session_markers(workspace: WorkspacePaths) -> Dict[str, set[str]]:
@@ -3350,6 +3579,15 @@ async def get_messages(session_id: str, request: Request, limit: int = Query(100
     svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    session = svc.get_session(session_id)
+    if session and (session.config or {}).get("source") == "gateway":
+        _sync_gateway_session_messages_to_store(
+            ctx.workspace,
+            svc.store,
+            session_id,
+            limit=max(limit, 1000),
+        )
+
     messages = svc.get_messages(session_id, limit=limit)
     return [
         MessageResponse(
@@ -3375,6 +3613,8 @@ async def get_event_log(session_id: str, request: Request, limit: int = Query(10
     session = svc.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    if (session.config or {}).get("source") == "gateway":
+        _sync_gateway_session_messages_to_store(ctx.workspace, svc.store, session_id, limit=20000)
     events = svc.get_events(session_id, limit=limit)
     return [
         SessionEventResponse(
@@ -3403,6 +3643,9 @@ async def get_session_trajectory(session_id: str, request: Request):
     svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    session = svc.get_session(session_id)
+    if session and (session.config or {}).get("source") == "gateway":
+        _sync_gateway_session_messages_to_store(ctx.workspace, svc.store, session_id, limit=20000)
     try:
         export = svc.export_atropos_trajectory(session_id)
     except ValueError as exc:

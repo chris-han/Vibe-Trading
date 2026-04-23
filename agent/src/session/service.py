@@ -14,7 +14,7 @@ import os
 import re
 import shutil
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from pathlib import Path
 
 from hermes_constants import reset_active_hermes_home, set_active_hermes_home
@@ -109,6 +109,7 @@ class SessionService:
         runs_dir: Path,
         swarm_dir: Optional[Path] = None,
         hermes_home: Optional[Path] = None,
+        message_projection_hook: Optional[Callable[[Session, Message], None]] = None,
     ) -> None:
         """Initialize the session service.
 
@@ -124,7 +125,22 @@ class SessionService:
         self.runs_dir = runs_dir
         self.swarm_dir = swarm_dir
         self.hermes_home = hermes_home.resolve() if hermes_home is not None else None
+        self.message_projection_hook = message_projection_hook
         self._active_loops: Dict[str, "AgentLoop"] = {}
+
+    def _persist_message(self, session: Session, message: Message) -> None:
+        self.store.append_message(message)
+        if self.message_projection_hook is None:
+            return
+        try:
+            self.message_projection_hook(session, message)
+        except Exception:
+            logger.warning(
+                "Failed to project message %s for session %s",
+                message.message_id,
+                session.session_id,
+                exc_info=True,
+            )
 
     def create_session(self, title: str = "", config: Optional[Dict[str, Any]] = None) -> Session:
         """Create a new session.
@@ -357,7 +373,7 @@ class SessionService:
             raise ValueError(f"Session {session_id} not found")
 
         message = Message(session_id=session_id, role=role, content=content)
-        self.store.append_message(message)
+        self._persist_message(session, message)
         self.event_bus.emit(session_id, "message.received", {"message_id": message.message_id, "role": role, "content": content})
 
         if role != "user":
@@ -402,7 +418,7 @@ class SessionService:
             raise ValueError(f"Attempt {attempt_id} is not waiting for user input")
 
         message = Message(session_id=session_id, role="user", content=user_input, linked_attempt_id=attempt_id)
-        self.store.append_message(message)
+        self._persist_message(session, message)
 
         # Append the user's reply to the prompt and rerun the attempt.
         attempt.prompt = f"{attempt.prompt}\n\nUser reply: {user_input}"
@@ -714,7 +730,7 @@ class SessionService:
                 linked_attempt_id=attempt.attempt_id,
                 metadata=reply_metadata,
             )
-            self.store.append_message(reply)
+            self._persist_message(session, reply)
             self.event_bus.emit(
                 session.session_id,
                 SessionEventType.MESSAGE_CREATED.value,

@@ -200,6 +200,10 @@ vibe-trading serve --port 8899 # launch web UI
 vibe-trading-mcp               # start MCP server (stdio)
 ```
 
+---
+
+**Deployment note (session state):** Do not rely on direct reads of gateway SQLite (`.hermes/state.db`) from UI or external services. The canonical source for sessions and message history is the `agent` `SessionStore` exposed via the `agent` REST APIs. Use `agent/hermes_dashboard_wrapper.py` or `agent` APIs to access workspace-scoped sessions; do not run upstream `hermes-agent` dashboard against production workspaces without routing through the wrapper.
+
 ### Or choose a path
 
 | Path | Best for | Time |

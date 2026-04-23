@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from fastapi.testclient import TestClient
 import json
 
@@ -476,6 +477,166 @@ def test_backfill_skips_weixin_sessions_marked_deleted(tmp_path, monkeypatch):
     updated_index = json.loads((gateway_sessions_dir / "sessions.json").read_text(encoding="utf-8"))
     assert session_key not in updated_index
     assert not (gateway_sessions_dir / f"session_{session_id}.json").exists()
+
+
+def test_sync_gateway_messages_into_backend_session_store(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    workspace = api_server.ensure_workspace(
+        api_server.WORKSPACES_DIR,
+        "ou_alice_sync",
+        api_server._TEMPLATE_HERMES_HOME,
+        workspace_slug="ou_alice_sync",
+    )
+
+    from src.session.models import Session
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=workspace.sessions_dir)
+    session = Session(
+        session_id="wx_session_sync_001",
+        title="Weixin:sync",
+        config={
+            "channel": "weixin",
+            "source": "gateway",
+            "gateway_session_key": "agent:main:weixin:dm:wx_sync_001",
+        },
+    )
+    store.create_session(session)
+
+    import sqlite3
+
+    state_db = workspace.hermes_home / "state.db"
+    state_db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(state_db)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT,
+                content TEXT,
+                timestamp REAL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            ("wx_session_sync_001", "user", "hi", 1776917520.0),
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            ("wx_session_sync_001", "assistant", "hello", 1776917521.0),
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            ("wx_session_sync_001", "session_meta", "ignored", 1776917522.0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    created_first = api_server._sync_gateway_session_messages_to_store(
+        workspace,
+        store,
+        "wx_session_sync_001",
+        limit=100,
+    )
+    assert created_first == 2
+
+    projected = store.get_messages("wx_session_sync_001", limit=50)
+    assert [m.role for m in projected] == ["user", "assistant"]
+    assert [m.content for m in projected] == ["hi", "hello"]
+
+    # Re-sync should be idempotent due to persisted cursor in session config.
+    created_second = api_server._sync_gateway_session_messages_to_store(
+        workspace,
+        store,
+        "wx_session_sync_001",
+        limit=100,
+    )
+    assert created_second == 0
+    projected_after = store.get_messages("wx_session_sync_001", limit=50)
+    assert len(projected_after) == 2
+
+    saved_session = store.get_session("wx_session_sync_001")
+    assert saved_session is not None
+    assert int((saved_session.config or {}).get("gateway_last_state_message_id", 0)) >= 2
+
+
+def test_send_message_projects_gateway_session_messages_back_to_state_db(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    workspace = api_server.ensure_workspace(
+        api_server.WORKSPACES_DIR,
+        "ou_alice_reverse_sync",
+        api_server._TEMPLATE_HERMES_HOME,
+        workspace_slug="ou_alice_reverse_sync",
+    )
+
+    from src.session.events import EventBus
+    from src.session.models import Session
+    from src.session.service import SessionService
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=workspace.sessions_dir)
+    session = Session(
+        session_id="wx_session_reverse_sync_001",
+        title="Weixin:reverse-sync",
+        config={
+            "channel": "weixin",
+            "source": "gateway",
+            "gateway_session_key": "agent:main:weixin:dm:wx_reverse_sync_001",
+        },
+    )
+    store.create_session(session)
+
+    async def _stub_run_with_agent(self, attempt, messages):
+        return {"status": "success", "content": "Synced reply from WebUI."}
+
+    monkeypatch.setattr(SessionService, "_run_with_agent", _stub_run_with_agent)
+
+    svc = SessionService(
+        store=store,
+        event_bus=EventBus(),
+        runs_dir=workspace.runs_dir,
+        swarm_dir=workspace.swarm_dir,
+        hermes_home=workspace.hermes_home,
+        message_projection_hook=lambda sess, msg: api_server._append_message_to_gateway_state_db(
+            workspace,
+            sess,
+            msg,
+        ),
+    )
+
+    async def _exercise() -> None:
+        result = await svc.send_message("wx_session_reverse_sync_001", "continue from webui")
+        assert result["message_id"]
+        assert result["attempt_id"]
+        for _ in range(20):
+            projected = store.get_messages("wx_session_reverse_sync_001", limit=20)
+            if len(projected) >= 2:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError("assistant reply was not persisted")
+
+    asyncio.run(_exercise())
+
+    import sqlite3
+
+    con = sqlite3.connect(workspace.hermes_home / "state.db")
+    try:
+        rows = con.execute(
+            "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id",
+            ("wx_session_reverse_sync_001",),
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert [row[0] for row in rows] == ["user", "assistant"]
+    assert rows[0][1] == "continue from webui"
+    assert rows[1][1] == "Synced reply from WebUI."
 
 
 def test_weixin_qrcode_flow_accepts_alternate_user_id_key(tmp_path, monkeypatch):
