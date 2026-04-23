@@ -106,6 +106,72 @@ def test_messaging_platform_crud_flow(tmp_path, monkeypatch):
     assert delete_response.json()["deleted"] is True
 
 
+def test_delete_weixin_clears_gateway_runtime_state(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    client = TestClient(api_server.app)
+    _login(client, monkeypatch)
+
+    monkeypatch.setattr(
+        api_server,
+        "_validate_messaging_config",
+        lambda platform, config: {
+            "platform": platform,
+            "valid": True,
+            "summary": "ok",
+            "details": {},
+        },
+    )
+
+    removed_platforms: list[str] = []
+    cleared_account_flags: list[bool] = []
+    restart_calls: list[bool] = []
+
+    monkeypatch.setattr(api_server, "_apply_messaging_config_to_gateway_yaml", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        api_server,
+        "_remove_messaging_config_from_gateway_yaml",
+        lambda hermes_home, platform: (removed_platforms.append(platform) or True),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "_clear_weixin_account_cache",
+        lambda hermes_home, **kwargs: (cleared_account_flags.append(bool(kwargs.get("remove_all"))) or True),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "_ensure_workspace_gateway_running",
+        lambda hermes_home, **kwargs: (restart_calls.append(bool(kwargs.get("force_restart"))) or True),
+    )
+
+    save_response = client.put(
+        "/messaging/weixin",
+        json={
+            "config": {
+                "account_id": "wx_account_delete",
+                "token": "wx_token_delete",
+                "base_url": "https://ilinkai.weixin.qq.com",
+            }
+        },
+    )
+    assert save_response.status_code == 200, save_response.text
+
+    removed_platforms.clear()
+    cleared_account_flags.clear()
+    restart_calls.clear()
+
+    delete_response = client.delete("/messaging/weixin")
+    assert delete_response.status_code == 200, delete_response.text
+    payload = delete_response.json()
+    assert payload["deleted"] is True
+    assert payload["gateway_applied"] is True
+    assert payload["gateway_restarted"] is True
+    assert payload["had_existing_config"] is True
+
+    assert removed_platforms == ["weixin"]
+    assert cleared_account_flags == [True]
+    assert restart_calls == [True]
+
+
 def test_weixin_qrcode_flow(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
     client = TestClient(api_server.app)

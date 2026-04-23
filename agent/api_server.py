@@ -2541,6 +2541,57 @@ def _apply_messaging_config_to_gateway_yaml(
         return False
 
 
+def _remove_messaging_config_from_gateway_yaml(hermes_home: Path, platform: MessagingPlatform) -> bool:
+    """Remove a platform block from gateway config.yaml.
+
+    Returns True when config.yaml was written successfully.
+    """
+    try:
+        config_path = hermes_home / "config.yaml"
+        existing = _load_yaml_mapping(config_path)
+        platforms = existing.get("platforms")
+        if not isinstance(platforms, dict):
+            return True
+
+        if platform in platforms:
+            platforms.pop(platform, None)
+
+        tmp_path = config_path.with_suffix(".yaml.tmp")
+        tmp_path.write_text(
+            yaml.dump(existing, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+        tmp_path.rename(config_path)
+        return True
+    except Exception:
+        return False
+
+
+def _clear_weixin_account_cache(
+    hermes_home: Path,
+    *,
+    account_id: str | None = None,
+    remove_all: bool = False,
+) -> bool:
+    """Delete persisted Weixin account cache file(s) under workspace .hermes."""
+    account_dir = hermes_home / "weixin" / "accounts"
+    if not account_dir.exists():
+        return True
+    try:
+        if remove_all:
+            for path in account_dir.glob("*.json"):
+                path.unlink(missing_ok=True)
+            return True
+
+        normalized = str(account_id or "").strip()
+        if not normalized:
+            return True
+        (account_dir / f"{normalized}.json").unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
 def _persist_weixin_account_file(hermes_home: Path, config: Dict[str, Any]) -> bool:
     """Persist Weixin credentials to the workspace account cache file."""
     account_id = str(config.get("account_id") or "").strip()
@@ -2675,11 +2726,25 @@ async def delete_messaging_platform(request: Request, platform: str):
     ctx = _resolve_request_context(request, require_login=_feishu_oauth_enabled())
     normalized = _normalize_messaging_platform(platform)
     owner_id = _resolve_messaging_owner_id(ctx)
+    existing_record = _get_auth_store().get_messaging_config(user_id=owner_id, platform=normalized)
     deleted = _get_auth_store().delete_messaging_config(user_id=owner_id, platform=normalized)
+
+    gateway_applied = _remove_messaging_config_from_gateway_yaml(ctx.workspace.hermes_home, normalized)
+    gateway_restarted = False
+    if normalized == "weixin":
+        # Remove all cached account credentials so gateway cannot reconnect via stale files.
+        _clear_weixin_account_cache(ctx.workspace.hermes_home, remove_all=True)
+        gateway_restarted = _ensure_workspace_gateway_running(ctx.workspace.hermes_home, force_restart=True)
+    elif normalized == "feishu":
+        gateway_restarted = _ensure_workspace_gateway_running(ctx.workspace.hermes_home, force_restart=True)
+
     return {
         "ok": True,
         "deleted": deleted,
         "platform": normalized,
+        "gateway_applied": gateway_applied,
+        "gateway_restarted": gateway_restarted,
+        "had_existing_config": existing_record is not None,
     }
 
 

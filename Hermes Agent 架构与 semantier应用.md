@@ -148,6 +148,67 @@ Hermes 与 semantier 的深度集成依托于 **语义契约 (Semantic Contract)
 
 * 若未来确有场景需要平台特例（例如灰度迁移），应通过 workspace-scoped env 开关显式开启，并在文档中注明为“临时兼容模式”，而非默认架构。
 
+### **6.2 Weixin Gateway 组件图与运行面（Runtime Surfaces）**
+
+下图描述了当前 `semantier` 中 Weixin 可连通所依赖的核心组件与状态面（control plane + data plane + external edge）：
+
+```mermaid
+graph LR
+    subgraph ControlPlane["/agent 控制平面"]
+        A1["FastAPI: /messaging/weixin/*"]
+        A2[("Auth SQLite\nmessaging_gateway_configs\nmessaging_chat_sessions")]
+        A3["Workspace Resolver\nvt_session -> workspaces/<user_id>/"]
+    end
+
+    subgraph WorkspaceRuntime["每租户 Workspace 运行面"]
+        W1[".hermes/config.yaml\nplatforms.weixin"]
+        W2[".hermes/weixin/accounts/<account_id>.json"]
+        W3["Gateway Process\nhermes_cli gateway run --replace"]
+        W4[".hermes/gateway.pid"]
+        W5[".hermes/sessions/sessions.json\n+ session_*.json"]
+        W6[".hermes/platforms/pairing/*"]
+    end
+
+    subgraph ExternalEdge["外部边缘"]
+        X1["iLink Weixin API\nget_bot_qrcode / get_qrcode_status"]
+        X2["Weixin User / Group"]
+    end
+
+    A1 --> A2
+    A1 --> A3
+    A1 --> W1
+    A1 --> W2
+    A1 --> W3
+    W3 --> W4
+    W3 --> W5
+    W3 --> W6
+    W3 <--> X1
+    X1 <--> X2
+```
+
+为保证 Weixin 连通，下面这些运行面都需要一致且可用：
+
+| Runtime Surface | 位置/组件 | 作用 | 失效症状 |
+| :---- | :---- | :---- | :---- |
+| 控制面配置源 | `Auth SQLite.messaging_gateway_configs` | 存储租户 Weixin 凭据与平台配置，供 `/messaging/platforms` 与保存流程读取 | UI 显示未配置，保存/删除行为不稳定 |
+| 聊天会话绑定 | `Auth SQLite.messaging_chat_sessions` | 维护 `session_key -> session_id` 映射，保证同一聊天路由到稳定会话 | 会话漂移、消息落到新会话 |
+| 工作空间路由 | `vt_session -> workspaces/<user_id>/` | 将请求绑定到租户专属 `.hermes`，防止串租户 | 读到错误租户配置或单租户视图 |
+| 网关平台配置 | `workspaces/<id>/.hermes/config.yaml` 的 `platforms.weixin` | Gateway 启动与运行时读取账号、策略与平台开关 | 网关启动后仍无法鉴权或策略不生效 |
+| 账号缓存 | `workspaces/<id>/.hermes/weixin/accounts/<account_id>.json` | 在 `config.yaml` token 缺失或轮换时提供回退凭据 | 偶发鉴权失败、重启后失联 |
+| 网关进程实例 | `hermes_cli gateway run --replace` | 真正执行 adapter 收发、pairing、会话写入 | 配置正确但无消息收发 |
+| 网关 PID 面 | `workspaces/<id>/.hermes/gateway.pid` | 支持 wrapper 定向重启/替换，确保新配置生效 | 删除/更新配置后仍使用旧连接 |
+| 网关会话索引面 | `.hermes/sessions/sessions.json` 与 `session_*.json` | 记录 Weixin chat 的网关会话元数据，供后端回填到 SessionStore | WebUI 不显示或重复回填 Weixin 会话 |
+| Pairing 状态面 | `.hermes/platforms/pairing/*` | 承载待审批配对码与审批结果 | 用户无法完成配对或审批无效 |
+| 外部 API 边缘 | iLink Weixin API | 提供二维码、状态轮询、消息通道 | 二维码无法确认或消息无法送达 |
+
+连通性最小闭环（建议作为排障顺序）：
+
+1. `/agent` 成功写入 SQLite + workspace `.hermes/config.yaml` / `accounts/*.json`。
+2. Gateway 被 `--replace` 重启，`gateway.pid` 更新。
+3. iLink `qrcode_status=confirmed` 后凭据被持久化，Gateway 开始可收发。
+4. Gateway 写入 `.hermes/sessions`，后端 backfill 到 SessionStore，WebUI 可见。
+5. 删除配置时必须同时清理 SQLite + workspace runtime surfaces，并重启 Gateway，避免 stale 凭据继续连通。
+
 ## ---
 
 **7\. 架构评审 (Review: Vibe-Trading Swarm vs. Hermes)**
