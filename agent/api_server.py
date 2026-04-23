@@ -2756,13 +2756,50 @@ _session_service = None
 _session_service_by_workspace: Dict[str, Any] = {}
 
 
+def _resolve_session_store_backend() -> str:
+    """Resolve session store backend from env.
+
+    Supported values:
+    - file (default): existing filesystem SessionStore
+    - sqlite: reserved for future migration, currently falls back to file
+    """
+    raw = str(os.getenv("SESSION_STORE_BACKEND", "file") or "file").strip().lower()
+    if raw in {"file", "sqlite"}:
+        return raw
+    logging.getLogger(__name__).warning(
+        "Unsupported SESSION_STORE_BACKEND=%r. Falling back to file backend.",
+        raw,
+    )
+    return "file"
+
+
+def _build_session_store(base_dir: Path, sqlite_db_path: Optional[Path] = None):
+    """Build a session store for the requested backend.
+
+    SQLite-backed SessionStore is feature-gated behind SESSION_STORE_BACKEND.
+    """
+    from src.session.store import SessionStore
+
+    backend = _resolve_session_store_backend()
+    if backend == "sqlite":
+        if sqlite_db_path is None:
+            logging.getLogger(__name__).warning(
+                "SESSION_STORE_BACKEND=sqlite requested but no sqlite_db_path was provided. "
+                "Falling back to file backend."
+            )
+            return SessionStore(base_dir=base_dir)
+        from src.session.store_sqlite import SQLiteSessionStore
+
+        return SQLiteSessionStore(base_dir=base_dir, db_path=sqlite_db_path)
+    return SessionStore(base_dir=base_dir)
+
+
 def _get_session_service(workspace: Optional[WorkspacePaths] = None):
     """Lazy-init session service when ENABLE_SESSION_RUNTIME=true."""
     if not _get_env_bool("ENABLE_SESSION_RUNTIME", default=True):
         return None
 
     import asyncio
-    from src.session.store import SessionStore
     from src.session.events import EventBus
     from src.session.service import SessionService
 
@@ -2770,14 +2807,20 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
         key = workspace.workspace_id
         if key in _session_service_by_workspace:
             return _session_service_by_workspace[key]
-        store = SessionStore(base_dir=workspace.sessions_dir)
+        store = _build_session_store(
+            base_dir=workspace.sessions_dir,
+            sqlite_db_path=workspace.hermes_home / "state.db",
+        )
         runs_dir = workspace.runs_dir
         swarm_dir = workspace.swarm_dir
     else:
         global _session_service
         if _session_service is not None:
             return _session_service
-        store = SessionStore(base_dir=SESSIONS_DIR)
+        store = _build_session_store(
+            base_dir=SESSIONS_DIR,
+            sqlite_db_path=get_hermes_home() / "state.db",
+        )
         runs_dir = RUNS_DIR
         swarm_dir = None
     event_bus = EventBus()
@@ -2810,10 +2853,12 @@ def _backfill_weixin_gateway_sessions_to_store(
 ) -> int:
     """Mirror gateway Weixin session metadata into backend session store.
 
-    Weixin gateway sessions are persisted under ``<workspace>/.hermes/sessions``.
-    WebUI lists sessions from backend ``workspaces/<id>/sessions`` via
-    SessionService. This function bridges that visibility gap without changing
-    upstream gateway execution flow.
+    Hermes gateway persists the stable per-chat session index in
+    ``<workspace>/.hermes/sessions/sessions.json`` and the transcript in
+    SQLite/JSONL. WebUI lists sessions from backend
+    ``workspaces/<id>/sessions`` via SessionService, so this function mirrors
+    the gateway index into the backend store and records the per-chat binding
+    in the control-plane SQLite store.
     """
     try:
         from src.session.models import Session
@@ -2824,36 +2869,86 @@ def _backfill_weixin_gateway_sessions_to_store(
     if not gateway_sessions_dir.exists():
         return 0
 
-    created = 0
-    files = sorted(
-        gateway_sessions_dir.glob("session_*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-
-    for path in files[: max(1, limit)]:
+    records: List[tuple[str, Dict[str, Any]]] = []
+    sessions_index_path = gateway_sessions_dir / "sessions.json"
+    if sessions_index_path.exists():
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            index_payload = json.loads(sessions_index_path.read_text(encoding="utf-8"))
         except Exception:
-            continue
+            index_payload = {}
+        if isinstance(index_payload, dict):
+            for session_key, entry in index_payload.items():
+                if isinstance(entry, dict):
+                    records.append((str(session_key or "").strip(), entry))
 
-        if str(payload.get("platform") or "").strip().lower() != "weixin":
+    if not records:
+        files = sorted(
+            gateway_sessions_dir.glob("session_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for path in files[: max(1, limit)]:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                records.append(("", payload))
+
+    created = 0
+    def _record_updated_at(record: tuple[str, Dict[str, Any]]) -> str:
+        _, payload = record
+        origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+        return str(
+            payload.get("updated_at")
+            or payload.get("last_updated")
+            or payload.get("created_at")
+            or payload.get("session_start")
+            or origin.get("updated_at")
+            or ""
+        )
+
+    for session_key, payload in sorted(records, key=_record_updated_at, reverse=True)[: max(1, limit)]:
+        origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+        platform = str(payload.get("platform") or origin.get("platform") or "").strip().lower()
+        if platform != "weixin":
             continue
 
         session_id = str(payload.get("session_id") or "").strip()
-        if not session_id or store.get_session(session_id):
+        if not session_id:
             continue
 
-        created_at = str(payload.get("session_start") or datetime.now().isoformat())
-        updated_at = str(payload.get("last_updated") or created_at)
-        user_id = str(payload.get("user_id") or "").strip()
-        chat_id = str(payload.get("chat_id") or "").strip()
+        created_at = str(payload.get("created_at") or payload.get("session_start") or datetime.now().isoformat())
+        updated_at = str(payload.get("updated_at") or payload.get("last_updated") or created_at)
+        user_id = str(payload.get("user_id") or origin.get("user_id") or "").strip()
+        chat_id = str(payload.get("chat_id") or origin.get("chat_id") or "").strip()
+        chat_name = str(payload.get("display_name") or origin.get("chat_name") or "").strip()
+
+        if session_key:
+            try:
+                _get_auth_store().upsert_weixin_chat_session(
+                    owner_user_id=workspace.workspace_id,
+                    session_key=session_key,
+                    session_id=session_id,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Failed to persist Weixin chat session binding for workspace=%s session_key=%s",
+                    workspace.workspace_id,
+                    session_key,
+                    exc_info=True,
+                )
+
+        if store.get_session(session_id):
+            continue
 
         title = f"Weixin:{session_id[:12]}"
         if user_id:
             title = f"Weixin:{user_id}"
         elif chat_id:
             title = f"Weixin:{chat_id}"
+        elif chat_name:
+            title = f"Weixin:{chat_name}"
 
         session = Session(
             session_id=session_id,
@@ -2863,14 +2958,15 @@ def _backfill_weixin_gateway_sessions_to_store(
             config={
                 "channel": "weixin",
                 "source": "gateway",
+                **({"gateway_session_key": session_key} if session_key else {}),
                 **({"user_id": user_id} if user_id else {}),
                 **({"chat_id": chat_id} if chat_id else {}),
+                **({"chat_name": chat_name} if chat_name else {}),
             },
         )
         try:
             store.create_session(session)
             if hasattr(store, "register_artifact"):
-                store.register_artifact(session_id, str(path), kind="gateway_session_meta")
                 transcript_path = gateway_sessions_dir / f"{session_id}.jsonl"
                 if transcript_path.exists():
                     store.register_artifact(session_id, str(transcript_path), kind="gateway_transcript")

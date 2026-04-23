@@ -125,6 +125,34 @@ class AuthStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messaging_chat_sessions (
+                    owner_user_id TEXT NOT NULL DEFAULT '',
+                    platform TEXT NOT NULL,
+                    session_key TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (owner_user_id, platform, session_key)
+                )
+                """
+            )
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO messaging_chat_sessions (
+                        owner_user_id,
+                        platform,
+                        session_key,
+                        session_id,
+                        updated_at
+                    )
+                    SELECT '', 'feishu', session_key, session_id, updated_at
+                    FROM feishu_chat_sessions
+                    """
+                )
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     @staticmethod
@@ -339,21 +367,36 @@ class AuthStore:
             conn.commit()
         return cursor.rowcount > 0
 
-    def get_feishu_chat_session(self, *, session_key: str) -> str | None:
+    def get_chat_session(self, *, platform: str, session_key: str, owner_user_id: str = "") -> str | None:
+        normalized_platform = self._normalize_platform(platform)
+        owner = str(owner_user_id or "").strip()
         key = str(session_key or "").strip()
         if not key:
             return None
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT session_id FROM feishu_chat_sessions WHERE session_key = ?",
-                (key,),
+                """
+                SELECT session_id
+                FROM messaging_chat_sessions
+                WHERE owner_user_id = ? AND platform = ? AND session_key = ?
+                """,
+                (owner, normalized_platform, key),
             ).fetchone()
         if not row:
             return None
         session_id = str(row["session_id"] or "").strip()
         return session_id or None
 
-    def upsert_feishu_chat_session(self, *, session_key: str, session_id: str) -> None:
+    def upsert_chat_session(
+        self,
+        *,
+        platform: str,
+        session_key: str,
+        session_id: str,
+        owner_user_id: str = "",
+    ) -> None:
+        normalized_platform = self._normalize_platform(platform)
+        owner = str(owner_user_id or "").strip()
         key = str(session_key or "").strip()
         sid = str(session_id or "").strip()
         if not key or not sid:
@@ -362,15 +405,38 @@ class AuthStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO feishu_chat_sessions (session_key, session_id, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(session_key) DO UPDATE SET
+                INSERT INTO messaging_chat_sessions (
+                    owner_user_id,
+                    platform,
+                    session_key,
+                    session_id,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(owner_user_id, platform, session_key) DO UPDATE SET
                     session_id = excluded.session_id,
                     updated_at = excluded.updated_at
                 """,
-                (key, sid, now),
+                (owner, normalized_platform, key, sid, now),
             )
             conn.commit()
+
+    def get_feishu_chat_session(self, *, session_key: str) -> str | None:
+        return self.get_chat_session(platform="feishu", session_key=session_key)
+
+    def upsert_feishu_chat_session(self, *, session_key: str, session_id: str) -> None:
+        self.upsert_chat_session(platform="feishu", session_key=session_key, session_id=session_id)
+
+    def get_weixin_chat_session(self, *, owner_user_id: str, session_key: str) -> str | None:
+        return self.get_chat_session(platform="weixin", owner_user_id=owner_user_id, session_key=session_key)
+
+    def upsert_weixin_chat_session(self, *, owner_user_id: str, session_key: str, session_id: str) -> None:
+        self.upsert_chat_session(
+            platform="weixin",
+            owner_user_id=owner_user_id,
+            session_key=session_key,
+            session_id=session_id,
+        )
 
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> AuthUser:

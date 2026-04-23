@@ -81,3 +81,42 @@ def test_messaging_config_crud_roundtrip(tmp_path, monkeypatch):
 
     assert store.delete_messaging_config(user_id=user.user_id, platform="weixin") is True
     assert store.get_messaging_config(user_id=user.user_id, platform="weixin") is None
+
+
+def test_messaging_chat_session_bindings_are_namespaced_by_platform_and_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESSAGING_CONFIG_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+
+    store = AuthStore(tmp_path / "auth.db")
+    store.upsert_chat_session(
+        platform="feishu",
+        session_key="user-a:chat-1",
+        session_id="feishu-session-1",
+    )
+    store.upsert_chat_session(
+        platform="weixin",
+        owner_user_id="user-a",
+        session_key="agent:main:weixin:dm:wx_chat_1",
+        session_id="weixin-session-1",
+    )
+    store.upsert_chat_session(
+        platform="weixin",
+        owner_user_id="user-b",
+        session_key="agent:main:weixin:dm:wx_chat_1",
+        session_id="weixin-session-2",
+    )
+
+    assert store.get_feishu_chat_session(session_key="user-a:chat-1") == "feishu-session-1"
+    assert (
+        store.get_weixin_chat_session(
+            owner_user_id="user-a",
+            session_key="agent:main:weixin:dm:wx_chat_1",
+        )
+        == "weixin-session-1"
+    )
+    assert (
+        store.get_weixin_chat_session(
+            owner_user_id="user-b",
+            session_key="agent:main:weixin:dm:wx_chat_1",
+        )
+        == "weixin-session-2"
+    )

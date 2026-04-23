@@ -255,6 +255,34 @@ def test_get_env_bool_accepts_numeric_truthy(monkeypatch):
     assert api_server._get_env_bool("ENABLE_SESSION_RUNTIME") is True
 
 
+def test_resolve_session_store_backend_defaults_to_file(monkeypatch):
+    monkeypatch.delenv("SESSION_STORE_BACKEND", raising=False)
+
+    assert api_server._resolve_session_store_backend() == "file"
+
+
+def test_resolve_session_store_backend_rejects_unknown_value(monkeypatch):
+    monkeypatch.setenv("SESSION_STORE_BACKEND", "memory")
+
+    assert api_server._resolve_session_store_backend() == "file"
+
+
+def test_get_session_service_accepts_sqlite_backend_switch_for_future_migration(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENABLE_SESSION_RUNTIME", "true")
+    monkeypatch.setenv("SESSION_STORE_BACKEND", "sqlite")
+    monkeypatch.setattr(api_server, "_session_service", None, raising=False)
+    monkeypatch.setattr(api_server, "_session_service_by_workspace", {}, raising=False)
+    monkeypatch.setattr(api_server, "SESSIONS_DIR", tmp_path / "sessions", raising=False)
+    monkeypatch.setattr(api_server, "RUNS_DIR", tmp_path / "runs", raising=False)
+
+    service = api_server._get_session_service()
+
+    assert service is not None
+    assert service.store is not None
+    assert service.store.__class__.__name__ == "SQLiteSessionStore"
+    assert str(service.store.db_path).endswith(".hermes/state.db")
+
+
 def test_resolve_frontend_paths_prefers_container_assets_over_host_checkout(tmp_path, monkeypatch):
     container_frontend = tmp_path / "app" / "frontend"
     host_repo = tmp_path / "home" / "chris" / "repo" / "Vibe-Trading"

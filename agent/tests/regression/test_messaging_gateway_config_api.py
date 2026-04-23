@@ -283,25 +283,36 @@ def test_backfill_weixin_gateway_sessions_to_backend_store(tmp_path, monkeypatch
     gateway_sessions_dir = workspace.hermes_home / "sessions"
     gateway_sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    weixin_payload = {
-        "session_id": "wx_session_001",
-        "platform": "weixin",
-        "session_start": "2026-04-23T08:00:00",
-        "last_updated": "2026-04-23T08:10:00",
-    }
-    non_weixin_payload = {
-        "session_id": "other_session_001",
-        "platform": "telegram",
-        "session_start": "2026-04-23T08:00:00",
-        "last_updated": "2026-04-23T08:10:00",
+    sessions_index = {
+        "agent:main:weixin:dm:wx_chat_001": {
+            "session_id": "wx_session_001",
+            "created_at": "2026-04-23T08:00:00",
+            "updated_at": "2026-04-23T08:10:00",
+            "platform": "weixin",
+            "display_name": "Weixin Chat 001",
+            "origin": {
+                "platform": "weixin",
+                "chat_id": "wx_chat_001",
+                "chat_name": "Weixin Chat 001",
+                "chat_type": "dm",
+                "user_id": "wx_user_001",
+                "user_name": "Alice Weixin",
+            },
+        },
+        "agent:main:telegram:dm:tg_chat_001": {
+            "session_id": "other_session_001",
+            "created_at": "2026-04-23T08:00:00",
+            "updated_at": "2026-04-23T08:10:00",
+            "platform": "telegram",
+        },
     }
 
-    (gateway_sessions_dir / "session_wx.json").write_text(
-        json.dumps(weixin_payload),
+    (gateway_sessions_dir / "sessions.json").write_text(
+        json.dumps(sessions_index),
         encoding="utf-8",
     )
-    (gateway_sessions_dir / "session_other.json").write_text(
-        json.dumps(non_weixin_payload),
+    (gateway_sessions_dir / "wx_session_001.jsonl").write_text(
+        json.dumps({"role": "user", "content": "hello"}) + "\n",
         encoding="utf-8",
     )
 
@@ -314,7 +325,18 @@ def test_backfill_weixin_gateway_sessions_to_backend_store(tmp_path, monkeypatch
     session = store.get_session("wx_session_001")
     assert session is not None
     assert (session.config or {}).get("channel") == "weixin"
+    assert (session.config or {}).get("gateway_session_key") == "agent:main:weixin:dm:wx_chat_001"
     assert store.get_session("other_session_001") is None
+    auth_store = api_server._get_auth_store()
+    assert (
+        auth_store.get_weixin_chat_session(
+            owner_user_id="ou_alice",
+            session_key="agent:main:weixin:dm:wx_chat_001",
+        )
+        == "wx_session_001"
+    )
+    artifact_paths = [entry["path"] for entry in store.list_artifacts("wx_session_001")]
+    assert str(gateway_sessions_dir / "wx_session_001.jsonl") in artifact_paths
 
 
 def test_weixin_qrcode_flow_accepts_alternate_user_id_key(tmp_path, monkeypatch):
