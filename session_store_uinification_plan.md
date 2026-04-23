@@ -179,3 +179,107 @@ cd /home/chris/repo/semantier/hermes-agent && ./.venv/bin/python -m pytest -q te
 1. Canonical persistence backend choice in `agent`: keep file `SessionStore` now (lower migration risk) or move to sqlite canonical earlier (simpler query/consistency). Recommendation: keep file backend during boundary migration, then evaluate sqlite cutover separately.
 2. Gateway replay source during cutover: read-through API call vs local adapter library call. Recommendation: local adapter in `agent` process first for latency/reliability, API boundary only if process separation is later required.
 3. Data retention policy: keep full gateway/runtime rows or only canonical transcript + delivery cursors. Recommendation: retain canonical transcript + minimal runtime operational logs, expire duplicate projection artifacts after migration window.
+
+---
+
+## Architectural Review — Kimi (2026-04-23)
+
+### Overall Assessment
+The phased approach (contract → harden → shadow → cutover → cleanup) is sound and matches the existing projection scaffolding already present in `api_server.py`. The plan correctly identifies the core risk: **bidirectional projection without robust idempotency**. However, after reviewing the current codebase, there are several gaps, naming collisions, and policy tensions that need resolution before kickoff.
+
+### Critical Findings
+
+#### 1. Nomenclature Collision: `SessionStore` is Ambiguous
+There are **two** `SessionStore` classes in play:
+- `agent/src/session/store.py` — canonical backend store (file-backed, and optionally `SQLiteSessionStore`).
+- `hermes-agent/gateway/session.py` — gateway runtime index (manages `sessions.json` + `SessionDB` transcripts).
+
+**Impact:** The plan uses "SessionStore" without qualification. During implementation this will cause confusion in code reviews, logs, and incident response.
+**Recommendation:** Rename the gateway-side class to `GatewaySessionIndex` (it is already closer to an index than a store) or adopt explicit prefixes (`BackendSessionStore` vs `GatewaySessionIndex`) in all docs and code.
+
+#### 2. Projection Infrastructure Already Exists — M2 is "Harden," Not "Add"
+- `SessionService.message_projection_hook` already exists and is wired in `_get_session_service()` to call `_append_message_to_gateway_state_db()`.
+- `_sync_gateway_session_messages_to_store()` already performs the reverse read-through from `state.db`.
+
+**Impact:** M2 deliverables are framed as greenfield additions; they are actually hardening/refactoring of existing ad-hoc sync logic.
+**Recommendation:** Update M2 tasks to "harden existing projection paths" and inventory the current idempotency gaps:
+  - `agent→gateway` (`_append_message_to_gateway_state_db`) performs **blind INSERT** with no idempotency key.
+  - `gateway→agent` uses `gw-{message_id_num}` but `message.id` in `state.db` is an auto-increment integer that resets if the DB is rebuilt, making this prefix fragile.
+
+#### 3. Adapter Boundary Shape is Undefined
+The plan says "Create an `agent` transcript adapter" but does not define:
+- **Interface:** Is it a Python callable (in-process), a FastAPI dependency, or an HTTP client?
+- **Scope:** Per-workspace or global?
+- **Failure mode:** Fallback to legacy is mentioned, but what happens when the adapter throws an exception vs. returns stale data?
+
+**Current state:** `hermes_dashboard_wrapper.py` is an ASGI middleware that simply sets `HERMES_HOME` and forwards to `hermes_cli.web_server`. There is no interception point for transcript reads today.
+**Recommendation:** Define the adapter as an in-process Python boundary first (e.g., `AgentTranscriptAdapter` class) with two implementations:
+  - `CanonicalAdapter` → calls `SessionService` / `SessionStore`
+  - `LegacyAdapter` → calls `SessionDB` directly
+  The wrapper middleware can inject the chosen adapter into request scope so `hermes_cli.web_server` endpoints can consume it without hardcoding `SessionDB()`.
+
+#### 4. Gateway Subprocess Read Path is a Harder Problem Than the Wrapper
+The plan focuses heavily on the **wrapper/embedded dashboard** read path, but the gateway also runs as a **subprocess** (`_start_workspace_hermes_gateway`). In that mode, `hermes-agent/gateway/session.py::SessionStore.load_transcript()` reads from `SessionDB` or JSONL to build LLM conversation context.
+
+**Impact:** If canonical authority moves to `agent`, the subprocess cannot reach `agent` memory. It would need either:
+- An HTTP callback to agent (latency risk on every message receive)
+- A shared SQLite file with WAL (reintroduces coupling)
+- A local-agent proxy inside the gateway process (complex)
+**Recommendation:** Clarify in M3 whether "gateway read path" includes the subprocess case or only the embedded dashboard. If subprocess is out of scope for this plan, state that explicitly and treat it as a separate architectural epoch.
+
+#### 5. `AGENTS.md` Policy Tension
+`AGENTS.md` states: *"Do not modify vendored or submodule directories like `hermes-agent/` unless the task explicitly requires it."*
+
+**Impact:** Deprecating direct `SessionDB()` reads in embedded flows requires modifying `hermes-agent/hermes_cli/web_server.py` and `hermes-agent/gateway/session.py`. This is a direct violation of the repo's own agent policy.
+**Recommendation:** Either
+  - (a) Add an explicit policy exception to `AGENTS.md` for this migration, or
+  - (b) Implement the adapter entirely in `agent/` by subclassing/monkey-patching at the wrapper boundary instead of touching upstream files. Option (b) is cleaner for long-term maintainability but may be more work.
+
+#### 6. FTS5 Search Parity Gap
+`hermes_state.SessionDB` provides FTS5 search (`search_sessions`). Neither `SessionStore` nor `SQLiteSessionStore` currently implements search.
+
+**Impact:** If the dashboard/wrapper routes session search through the agent adapter, search will regress unless search is added to the agent backend.
+**Recommendation:** Add "search parity" as a M3 deliverable or explicitly exclude search from adapter scope and keep search on a read-replica of `state.db`.
+
+#### 7. Shadow-Read "Mismatch" Needs Normalized Definition
+The SLO targets a <=0.1% mismatch rate, but the schemas differ:
+- Agent canonical events: `role`, `content`, `timestamp` (ISO8601), `metadata` (rich), `event_id` (UUID).
+- Gateway messages: `role`, `content`, `timestamp` (Unix float), `id` (autoinc).
+
+**Impact:** Timestamp precision differences and metadata richness will generate false mismatches.
+**Recommendation:** Define a canonical normalization function for shadow comparison (e.g., compare `(role, normalized_content, timestamp_within_1s)` only) and document it before M3 starts.
+
+#### 8. SQLiteBackend is Already Implemented — Consider Activating It Sooner
+`SQLiteSessionStore` in `agent/src/session/store_sqlite.py` is complete, tested, and uses WAL + foreign keys. The plan recommends keeping the file backend during migration.
+
+**Concern:** The file-based `SessionStore` is **not process-safe** for concurrent writes. During the migration window, both agent and gateway may write to the same session tree (agent via canonical events, gateway via backfill/projection). This creates a race condition on `events.jsonl` append and `session.json` updates.
+**Recommendation:** Re-evaluate the file-backend decision. SQLite with WAL is safer for concurrent cross-process access and already feature-gated. Activating `SESSION_STORE_BACKEND=sqlite` for the migration window reduces a class of data-corruption risks.
+
+#### 9. Missing: Workspace-Scoped Adapter Lifecycle
+`_get_session_service()` already maintains `_session_service_by_workspace`, which is correct. However, the plan does not mention how the adapter will be scoped (per-request, per-workspace singleton, or global).
+**Recommendation:** Mandate per-workspace adapter instances to maintain data isolation, matching the existing `SessionService` lifecycle.
+
+#### 10. Rollback Flag `GATEWAY_TRANSCRIPT_SOURCE` Needs Plumbing
+The plan proposes `GATEWAY_TRANSCRIPT_SOURCE=legacy|agent`. Today, `hermes_dashboard_wrapper.py` has no routing table — it blindly forwards all requests. Implementing this flag requires either:
+- Intercepting specific transcript endpoints (`/api/sessions/{id}/messages`, etc.) in the wrapper middleware and routing them based on the flag, or
+- Injecting the flag into `hermes_cli.web_server` and branching there.
+
+**Recommendation:** Prefer wrapper-level interception to minimize upstream changes. Document the exact endpoint list that will be shadowed/routed.
+
+### Questions for the Tech Lead / Backend Lead
+
+1. **Subprocess scope:** Does "gateway read path" in M3 include the gateway subprocess's `load_transcript()` calls, or only the embedded dashboard wrapper? If subprocess is included, what is the IPC mechanism?
+2. **Upstream modification policy:** Are we approved to modify `hermes-agent/hermes_cli/web_server.py` and `hermes-agent/gateway/session.py`, or should the adapter be injected via wrapper-level monkey-patching?
+3. **SQLite activation:** Can we flip `SESSION_STORE_BACKEND=sqlite` as part of M1/M2 to eliminate file-based concurrency risks during the migration?
+4. **Search parity:** Is session search (FTS5) in scope for the adapter, or will search remain on a legacy read path indefinitely?
+5. **Shadow comparison schema:** What constitutes a "mismatch"? Please define the normalized tuple before M3 begins.
+6. **Idempotency key source:** For agent→gateway projection, what should the idempotency key be? `agent_event_id` (UUID from `SessionEvent`)? A hash of `(session_id, event_id)`?
+7. **Tombstone definition:** The plan mentions "tombstone semantics tests." The current implementation uses `deleted_sessions.json` markers. Is the plan referring to these markers, or do we need a new tombstone concept in `SessionStore`?
+
+### Minor Suggestions
+- Add `channel` and `gateway_session_key` to the `SessionResponse` model in `api_server.py` so the frontend can display entry-point provenance without extra lookups.
+- Consider adding `origin` and `projection_source_id` fields to `SessionEvent.metadata` schema now (M1) so M2 has a stable contract to enforce.
+- The ETA of 1 week per milestone feels optimistic for M3 given the undefined adapter shape and subprocess question; consider buffering M3 to 2 weeks.
+
+### Verdict
+**Conditional Go.** The strategy is correct, but the plan needs the adapter interface defined, the subprocess scope clarified, and the upstream-modification policy exception granted before M1 kickoff. M2 and M3 should not start until these architectural decisions are documented in `Architecture-Design.md` and `AGENTS.md`.

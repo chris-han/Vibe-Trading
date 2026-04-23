@@ -8,6 +8,7 @@ from src.session.models import Attempt
 from src.session.models import AttemptStatus
 from src.session.store import SessionStore
 from src.session.service import SessionService
+from src.session import service as session_service_module
 
 
 def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
@@ -164,3 +165,25 @@ def test_format_result_message_keeps_failure_text_and_report_link(tmp_path):
 
     assert 'Execution failed: tool crashed' in result
     assert '[Full report](/runs/20260422_010101_bb22)' in result
+
+
+def test_wrapper_guard_detects_global_skills_flags():
+    assert session_service_module._has_forbidden_global_skills_flags(
+        "npx -y skills add https://open.feishu.cn --skill -y --global"
+    )
+    assert session_service_module._has_forbidden_global_skills_flags(
+        "npx skills install https://open.feishu.cn -yg"
+    )
+    assert not session_service_module._has_forbidden_global_skills_flags(
+        "npx skills add https://open.feishu.cn --skill -y"
+    )
+
+
+def test_wrapper_guard_message_uses_active_hermes_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    hermes_home = tmp_path / "workspace" / ".hermes"
+
+    message = session_service_module._blocked_global_skills_install_message(hermes_home)
+
+    assert "--global/-g" in message
+    assert f"{hermes_home}/skills" in message

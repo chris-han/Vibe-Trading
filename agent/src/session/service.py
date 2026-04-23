@@ -63,6 +63,67 @@ _FILE_MUTATION_TOOL_NAMES = {
     "mkdir",
 }
 
+_SKILLS_INSTALL_RE = re.compile(r"\bskills\s+(add|install)\b", re.IGNORECASE)
+_SKILLS_GLOBAL_FLAG_RE = re.compile(r"(^|\s)--global(\s|$)|(^|\s)-[a-z]*g[a-z]*(\s|$)", re.IGNORECASE)
+_TERMINAL_GUARD_PATCH_ATTR = "_semantier_global_skills_guard_patched"
+
+
+def _has_forbidden_global_skills_flags(command: str) -> bool:
+    """Return True when command attempts global skills installation."""
+    if not isinstance(command, str):
+        return False
+    normalized = " ".join(command.strip().split())
+    if not normalized:
+        return False
+    if _SKILLS_INSTALL_RE.search(normalized) is None:
+        return False
+    return _SKILLS_GLOBAL_FLAG_RE.search(normalized) is not None
+
+
+def _blocked_global_skills_install_message(active_hermes_home: Optional[Path]) -> str:
+    """Build deterministic error text for blocked global skills installs."""
+    configured = (os.getenv("HERMES_HOME") or "").strip()
+    if configured:
+        target_dir = f"{configured.rstrip('/')}/skills"
+    elif active_hermes_home is not None:
+        target_dir = f"{str(active_hermes_home).rstrip('/')}/skills"
+    else:
+        target_dir = "HERMES_HOME/skills"
+    return (
+        "Blocked: global skills installation is disabled in this runtime. "
+        "Do not use --global/-g with skills add/install. "
+        f"Install skills into the active workspace/admin directory: {target_dir}."
+    )
+
+
+def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -> None:
+    """Patch terminal adapter in wrapper process to block global skills install flags."""
+    try:
+        from tools import terminal_tool as terminal_tool_module
+    except Exception:
+        return
+
+    if getattr(terminal_tool_module, _TERMINAL_GUARD_PATCH_ATTR, False):
+        return
+
+    original_terminal_tool = terminal_tool_module.terminal_tool
+
+    def _guarded_terminal_tool(command: str, *args: Any, **kwargs: Any) -> str:
+        if _has_forbidden_global_skills_flags(command):
+            return json.dumps(
+                {
+                    "output": "",
+                    "exit_code": -1,
+                    "error": _blocked_global_skills_install_message(active_hermes_home),
+                    "status": "blocked",
+                },
+                ensure_ascii=False,
+            )
+        return original_terminal_tool(command, *args, **kwargs)
+
+    terminal_tool_module.terminal_tool = _guarded_terminal_tool
+    setattr(terminal_tool_module, _TERMINAL_GUARD_PATCH_ATTR, True)
+
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
 
@@ -824,6 +885,7 @@ class SessionService:
             if self.hermes_home is not None
             else None
         )
+        _install_wrapper_terminal_policy_patch(self.hermes_home)
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None

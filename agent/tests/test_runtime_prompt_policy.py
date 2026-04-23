@@ -35,8 +35,10 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "Pass config_json and signal_engine_py directly to setup_backtest_run(...)" in prompt
     assert "call skill_view(name=...) first" in prompt
     assert "load_skill(\"strategy-generate\")" not in prompt
-    assert "use skill_manage instead of general file-editing tools" in prompt
+    assert "use skill_manage instead of terminal commands or general file-editing tools" in prompt
     assert "active workspace HERMES_HOME/skills directory" in prompt
+    assert "Never run `skills add`, `npx skills`, or any `--global` skill install command" in prompt
+    assert "Never install skills to `~/.agents/skills`" in prompt
     assert "relative .hermes/skills paths resolve inside the active run/artifacts sandbox" in prompt
     assert "use python3 from the preconfigured session environment" in prompt
     assert "Do NOT assume .venv exists under the current run directory" in prompt
