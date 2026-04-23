@@ -2869,6 +2869,10 @@ def _backfill_weixin_gateway_sessions_to_store(
     if not gateway_sessions_dir.exists():
         return 0
 
+    deleted_markers = _load_weixin_deleted_session_markers(workspace)
+    deleted_session_ids = deleted_markers["session_ids"]
+    deleted_session_keys = deleted_markers["session_keys"]
+
     records: List[tuple[str, Dict[str, Any]]] = []
     sessions_index_path = gateway_sessions_dir / "sessions.json"
     if sessions_index_path.exists():
@@ -2914,8 +2918,13 @@ def _backfill_weixin_gateway_sessions_to_store(
         if platform != "weixin":
             continue
 
+        if session_key and session_key in deleted_session_keys:
+            continue
+
         session_id = str(payload.get("session_id") or "").strip()
         if not session_id:
+            continue
+        if session_id in deleted_session_ids:
             continue
 
         created_at = str(payload.get("created_at") or payload.get("session_start") or datetime.now().isoformat())
@@ -2975,6 +2984,94 @@ def _backfill_weixin_gateway_sessions_to_store(
             continue
 
     return created
+
+
+def _weixin_deleted_sessions_path(workspace: WorkspacePaths) -> Path:
+    return workspace.hermes_home / "sessions" / "deleted_sessions.json"
+
+
+def _load_weixin_deleted_session_markers(workspace: WorkspacePaths) -> Dict[str, set[str]]:
+    """Load deleted Weixin gateway session markers.
+
+    Markers are persisted in <workspace>/.hermes/sessions/deleted_sessions.json so
+    backfill can avoid resurrecting sessions explicitly deleted from WebUI.
+    """
+    path = _weixin_deleted_sessions_path(workspace)
+    if not path.exists():
+        return {"session_ids": set(), "session_keys": set()}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"session_ids": set(), "session_keys": set()}
+    if not isinstance(payload, dict):
+        return {"session_ids": set(), "session_keys": set()}
+    raw_ids = payload.get("session_ids")
+    raw_keys = payload.get("session_keys")
+    session_ids = {str(item).strip() for item in (raw_ids if isinstance(raw_ids, list) else []) if str(item).strip()}
+    session_keys = {str(item).strip() for item in (raw_keys if isinstance(raw_keys, list) else []) if str(item).strip()}
+    return {"session_ids": session_ids, "session_keys": session_keys}
+
+
+def _save_weixin_deleted_session_markers(workspace: WorkspacePaths, markers: Dict[str, set[str]]) -> None:
+    path = _weixin_deleted_sessions_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "session_ids": sorted(markers.get("session_ids") or set()),
+        "session_keys": sorted(markers.get("session_keys") or set()),
+        "updated_at": datetime.now().isoformat(),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _mark_weixin_gateway_sessions_deleted(
+    workspace: WorkspacePaths,
+    entries: List[Dict[str, str]],
+) -> None:
+    """Persist Weixin gateway delete markers and prune gateway index records."""
+    if not entries:
+        return
+
+    markers = _load_weixin_deleted_session_markers(workspace)
+    session_ids = markers["session_ids"]
+    session_keys = markers["session_keys"]
+
+    for entry in entries:
+        session_id = str(entry.get("session_id") or "").strip()
+        session_key = str(entry.get("session_key") or "").strip()
+        if session_id:
+            session_ids.add(session_id)
+            # Best-effort cleanup of gateway per-session metadata file.
+            session_meta_path = workspace.hermes_home / "sessions" / f"session_{session_id}.json"
+            try:
+                session_meta_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if session_key:
+            session_keys.add(session_key)
+
+    _save_weixin_deleted_session_markers(workspace, markers)
+
+    sessions_index_path = workspace.hermes_home / "sessions" / "sessions.json"
+    if not sessions_index_path.exists():
+        return
+    try:
+        payload = json.loads(sessions_index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+
+    changed = False
+    for key in list(payload.keys()):
+        entry = payload.get(key)
+        if not isinstance(entry, dict):
+            continue
+        entry_session_id = str(entry.get("session_id") or "").strip()
+        if key in session_keys or (entry_session_id and entry_session_id in session_ids):
+            payload.pop(key, None)
+            changed = True
+    if changed:
+        sessions_index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _feishu_exchange_oauth_code(code: str, redirect_uri: str) -> Dict[str, Any]:
@@ -3091,7 +3188,39 @@ async def batch_delete_sessions(request: BatchDeleteSessionsRequest, http_reques
     svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
+
+    gateway_delete_candidates: Dict[str, str] = {}
+    for session_id in request.session_ids:
+        session = svc.store.get_session(session_id)
+        if not session:
+            continue
+        config = session.config if isinstance(session.config, dict) else {}
+        if str(config.get("channel") or "").strip().lower() != "weixin":
+            continue
+        if str(config.get("source") or "").strip().lower() != "gateway":
+            continue
+        gateway_delete_candidates[session_id] = str(config.get("gateway_session_key") or "").strip()
+
     result = svc.delete_sessions(request.session_ids)
+
+    deleted_gateway_entries = [
+        {
+            "session_id": session_id,
+            "session_key": gateway_delete_candidates.get(session_id, ""),
+        }
+        for session_id in result["deleted"]
+        if session_id in gateway_delete_candidates
+    ]
+    if deleted_gateway_entries:
+        try:
+            _mark_weixin_gateway_sessions_deleted(ctx.workspace, deleted_gateway_entries)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to persist deleted Weixin gateway session tombstones for workspace=%s",
+                ctx.workspace.workspace_id,
+                exc_info=True,
+            )
+
     return {
         "status": "ok",
         "deleted": result["deleted"],

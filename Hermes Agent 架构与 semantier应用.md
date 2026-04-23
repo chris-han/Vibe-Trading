@@ -772,3 +772,16 @@ failed_trajectories.jsonl
 * 若部署多实例，建议每实例使用独立 `HERMES_HOME` 或共享可审计卷（按实例/环境分目录）。
 * 生产环境建议定期归档 `trajectories/*.jsonl`，避免单文件无限增长。
 
+### **10.6 配置矩阵（Configuration Matrix）**
+
+| 配置项 | 示例值 | 默认行为 | 生效影响 | 存储位置 | 是否需要重启 |
+| :---- | :---- | :---- | :---- | :---- | :---- |
+| `SAVE_TRAJECTORIES` | `true` / `false` | 未设置时不覆盖 Hermes 默认（等价于关闭） | 控制 wrapper 是否向 `AIAgent` 传递 `save_trajectories` | 成功：`<HERMES_HOME>/trajectories/trajectory_samples.jsonl`；失败：`<HERMES_HOME>/trajectories/failed_trajectories.jsonl` | 是 |
+| `HERMES_SAVE_TRAJECTORIES` | `1` / `0` | 作为 `SAVE_TRAJECTORIES` 别名 | 同上；用于兼容不同部署命名习惯 | 同上 | 是 |
+| `HERMES_HOME` | `/opt/semantier/.hermes` | 未设置时回退 `agent/.hermes` | 定义 wrapper 级 Hermes home 根目录 | `<HERMES_HOME>/trajectories/*.jsonl` | 是 |
+
+优先级说明：
+
+* trajectory 开关读取顺序为 `SAVE_TRAJECTORIES` -> `HERMES_SAVE_TRAJECTORIES`（取第一个显式布尔值）。
+* 轨迹写入路径始终锚定到 `HERMES_HOME`，不随工作目录漂移。
+

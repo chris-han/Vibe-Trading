@@ -339,6 +339,79 @@ def test_backfill_weixin_gateway_sessions_to_backend_store(tmp_path, monkeypatch
     assert str(gateway_sessions_dir / "wx_session_001.jsonl") in artifact_paths
 
 
+def test_backfill_skips_weixin_sessions_marked_deleted(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    workspace = api_server.ensure_workspace(
+        api_server.WORKSPACES_DIR,
+        "ou_alice_deleted",
+        api_server._TEMPLATE_HERMES_HOME,
+        workspace_slug="ou_alice_deleted",
+    )
+
+    gateway_sessions_dir = workspace.hermes_home / "sessions"
+    gateway_sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    session_key = "agent:main:weixin:dm:wx_chat_deleted"
+    session_id = "wx_session_deleted"
+
+    sessions_index = {
+        session_key: {
+            "session_id": session_id,
+            "created_at": "2026-04-23T08:00:00",
+            "updated_at": "2026-04-23T08:10:00",
+            "platform": "weixin",
+            "display_name": "Deleted Weixin Chat",
+            "origin": {
+                "platform": "weixin",
+                "chat_id": "wx_chat_deleted",
+                "chat_name": "Deleted Weixin Chat",
+                "chat_type": "dm",
+                "user_id": "wx_user_deleted",
+            },
+        }
+    }
+
+    (gateway_sessions_dir / "sessions.json").write_text(
+        json.dumps(sessions_index),
+        encoding="utf-8",
+    )
+    (gateway_sessions_dir / f"session_{session_id}.json").write_text(
+        json.dumps({"session_id": session_id, "platform": "weixin"}),
+        encoding="utf-8",
+    )
+
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=workspace.sessions_dir)
+    created = api_server._backfill_weixin_gateway_sessions_to_store(workspace, store)
+    assert created == 1
+    assert store.get_session(session_id) is not None
+
+    api_server._mark_weixin_gateway_sessions_deleted(
+        workspace,
+        [{"session_id": session_id, "session_key": session_key}],
+    )
+
+    # Simulate a user deletion in WebUI: local session removed, then list triggers backfill.
+    assert store.delete_session(session_id) is True
+    assert store.get_session(session_id) is None
+
+    recreated = api_server._backfill_weixin_gateway_sessions_to_store(workspace, store)
+    assert recreated == 0
+    assert store.get_session(session_id) is None
+
+    deleted_markers_path = gateway_sessions_dir / "deleted_sessions.json"
+    assert deleted_markers_path.exists()
+    deleted_payload = json.loads(deleted_markers_path.read_text(encoding="utf-8"))
+    assert session_id in deleted_payload.get("session_ids", [])
+    assert session_key in deleted_payload.get("session_keys", [])
+
+    updated_index = json.loads((gateway_sessions_dir / "sessions.json").read_text(encoding="utf-8"))
+    assert session_key not in updated_index
+    assert not (gateway_sessions_dir / f"session_{session_id}.json").exists()
+
+
 def test_weixin_qrcode_flow_accepts_alternate_user_id_key(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
     client = TestClient(api_server.app)

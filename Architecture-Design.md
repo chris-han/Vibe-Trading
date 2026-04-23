@@ -775,6 +775,85 @@ Any future refactor of session runtime, swarm runtime, or backtest tool behavior
 
 ---
 
+## 1.2 Appendix: Wrapper-Level Trajectory Logging Contract
+
+This appendix defines the runtime contract for Hermes trajectory logging in the Semantier wrapper.
+
+### 1.2.1 Scope and Ownership
+
+Trajectory logging is a backend wrapper concern, not a workspace/user concern.
+
+- Control plane: `/agent` wrapper runtime
+- Feature switch source: backend env (`.env` / process env)
+- Storage ownership: wrapper `HERMES_HOME` scope
+- Non-goal: writing trajectory JSONL into `workspaces/<user_id>/...`
+
+### 1.2.2 Feature Switch
+
+The wrapper resolves `save_trajectories` from env and forwards it to `AIAgent(...)`.
+
+- Primary key: `SAVE_TRAJECTORIES`
+- Alias key: `HERMES_SAVE_TRAJECTORIES`
+- Truthy values: `1/true/on/yes/enabled`
+- Falsey values: `0/false/off/no/none/disabled`
+
+If neither key is explicitly set, wrapper behavior keeps Hermes default (`save_trajectories=False`).
+
+### 1.2.3 Runtime Wiring
+
+1. `agent/runtime_env.py` builds `agent_kwargs` and injects `save_trajectories` when configured.
+2. `agent/src/session/service.py` consumes `agent_kwargs` before constructing `AIAgent(...)`.
+3. When enabled, the wrapper installs a trajectory-save hook so Hermes writes to an absolute wrapper-owned path, independent of process cwd.
+
+### 1.2.4 Effective Storage Location
+
+When enabled, trajectory files are written to:
+
+- Successful runs: `<HERMES_HOME>/trajectories/trajectory_samples.jsonl`
+- Failed runs: `<HERMES_HOME>/trajectories/failed_trajectories.jsonl`
+
+Fallback behavior:
+
+- If `HERMES_HOME` is not explicitly configured, wrapper default is `agent/.hermes`.
+- Effective default paths become:
+    - `agent/.hermes/trajectories/trajectory_samples.jsonl`
+    - `agent/.hermes/trajectories/failed_trajectories.jsonl`
+
+### 1.2.5 Boundary Guarantees
+
+The trajectory path contract is intentionally separate from canonical session storage:
+
+- Canonical session log: `sessions/<sid>/events.jsonl` (or SQLite event rows when enabled)
+- Session-events page Atropos export: projection generated from canonical events
+- Hermes trajectory samples: standalone training/debug corpus in wrapper `HERMES_HOME/trajectories`
+
+These three data products are related but not interchangeable.
+
+### 1.2.6 Operational Notes
+
+1. Changes to `SAVE_TRAJECTORIES` require backend process restart.
+2. Multi-instance deployments should define explicit `HERMES_HOME` per instance or per environment.
+3. Trajectory JSONL files are append-only and require lifecycle policy (rotation/archive) in production.
+
+### 1.2.7 Configuration Matrix
+
+| Key | Example | Default | Effect | Effective Path | Restart Required |
+|-----|---------|---------|--------|----------------|------------------|
+| `SAVE_TRAJECTORIES` | `true` / `false` | Unset does not override Hermes default (effectively off) | Wrapper passes `save_trajectories` into `AIAgent` when explicitly set | Success: `<HERMES_HOME>/trajectories/trajectory_samples.jsonl`; Failed: `<HERMES_HOME>/trajectories/failed_trajectories.jsonl` | Yes |
+| `HERMES_SAVE_TRAJECTORIES` | `1` / `0` | Alias only | Fallback alias for trajectory toggle in heterogeneous deployments | Same as above | Yes |
+| `HERMES_HOME` | `/opt/semantier/.hermes` | `agent/.hermes` | Sets wrapper-owned Hermes home root | `<HERMES_HOME>/trajectories/*.jsonl` | Yes |
+
+Resolution notes:
+
+1. Toggle resolution order is `SAVE_TRAJECTORIES` then `HERMES_SAVE_TRAJECTORIES` (first explicit boolean wins).
+2. Trajectory file writes are absolute-path anchored to `HERMES_HOME`, not current process cwd.
+
+Reference detail is maintained in:
+
+- `Hermes Agent 架构与 semantier应用.md`, section `10. Wrapper 级 Trajectory 开关与落盘边界（已实现）`
+
+---
+
 ## 2. Dual Agent Architecture Patterns
 
 The system implements **two complementary agent loop patterns** for different use cases:

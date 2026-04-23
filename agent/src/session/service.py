@@ -999,7 +999,11 @@ class SessionService:
             trajectories_dir.mkdir(parents=True, exist_ok=True)
 
             def _save_wrapper_trajectory(trajectory, model, completed, filename=None):
-                target_name = "trajectory_samples.jsonl" if completed else "failed_trajectories.jsonl"
+                date_suffix = datetime.now().strftime("%Y%m%d")
+                if completed:
+                    target_name = f"semantier_trajectory_{date_suffix}.jsonl"
+                else:
+                    target_name = f"semantier_trajectory_failed_{date_suffix}.jsonl"
                 target_file = trajectories_dir / target_name
                 _save_trajectory_fn(trajectory, model, completed, filename=str(target_file))
 
