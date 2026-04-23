@@ -45,6 +45,9 @@ class SessionStore:
     def _events_file(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "events.jsonl"
 
+    def _artifacts_file(self, session_id: str) -> Path:
+        return self._session_dir(session_id) / "artifacts.json"
+
     def _session_channel(self, session_id: str) -> Optional[str]:
         session = self.get_session(session_id)
         if not session:
@@ -118,6 +121,42 @@ class SessionStore:
         import shutil
         shutil.rmtree(session_dir, ignore_errors=True)
         return True
+
+    def register_artifact(self, session_id: str, path: str, kind: str = "generic") -> None:
+        """Register an external artifact path related to a session.
+
+        Paths are tracked in-session under artifacts.json so delete cascades can
+        remove files/directories that live outside the session tree.
+        """
+        if not str(path or "").strip():
+            return
+        artifacts_file = self._artifacts_file(session_id)
+        entries = self.list_artifacts(session_id)
+        normalized = str(Path(path))
+        for entry in entries:
+            if str(entry.get("path") or "") == normalized:
+                return
+        entries.append({"path": normalized, "kind": str(kind or "generic")})
+        self._write_json(artifacts_file, entries)
+
+    def list_artifacts(self, session_id: str) -> List[Dict[str, Any]]:
+        """Return registered artifact entries for a session."""
+        artifacts_file = self._artifacts_file(session_id)
+        data = self._read_json(artifacts_file)
+        if not isinstance(data, list):
+            return []
+        result: List[Dict[str, Any]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            result.append({
+                "path": path,
+                "kind": str(item.get("kind") or "generic"),
+            })
+        return result
 
     def list_sessions(self, limit: int = 50) -> List[Session]:
         """List all sessions in descending update-time order.

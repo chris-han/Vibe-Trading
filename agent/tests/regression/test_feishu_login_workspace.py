@@ -9,10 +9,8 @@ import api_server
 def _patch_isolated_auth_runtime(tmp_path, monkeypatch):
     workspaces_dir = tmp_path / "workspaces"
     control_dir = tmp_path / ".auth"
-    session_map_file = tmp_path / ".feishu_sessions.json"
     monkeypatch.setattr(api_server, "WORKSPACES_DIR", workspaces_dir)
     monkeypatch.setattr(api_server, "AUTH_CONTROL_DIR", control_dir)
-    monkeypatch.setattr(api_server, "_FEISHU_SESSION_MAP_FILE", session_map_file)
     # Patch these too as they might be imported or used from globals
     monkeypatch.setattr(api_server, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(api_server, "SESSIONS_DIR", tmp_path / "sessions")
@@ -444,6 +442,7 @@ def test_swarm_runtime_is_resolved_per_authenticated_workspace(tmp_path, monkeyp
 
 def test_feishu_webhook_routes_messages_into_logged_in_user_workspace(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(api_server, "_FEISHU_CONNECTION_MODE", "webhook")
 
     store = api_server._get_auth_store()
     alice = store.upsert_feishu_user(
@@ -496,15 +495,27 @@ def test_feishu_webhook_routes_messages_into_logged_in_user_workspace(tmp_path, 
     assert services["alice_zhang"].sent == [{"session_id": "alice_zhang-session-1", "content": "hello from alice"}]
     assert services["bob_lee"].sent == [{"session_id": "bob_lee-session-1", "content": "hello from bob"}]
 
-    session_map = api_server._load_feishu_session_map()
-    assert session_map == {
-        f"{alice.user_id}:oc_shared_chat": "alice_zhang-session-1",
-        f"{bob.user_id}:oc_shared_chat": "bob_lee-session-1",
-    }
+    assert store.get_feishu_chat_session(session_key=f"{alice.user_id}:oc_shared_chat") == "alice_zhang-session-1"
+    assert store.get_feishu_chat_session(session_key=f"{bob.user_id}:oc_shared_chat") == "bob_lee-session-1"
+
+
+def test_feishu_webhook_rejects_requests_when_websocket_mode_is_active(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(api_server, "_FEISHU_CONNECTION_MODE", "websocket")
+
+    client = TestClient(api_server.app)
+    response = client.post(
+        "/feishu/webhook",
+        json={"header": {"event_type": "im.message.receive_v1"}, "event": {}},
+    )
+
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"] == "Feishu webhook is disabled while FEISHU_CONNECTION_MODE is not webhook"
 
 
 def test_feishu_gateway_requires_linked_login_before_routing(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(api_server, "_FEISHU_CONNECTION_MODE", "webhook")
 
     replies = []
 
@@ -536,4 +547,3 @@ def test_feishu_gateway_requires_linked_login_before_routing(tmp_path, monkeypat
         "chat_id": "oc_unlinked_chat",
         "text": "Your Feishu account is not linked yet. Sign in first: http://testserver/auth/feishu/login",
     }]
-    assert api_server._load_feishu_session_map() == {}

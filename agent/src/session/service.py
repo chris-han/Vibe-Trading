@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from datetime import datetime
 from typing import Any, Dict, Optional
 from pathlib import Path
@@ -195,6 +196,61 @@ class SessionService:
             pass
         return run_dirs
 
+    def _collect_registered_artifact_paths(self, session_id: str) -> list[Path]:
+        """Collect extra artifact paths explicitly registered for this session."""
+        paths: list[Path] = []
+        try:
+            for item in self.store.list_artifacts(session_id):
+                raw = str((item or {}).get("path") or "").strip()
+                if raw:
+                    paths.append(Path(raw))
+        except Exception:
+            pass
+        return paths
+
+    @staticmethod
+    def _remove_artifact_path(path: Path) -> None:
+        """Best-effort deletion for a tracked artifact path."""
+        if not path.exists():
+            return
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _collect_session_owned_run_dirs(self, session_id: str) -> list[Path]:
+        """Collect run directories tagged to a session via req.json context.
+
+        Some attempts may switch to a different final run_dir (for example,
+        when delegating to a tool-created backtest directory). In those cases,
+        the initially created run directory can be left behind. We treat any
+        run under runs_dir with req.json context.session_id == session_id as
+        owned by that session and delete it during cascade cleanup.
+        """
+        run_dirs: list[Path] = []
+        if not self.runs_dir.exists() or not self.runs_dir.is_dir():
+            return run_dirs
+
+        for candidate in self.runs_dir.iterdir():
+            if not candidate.is_dir():
+                continue
+            req_file = candidate / "req.json"
+            if not req_file.exists() or not req_file.is_file():
+                continue
+            try:
+                payload = json.loads(req_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            context = payload.get("context") if isinstance(payload, dict) else None
+            tagged_session_id = context.get("session_id") if isinstance(context, dict) else None
+            if str(tagged_session_id or "").strip() == session_id:
+                run_dirs.append(candidate)
+
+        return run_dirs
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and all deterministic artifact directories.
 
@@ -202,32 +258,30 @@ class SessionService:
         uploads, and also removes linked backtest run directories plus linked
         swarm run directories that live outside the session folder.
         """
-        import shutil
         legacy_run_dirs = self._collect_run_dirs(session_id)
+        session_owned_run_dirs = self._collect_session_owned_run_dirs(session_id)
+        registered_artifacts = self._collect_registered_artifact_paths(session_id)
         swarm_run_dirs = self._collect_swarm_run_dirs(session_id)
         self.event_bus.clear(session_id)
         ok = self.store.delete_session(session_id)
-        for rd in legacy_run_dirs:
-            shutil.rmtree(rd, ignore_errors=True)
-        for rd in swarm_run_dirs:
-            shutil.rmtree(rd, ignore_errors=True)
+        for rd in {*(legacy_run_dirs), *(session_owned_run_dirs), *(swarm_run_dirs), *(registered_artifacts)}:
+            self._remove_artifact_path(rd)
         return ok
 
     def delete_sessions(self, session_ids: list[str]) -> Dict[str, Any]:
         """Delete multiple sessions and their linked artifact directories."""
-        import shutil
         deleted: list[str] = []
         missing: list[str] = []
         for session_id in session_ids:
             legacy_run_dirs = self._collect_run_dirs(session_id)
+            session_owned_run_dirs = self._collect_session_owned_run_dirs(session_id)
+            registered_artifacts = self._collect_registered_artifact_paths(session_id)
             swarm_run_dirs = self._collect_swarm_run_dirs(session_id)
             self.event_bus.clear(session_id)
             if self.store.delete_session(session_id):
                 deleted.append(session_id)
-                for rd in legacy_run_dirs:
-                    shutil.rmtree(rd, ignore_errors=True)
-                for rd in swarm_run_dirs:
-                    shutil.rmtree(rd, ignore_errors=True)
+                for rd in {*(legacy_run_dirs), *(session_owned_run_dirs), *(swarm_run_dirs), *(registered_artifacts)}:
+                    self._remove_artifact_path(rd)
             else:
                 missing.append(session_id)
         return {
@@ -763,6 +817,7 @@ class SessionService:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         run_dir = state_store.create_run_dir(self.runs_dir)
         state_store.save_request(run_dir, attempt.prompt, {"session_id": sid})
+        self.store.register_artifact(sid, str(run_dir), kind="run_dir")
 
         if is_backtest_prompt(attempt.prompt):
             try:
@@ -1114,6 +1169,7 @@ class SessionService:
         if actual_run_dir:
             result["run_dir"] = actual_run_dir
             result["run_id"] = Path(actual_run_dir).name
+            self.store.register_artifact(sid, str(actual_run_dir), kind="run_dir")
             metrics = self._load_metrics(Path(actual_run_dir))
             if metrics:
                 result["metrics"] = metrics

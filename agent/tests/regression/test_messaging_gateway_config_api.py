@@ -270,6 +270,53 @@ def test_weixin_qrcode_status_timeout_is_transient_wait(tmp_path, monkeypatch):
     assert payload["raw"].get("transient_error") == "timeout"
 
 
+def test_backfill_weixin_gateway_sessions_to_backend_store(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+
+    workspace = api_server.ensure_workspace(
+        api_server.WORKSPACES_DIR,
+        "ou_alice",
+        api_server._TEMPLATE_HERMES_HOME,
+        workspace_slug="ou_alice",
+    )
+
+    gateway_sessions_dir = workspace.hermes_home / "sessions"
+    gateway_sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    weixin_payload = {
+        "session_id": "wx_session_001",
+        "platform": "weixin",
+        "session_start": "2026-04-23T08:00:00",
+        "last_updated": "2026-04-23T08:10:00",
+    }
+    non_weixin_payload = {
+        "session_id": "other_session_001",
+        "platform": "telegram",
+        "session_start": "2026-04-23T08:00:00",
+        "last_updated": "2026-04-23T08:10:00",
+    }
+
+    (gateway_sessions_dir / "session_wx.json").write_text(
+        json.dumps(weixin_payload),
+        encoding="utf-8",
+    )
+    (gateway_sessions_dir / "session_other.json").write_text(
+        json.dumps(non_weixin_payload),
+        encoding="utf-8",
+    )
+
+    from src.session.store import SessionStore
+
+    store = SessionStore(base_dir=workspace.sessions_dir)
+    created = api_server._backfill_weixin_gateway_sessions_to_store(workspace, store)
+    assert created == 1
+
+    session = store.get_session("wx_session_001")
+    assert session is not None
+    assert (session.config or {}).get("channel") == "weixin"
+    assert store.get_session("other_session_001") is None
+
+
 def test_weixin_qrcode_flow_accepts_alternate_user_id_key(tmp_path, monkeypatch):
     _patch_isolated_auth_runtime(tmp_path, monkeypatch)
     client = TestClient(api_server.app)

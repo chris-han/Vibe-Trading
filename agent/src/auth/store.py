@@ -116,6 +116,15 @@ class AuthStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS feishu_chat_sessions (
+                    session_key TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             conn.commit()
 
     @staticmethod
@@ -329,6 +338,39 @@ class AuthStore:
             )
             conn.commit()
         return cursor.rowcount > 0
+
+    def get_feishu_chat_session(self, *, session_key: str) -> str | None:
+        key = str(session_key or "").strip()
+        if not key:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT session_id FROM feishu_chat_sessions WHERE session_key = ?",
+                (key,),
+            ).fetchone()
+        if not row:
+            return None
+        session_id = str(row["session_id"] or "").strip()
+        return session_id or None
+
+    def upsert_feishu_chat_session(self, *, session_key: str, session_id: str) -> None:
+        key = str(session_key or "").strip()
+        sid = str(session_id or "").strip()
+        if not key or not sid:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO feishu_chat_sessions (session_key, session_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_key) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    updated_at = excluded.updated_at
+                """,
+                (key, sid, now),
+            )
+            conn.commit()
 
     @staticmethod
     def _row_to_user(row: sqlite3.Row) -> AuthUser:

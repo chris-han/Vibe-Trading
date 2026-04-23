@@ -2802,6 +2802,85 @@ def _get_session_service(workspace: Optional[WorkspacePaths] = None):
     return svc
 
 
+def _backfill_weixin_gateway_sessions_to_store(
+    workspace: WorkspacePaths,
+    store: Any,
+    *,
+    limit: int = 200,
+) -> int:
+    """Mirror gateway Weixin session metadata into backend session store.
+
+    Weixin gateway sessions are persisted under ``<workspace>/.hermes/sessions``.
+    WebUI lists sessions from backend ``workspaces/<id>/sessions`` via
+    SessionService. This function bridges that visibility gap without changing
+    upstream gateway execution flow.
+    """
+    try:
+        from src.session.models import Session
+    except Exception:
+        return 0
+
+    gateway_sessions_dir = workspace.hermes_home / "sessions"
+    if not gateway_sessions_dir.exists():
+        return 0
+
+    created = 0
+    files = sorted(
+        gateway_sessions_dir.glob("session_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    for path in files[: max(1, limit)]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if str(payload.get("platform") or "").strip().lower() != "weixin":
+            continue
+
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id or store.get_session(session_id):
+            continue
+
+        created_at = str(payload.get("session_start") or datetime.now().isoformat())
+        updated_at = str(payload.get("last_updated") or created_at)
+        user_id = str(payload.get("user_id") or "").strip()
+        chat_id = str(payload.get("chat_id") or "").strip()
+
+        title = f"Weixin:{session_id[:12]}"
+        if user_id:
+            title = f"Weixin:{user_id}"
+        elif chat_id:
+            title = f"Weixin:{chat_id}"
+
+        session = Session(
+            session_id=session_id,
+            title=title,
+            created_at=created_at,
+            updated_at=updated_at,
+            config={
+                "channel": "weixin",
+                "source": "gateway",
+                **({"user_id": user_id} if user_id else {}),
+                **({"chat_id": chat_id} if chat_id else {}),
+            },
+        )
+        try:
+            store.create_session(session)
+            if hasattr(store, "register_artifact"):
+                store.register_artifact(session_id, str(path), kind="gateway_session_meta")
+                transcript_path = gateway_sessions_dir / f"{session_id}.jsonl"
+                if transcript_path.exists():
+                    store.register_artifact(session_id, str(transcript_path), kind="gateway_transcript")
+            created += 1
+        except Exception:
+            continue
+
+    return created
+
+
 def _feishu_exchange_oauth_code(code: str, redirect_uri: str) -> Dict[str, Any]:
     import requests
 
@@ -2871,6 +2950,9 @@ async def list_sessions(request: Request, limit: int = Query(50, ge=1, le=200)):
     svc = _get_session_service(ctx.workspace)
     if not svc:
         raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    # Keep Weixin visible in WebUI by mirroring gateway-local session metadata
+    # into the backend session index before listing.
+    _backfill_weixin_gateway_sessions_to_store(ctx.workspace, svc.store, limit=max(limit, 200))
     sessions = svc.list_sessions(limit=limit)
     return [
         SessionResponse(
@@ -3137,7 +3219,6 @@ _FEISHU_BASE_URL = (
     if _FEISHU_DOMAIN == "lark"
     else "https://open.feishu.cn"
 )
-_FEISHU_SESSION_MAP_FILE = DATA_ROOT / ".feishu_sessions.json"
 _FEISHU_STREAM_UPDATE_INTERVAL_SECONDS = max(
     0.2,
     _get_env_float("FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", 0.35),
@@ -3767,26 +3848,33 @@ async def _feishu_ws_startup() -> None:
 # Note: credentials (_FEISHU_APP_ID etc.) are defined in the WS section above.
 
 
-def _load_feishu_session_map() -> Dict[str, str]:
-    """Load the Feishu chat_id → session_id mapping from disk."""
+def _get_feishu_bound_session_id(session_key: str) -> Optional[str]:
+    """Resolve Feishu chat binding from SQLite."""
+    key = str(session_key or "").strip()
+    if not key:
+        return None
+
     try:
-        if _FEISHU_SESSION_MAP_FILE.exists():
-            return json.loads(_FEISHU_SESSION_MAP_FILE.read_text(encoding="utf-8"))
+        session_id = _get_auth_store().get_feishu_chat_session(session_key=key)
+        if session_id:
+            return session_id
     except Exception:
-        pass
-    return {}
+        _feishu_logger.warning("Failed to read Feishu chat session binding from SQLite", exc_info=True)
+
+    return None
 
 
-def _save_feishu_session_map(mapping: Dict[str, str]) -> None:
-    """Persist the Feishu chat_id → session_id mapping to disk."""
+def _set_feishu_bound_session_id(session_key: str, session_id: str) -> None:
+    """Persist Feishu chat binding to SQLite."""
+    key = str(session_key or "").strip()
+    sid = str(session_id or "").strip()
+    if not key or not sid:
+        return
+
     try:
-        _FEISHU_SESSION_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _FEISHU_SESSION_MAP_FILE.write_text(
-            json.dumps(mapping, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        _get_auth_store().upsert_feishu_chat_session(session_key=key, session_id=sid)
     except Exception:
-        _feishu_logger.warning("Failed to save Feishu session map", exc_info=True)
+        _feishu_logger.warning("Failed to write Feishu chat session binding to SQLite", exc_info=True)
 
 
 def _feishu_session_map_key(chat_id: str, user: Optional[AuthUser] = None) -> str:
@@ -3954,9 +4042,8 @@ async def _feishu_route_message(
         )
         svc = _get_session_service(resolved_workspace)
 
-    mapping = _load_feishu_session_map()
     session_key = _feishu_session_map_key(chat_id, resolved_user)
-    session_id = mapping.get(session_key)
+    session_id = _get_feishu_bound_session_id(session_key)
 
     # Validate the cached session still exists
     if session_id and not svc.get_session(session_id):
@@ -3966,8 +4053,7 @@ async def _feishu_route_message(
         title_prefix = f"Feishu:{resolved_user.name}" if resolved_user is not None else "Feishu"
         session = svc.create_session(title=f"{title_prefix}:{chat_id[:30]}", config={"channel": "feishu"})
         session_id = session.session_id
-        mapping[session_key] = session_id
-        _save_feishu_session_map(mapping)
+        _set_feishu_bound_session_id(session_key, session_id)
         if resolved_workspace is not None:
             _feishu_logger.info(
                 "Created new session %s for Feishu chat %s in workspace %s",
@@ -3998,6 +4084,12 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     - Verification token check via FEISHU_VERIFICATION_TOKEN when configured
     - im.message.receive_v1 → session service routing
     """
+    if _FEISHU_CONNECTION_MODE != "webhook":
+        raise HTTPException(
+            status_code=410,
+            detail="Feishu webhook is disabled while FEISHU_CONNECTION_MODE is not webhook",
+        )
+
     body_bytes = await request.body()
 
     # Signature verification (skip when FEISHU_ENCRYPT_KEY is not configured)
