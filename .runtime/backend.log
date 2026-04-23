@@ -1,0 +1,117 @@
+/home/chris/repo/semantier/agent/api_server.py:4127: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+[prod] Frontend served from /home/chris/repo/semantier/frontend/dist
+==================================================
+  semantier Server
+  http://127.0.0.1:8899
+==================================================
+INFO:     Started server process [1620793]
+INFO:     Waiting for application startup.
+2026-04-23 13:10:50,477 INFO feishu.webhook: [Feishu WS] WebSocket client started (thread=feishu-ws)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8899 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60370 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60376 - "GET /health HTTP/1.1" 200 OK
+[Lark] [2026-04-23 13:10:53,684] [INFO] connected to wss://msg-frontier.feishu.cn/ws/v2?fpid=493&aid=552564&device_id=7631817756070907065&access_key=c283157eda979ec4f9c21bb04d8d1ce4&service_id=33554678&ticket=3b1d84cb-1dd5-44d4-8d94-a01f6caa6451 [conn_id=7631817756070907065]
+2026-04-23 13:10:53,684 INFO Lark: connected to wss://msg-frontier.feishu.cn/ws/v2?fpid=493&aid=552564&device_id=7631817756070907065&access_key=c283157eda979ec4f9c21bb04d8d1ce4&service_id=33554678&ticket=3b1d84cb-1dd5-44d4-8d94-a01f6caa6451 [conn_id=7631817756070907065]
+INFO:     127.0.0.1:57016 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57032 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57044 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57016 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57032 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57044 - "GET /system/paths HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57016 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57032 - "GET /system/skills HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57016 - "GET /messaging/platforms HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57032 - "GET /messaging/weixin/pairing/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57016 - "GET /messaging/platforms HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57032 - "GET /messaging/weixin/pairing/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60312 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57434 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57448 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58562 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58566 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58576 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58592 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57214 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5910 - "GET /auth/feishu/callback?code=5KLgzc9yDyA9Ae0zF7K0GyeHAI3fxa20&state=02cda3a728784f44b4f30c17a7534a9c HTTP/1.1" 500 Internal Server Error
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 420, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 191, in __call__
+    with recv_stream, send_stream, collapse_excgroups():
+                                   ^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/lib/python3.12/contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+    raise exc
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/api_server.py", line 446, in dispatch
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+    await route.handle(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+    await self.app(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 134, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 120, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 674, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 328, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/api_server.py", line 2782, in auth_feishu_callback
+    token_data = _feishu_exchange_oauth_code(code, redirect_uri=redirect_uri)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/chris/repo/semantier/agent/api_server.py", line 3161, in _feishu_exchange_oauth_code
+    response.raise_for_status()
+  File "/home/chris/repo/semantier/agent/.venv/lib/python3.12/site-packages/requests/models.py", line 1028, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error: Bad Request for url: https://open.feishu.cn/open-apis/authen/v2/oauth/token
+INFO:     127.0.0.1:60534 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60548 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60562 - "GET /health HTTP/1.1" 200 OK
