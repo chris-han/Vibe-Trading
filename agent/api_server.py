@@ -1785,6 +1785,92 @@ def _resolve_hermes_python(agent_dir: Path) -> str:
     return "python3"
 
 
+def _read_dotenv_var(path: Path, key: str) -> Optional[str]:
+    """Read a single KEY=value from a dotenv-style file.
+
+    Returns None when the file/key is missing or invalid.
+    """
+    if not path.exists():
+        return None
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            lhs, rhs = line.split("=", 1)
+            if lhs.strip() != key:
+                continue
+            value = rhs.strip().strip("\"'")
+            return value or None
+    except Exception:
+        return None
+    return None
+
+
+def _append_dotenv_var_if_missing(path: Path, key: str, value: str) -> None:
+    """Append KEY=value to dotenv file if the key does not already exist."""
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        for raw_line in existing.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            lhs, _ = line.split("=", 1)
+            if lhs.strip() == key:
+                return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            if existing and not existing.endswith("\n"):
+                handle.write("\n")
+            handle.write(f"{key}={value}\n")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Failed to append %s to %s: %s", key, path, exc)
+
+
+def _sync_workspace_provider_api_key(hermes_home: Path, env: Dict[str, str]) -> None:
+    """Ensure workspace gateway environment has the API key for configured provider.
+
+    Messaging gateways run with workspace-scoped ``HERMES_HOME`` and therefore
+    resolve provider credentials from workspace ``.hermes/.env``. This bridge
+    copies the configured provider's API key from process env or ``agent/.env``
+    when missing, then persists it into workspace ``.hermes/.env`` for future
+    restarts.
+    """
+    config = _load_yaml_mapping(hermes_home / "config.yaml")
+    model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
+    fallback_cfg = config.get("fallback_model") if isinstance(config.get("fallback_model"), dict) else {}
+    provider = str(model_cfg.get("provider") or fallback_cfg.get("provider") or "").strip().lower()
+    if not provider:
+        return
+
+    provider_key_map: Dict[str, str] = {
+        "alibaba": "DASHSCOPE_API_KEY",
+        "dashscope": "DASHSCOPE_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "xai": "XAI_API_KEY",
+    }
+    api_key_env_name = provider_key_map.get(provider)
+    if not api_key_env_name:
+        return
+
+    if env.get(api_key_env_name):
+        return
+
+    candidate = os.getenv(api_key_env_name)
+    if not candidate:
+        candidate = _read_dotenv_var(_AGENT_DIR / ".env", api_key_env_name)
+    if not candidate:
+        return
+
+    env[api_key_env_name] = candidate
+    _append_dotenv_var_if_missing(hermes_home / ".env", api_key_env_name, candidate)
+
+
 def _ensure_gateway_health_webhook(hermes_home: Path) -> None:
     """Ensure config.yaml has a webhook platform so the gateway exposes /health on port 8642.
 
@@ -1834,6 +1920,7 @@ def _start_workspace_hermes_gateway(hermes_home: Path, skip_health_check: bool =
     env = dict(os.environ)
     env["HERMES_HOME"] = str(hermes_home)
     env["API_SERVER_ENABLED"] = "true"
+    _sync_workspace_provider_api_key(hermes_home, env)
     env["PATH"] = (
         f"{agent_dir / '.venv' / 'bin'}:{agent_dir / 'venv' / 'bin'}:{env.get('PATH', '')}"
     )
@@ -2281,8 +2368,6 @@ async def approve_messaging_pairing_code(
         user_name=user_name,
         message="Pairing approved.",
     )
-
-
 def _send_weixin_welcome(hermes_home: Path, to_user_id: str, user_name: str) -> None:
     """Send a welcome message to a newly-paired Weixin user.
 

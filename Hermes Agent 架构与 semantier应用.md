@@ -124,6 +124,30 @@ Hermes 与 semantier 的深度集成依托于 **语义契约 (Semantic Contract)
 *   **工具调用桥接 (Tool-Calling Bridge)**：Hermes 利用标准化工具调用接口动态调用 semantier 函数，实现语义动作的“动态发现”。
 *   **反馈闭环 (Semantic Refinement)**：Agent 可向 semantier 提供反馈，用于修正或更新已存储的事实，持续优化语义检索的准确率。
 
+### **6.1 网关集成统一架构模式（Feishu / Weixin）**
+
+为避免对 upstream `hermes-agent` 持续打补丁，`semantier` 侧采用统一的「控制平面在 `/agent`，执行平面在 Gateway Adapter」模式。
+
+统一原则：
+
+* `/agent` 负责工作空间解析、配置持久化、网关生命周期控制。
+* Gateway 负责平台接入（收发、鉴权、会话路由、工具执行）。
+* 默认不做平台特例转发（platform-specific backend delegation），避免 Weixin 与 Feishu 走两套执行架构。
+
+当前落地（关键点）：
+
+* **Feishu**：
+    * 配置由 `/agent` 写入 workspace 的 `.hermes/config.yaml`。
+    * Gateway 按 adapter 读取 `platforms.feishu.extra`（如 `connection_mode`）执行。
+* **Weixin**：
+    * 配置由 `/agent` 写入 workspace 的 `.hermes/config.yaml` 与账号缓存文件。
+    * Gateway 默认走 adapter 本地执行路径（与 Feishu 一致）。
+    * 不保留 platform-specific backend delegation 作为默认或隐式路径。
+
+可选扩展：
+
+* 若未来确有场景需要平台特例（例如灰度迁移），应通过 workspace-scoped env 开关显式开启，并在文档中注明为“临时兼容模式”，而非默认架构。
+
 ## ---
 
 **7\. 架构评审 (Review: Vibe-Trading Swarm vs. Hermes)**
