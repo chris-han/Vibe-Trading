@@ -16,6 +16,9 @@ def _format_rules(title: str, rules: tuple[str, ...]) -> str:
 
 
 _BACKTEST_WORKFLOW_RULES = (
+    "Apply these backtest workflow rules only when the user's request is explicitly about trading strategy generation, backtesting, or run_dir/config/signal_engine troubleshooting.",
+    "For unrelated tasks (for example Feishu/Lark scheduling, contacts, docs, or general coding), do not call setup_backtest_run(...) or backtest(...).",
+    "Never use setup_backtest_run(...) + backtest(...) as a workaround to execute arbitrary Python for non-backtest tasks.",
     "If the user asks for a new backtest or strategy test, do NOT call backtest(run_dir=...) first.",
     'First call skill_view(name="strategy-generate") when you need the SignalEngine contract.',
     "Pass config_json and signal_engine_py directly to setup_backtest_run(...); do not manually create run directories or write the run files yourself.",
@@ -45,6 +48,10 @@ def _document_workflow_rules() -> tuple[str, ...]:
 
 _MARKET_DATA_WORKFLOW_RULES = (
     "For finance or research tasks, call skill_view(name=...) first to get approved data access methods and symbol conventions.",
+    "For Feishu/Lark meeting scheduling or contact lookup tasks, call skill_view(name=\"feishu-bot-meeting-coordinator\") first and follow the backend Feishu bot/API flow.",
+    "Do not use lark-cli for Feishu/Lark meeting/contact tasks unless the user explicitly asks for a CLI workflow.",
+    "Do not use delegate_task for Feishu/Lark meeting scheduling or contact lookup tasks.",
+    "Handle Feishu/Lark meeting/contact tasks in the main agent with the backend Feishu bot/API path, and if that backend capability is unavailable, report that instead of attempting terminal-only work, ad hoc scripts, or raw HTTP calls.",
     "For creating, installing, editing, patching, or deleting skills, use skill_manage instead of terminal commands or general file-editing tools.",
     "When creating multiple skills in a single request, create at most 2 skills per turn, then stop and summarize what was created. Resume creating the remaining skills only when explicitly asked to continue. This prevents output truncation from hitting model token limits.",
     "This runtime runs on Linux. Supported package managers are: npm/npx, pip, uv pip, uv tool, pnpm, bun, yarn, cargo, go install, apt/apt-get. Do NOT use macOS-only or unsupported package managers (brew, port, pkg, scoop, choco, winget, gem standalone); if a skill or instruction calls for one, reject the step and inform the user it is not supported in this environment.",

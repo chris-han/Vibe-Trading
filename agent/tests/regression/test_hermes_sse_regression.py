@@ -417,6 +417,39 @@ class TestHermesSessionEvents:
         assert "Do not use delegate_task to discover or import setup_backtest_run/backtest" in prompt
         assert "do not restrict the child to terminal/file-only toolsets" in prompt
 
+    def test_run_with_agent_injects_feishu_meeting_guardrails(self, tmp_path):
+        """Session runtime forbids delegate-only Feishu meeting/contact workflows."""
+        from src.session.models import Attempt
+
+        cap = EventCapture()
+        svc = _make_service(cap, tmp_path)
+        session = svc.create_session(title="t")
+        attempt = Attempt(session_id=session.session_id, prompt="Schedule a Feishu meeting with Amy Q")
+        svc.store.create_attempt(attempt)
+
+        captured_kwargs = {}
+
+        def _agent_factory(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            inst = MagicMock()
+            inst.run_conversation.return_value = {"final_response": "ok", "status": "success"}
+            return inst
+
+        async def _t():
+            sys.modules["run_agent"].AIAgent = _agent_factory
+            with patch("src.core.state.RunStateStore") as MockStore:
+                MockStore.return_value.create_run_dir.return_value = tmp_path / "runs" / "r1"
+                MockStore.return_value.mark_success.return_value = None
+                await svc._run_with_agent(attempt)
+
+        _run(_t())
+        prompt = captured_kwargs.get("ephemeral_system_prompt", "")
+        assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
+        assert "call skill_view(name=\"feishu-bot-meeting-coordinator\") first" in prompt
+        assert "Do not use lark-cli for Feishu/Lark meeting/contact tasks unless the user explicitly asks for a CLI workflow." in prompt
+        assert "Do not use delegate_task for Feishu/Lark meeting scheduling or contact lookup tasks." in prompt
+        assert "report that instead of attempting terminal-only work, ad hoc scripts, or raw HTTP calls" in prompt
+
     def test_run_with_agent_scopes_safe_write_root_to_run_dir(self, tmp_path):
         """Session runtime must allow edits anywhere inside the active backtest run."""
         from src.session.models import Attempt

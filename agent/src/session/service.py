@@ -90,6 +90,47 @@ _A2UI_FENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_DEFAULT_ENABLED_TOOLSETS = [
+    "terminal",
+    "file",
+    "browser",
+    "skills",
+    "todo",
+    "memory",
+    "session_search",
+    "delegation",
+    "cronjob",
+    "research",
+    "vibe_trading",
+]
+
+_FEISHU_COORDINATION_INTENT_RE = re.compile(
+    r"(?:"
+    r"(?:feishu|lark|飞书|会议|meeting|calendar|联系人|contact|invite|邀请|约(?:个)?会)"
+    r"(?:[\s\S]{0,64})"
+    r"(?:meeting|calendar|schedule|contact|invite|会议|联系人|邀请|安排|约)"
+    r"|"
+    r"(?:安排|预约|创建|约)(?:[\s\S]{0,16})(?:飞书|lark|会议|会)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_feishu_coordination_intent(prompt: str) -> bool:
+    text = str(prompt or "").strip()
+    if not text:
+        return False
+    return _FEISHU_COORDINATION_INTENT_RE.search(text) is not None
+
+
+def _resolve_enabled_toolsets(prompt: str) -> list[str]:
+    toolsets = list(_DEFAULT_ENABLED_TOOLSETS)
+    if _is_feishu_coordination_intent(prompt):
+        # Deterministic guard: Feishu meeting/contact flows must stay in the
+        # main agent with skill_view + backend bot path, no delegation/terminal/backtest.
+        toolsets = [name for name in toolsets if name not in {"delegation", "terminal", "vibe_trading"}]
+    return toolsets
+
 
 def _is_terminal_skills_install_command(command: str) -> bool:
     """Return True when command shells out to external skills install flows."""
@@ -1195,6 +1236,9 @@ class SessionService:
             ui_schema = result.get("ui_schema")
             if isinstance(ui_schema, dict):
                 reply_metadata["ui_schema"] = ui_schema
+            retry_message = result.get("retry_message")
+            if retry_message:
+                reply_metadata["retry_message"] = retry_message
 
             reply = Message(
                 session_id=session.session_id, role="assistant",
@@ -1238,6 +1282,7 @@ class SessionService:
                     "run_dir": attempt.run_dir,
                     "has_run_artifact": has_run_artifact,
                     "metrics": attempt.metrics,
+                    **({"retry_message": retry_message} if retry_message else {}),
                 },
             )
 
@@ -1544,19 +1589,7 @@ class SessionService:
             max_iterations=50,
             quiet_mode=True,
             session_id=sid,
-            enabled_toolsets=[
-                "terminal",
-                "file",
-                "browser",
-                "skills",
-                "todo",
-                "memory",
-                "session_search",
-                "delegation",
-                "cronjob",
-                "research",
-                "vibe_trading",
-            ],
+            enabled_toolsets=_resolve_enabled_toolsets(attempt.prompt),
             disabled_toolsets=["code_execution"],
             tool_progress_callback=_on_tool_progress,
             tool_gen_callback=_on_tool_generation,
@@ -1645,8 +1678,14 @@ class SessionService:
 
             raw = await _run_turn(attempt.prompt, history)
             final_text, incomplete_final_text = _normalize_final_text(raw)
+            incomplete_response_retry = False
 
             if incomplete_final_text and not is_backtest_task:
+                incomplete_response_retry = True
+                retry_message = (
+                    f"Agent response was incomplete and auto-retried. "
+                    f"Initial incomplete response: {final_text[:200]}"
+                )
                 logger.warning(
                     "[%s] retrying once after incomplete final response: %s",
                     sid[:8],
@@ -1691,6 +1730,11 @@ class SessionService:
                 }
                 if ui_schema:
                     result["ui_schema"] = ui_schema
+                if incomplete_response_retry:
+                    result["retry_message"] = (
+                        f"Agent response was incomplete and auto-retried. "
+                        f"Initial response: {final_text[:100]}..."
+                    )
         except Exception as exc:
             logger.error("[%s] agent exception in run_dir=%s: %s", sid[:8], run_dir, exc, exc_info=True)
             state_store.mark_failure(run_dir, str(exc))

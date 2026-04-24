@@ -4,13 +4,12 @@ description: >
   Coordinate Feishu bot-assisted contact search and meeting scheduling for
   workspace users. Use this skill when the Semantier backend is configured to
   search the bot's visible contacts and create calendar meetings on the bot's
-  calendar without relying on lark-cli.
+  calendar.
 version: 1.0.0
 author: Semantier
 license: MIT
 tags:
   - feishu
-  - lark
   - calendar
   - meetings
   - contacts
@@ -18,13 +17,19 @@ triggers:
   - schedule a feishu meeting
   - find feishu contacts
   - invite contacts in feishu
+  - create feishu meeting
+  - search feishu contact
+  - 创建飞书会议
+  - 安排飞书会议
+  - 搜索飞书联系人
+  - 飞书会议邀请
 metadata:
   hermes:
-    tags: [feishu, lark, calendar, meetings, contacts]
+    tags: [feishu, calendar, meetings, contacts]
     config:
       - key: feishu.bot.identity
         description: Human-readable organizer identity for the installed Feishu bot
-        default: ""
+        default: semantier
         prompt: Feishu bot organizer identity
       - key: feishu.bot.timezone
         description: Default timezone to use when the user does not specify one
@@ -46,41 +51,61 @@ Use this skill to coordinate a Feishu bot that can:
 - create calendar meetings on the bot's calendar
 - invite user-selected contacts to the meeting
 
-This skill is for the direct Feishu bot/API path. Do not switch to `lark-cli` unless the user explicitly asks for a CLI workflow.
+This skill is for the direct Feishu bot/API path.
 
 ## Runtime Expectations
 
-This skill assumes the Semantier backend owns the Feishu integration surface, including:
+This skill assumes Feishu app credentials are backend-owned secrets, while the deterministic execution surface lives inside this skill directory.
 
-- Feishu app credentials stored as backend secrets, not in skill config
-- contact search exposed by the backend
-- meeting creation exposed by the backend
+Before attempting contact search or meeting creation, load the helper code with `skill_view(name="feishu-bot-meeting-coordinator", file_path="scripts/feishu_bot_api.py")` and use that helper instead of inventing raw HTTP calls, lark-cli commands, or ad hoc terminal scripts.
+
+This skill ships a deterministic helper at `scripts/feishu_bot_api.py` for:
+
+- tenant token acquisition using backend-owned env vars
+- contact search from the bot-visible directory
+- meeting creation on the bot calendar
 - deterministic config persistence under `skills.config.feishu.bot.*`
 
-If those runtime capabilities are unavailable, state that the backend integration is missing instead of inventing manual steps.
+If those runtime capabilities are unavailable, state that the required Feishu env/config is missing instead of inventing manual steps.
+
+## Execution Surface
+
+- Load `scripts/feishu_bot_api.py` with `skill_view(...)` before using it.
+- Use the helper's deterministic Python API or CLI surface for contact search and meeting creation.
+- Prefer the helper over direct handwritten `requests` code so the contact ranking and attendee resolution rules stay consistent.
+- Do not use `lark-cli` unless the user explicitly asks for it.
 
 ## Installed Skill Config
 
 When this skill is installed into a workspace, use the configured values as follows:
 
-- `feishu.bot.identity`: treat as the organizer identity to reference in summaries and confirmations
+- `feishu.bot.identity`: treat as the organizer identity to reference in summaries and confirmations; use `semantier` as the default organizer identity for Feishu functions
 - `feishu.bot.timezone`: use as the default timezone for proposed meeting times
 - `feishu.bot.contact_scope`: assume this describes which contacts are expected to be discoverable by the bot
 
 ## Operating Rules
 
-1. Ask for the meeting goal, date or time window, duration, and attendee names if they are missing.
-2. Resolve attendees through the backend Feishu contact search rather than guessing account identifiers.
-3. Confirm ambiguous contact matches before creating the meeting.
-4. Create meetings on the bot's calendar, with the bot acting as organizer.
-5. Summarize invitees, timezone, and schedule before final confirmation when the user request is ambiguous.
-6. Treat app secrets, user tokens, and webhook secrets as backend-owned secrets. Never ask the user to paste them into chat or store them in skill config.
+1. Use the Feishu bot identity `semantier` as the organizer identity for contact search, meeting creation, and meeting summaries unless an explicit workspace config override is provided.
+2. **MANDATORY**: When any required meeting field is missing, you MUST emit the `a2ui` `schema_form` block defined in the **Missing Input A2UI Contract** section below. A free-form markdown bullet list asking for the same fields is NEVER acceptable — even when reading the skill for the first time.
+3. Resolve attendees through `scripts/feishu_bot_api.py` rather than guessing account identifiers.
+4. Confirm ambiguous contact matches before creating the meeting.
+5. Create meetings on the bot's calendar, with the bot acting as organizer.
+6. Summarize invitees, timezone, and schedule before final confirmation when the user request is ambiguous.
+7. Treat app secrets, user tokens, and webhook secrets as backend-owned secrets. Never ask the user to paste them into chat or store them in skill config.
+
+## Helper Entry Points
+
+- Contact search CLI: `python scripts/feishu_bot_api.py search-contacts --query "Amy Q" --limit 5`
+- Meeting creation CLI: `python scripts/feishu_bot_api.py create-meeting --title "项目同步" --start-time "2026-04-24 15:40" --end-time "2026-04-24 16:10" --attendee "Chris Han" --attendee "Amy Q"`
+- Python API: import `search_contacts(...)` and `create_meeting(...)` from `scripts/feishu_bot_api.py` when the runtime prefers in-process execution.
+
+The helper expects `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and optionally `FEISHU_DOMAIN` in the environment.
 
 ## Missing Input A2UI Contract
 
-When the user wants to schedule a meeting but required fields are missing, do not ask with a free-form bullet list like `根据技能说明，我需要...`.
+> **MANDATORY OUTPUT FORMAT**: This is a hard constraint. When any required meeting field (title, time, duration, attendees) is missing, the only permitted response format is the `a2ui` `schema_form` block below followed by one short plain sentence. A markdown bullet list, numbered list, or prose request for the same information is a contract violation.
 
-Instead, emit exactly one fenced `a2ui` JSON block using `schema_form`, then add one short plain-language sentence below it.
+When the user wants to schedule a meeting but required fields are missing, emit exactly one fenced `a2ui` JSON block using `schema_form`, then add one short plain-language sentence below it. Do not precede it with a markdown list of questions.
 
 Use this schema shape exactly for meeting scheduling:
 
@@ -169,6 +194,6 @@ For meeting creation, return:
 
 ## Failure Handling
 
-- If no matching contacts are found, report that clearly and ask for a refined name, department, or alias.
-- If multiple contacts match, present the candidates and ask the user to choose.
-- If the calendar operation fails, preserve the resolved attendee candidates so the user does not need to repeat them.
+ If no matching contacts are found, report that clearly and ask for a refined name, department, or alias.
+ If multiple contacts match, present the candidates and ask the user to choose.
+ If the calendar operation fails, preserve the resolved attendee candidates so the user does not need to repeat them.

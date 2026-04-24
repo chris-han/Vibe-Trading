@@ -237,6 +237,37 @@ def test_extract_a2ui_schema_from_text_ignores_invalid_payload():
     assert stripped == text
 
 
+def test_feishu_coordination_intent_detects_meeting_request():
+    assert session_service_module._is_feishu_coordination_intent("给我和Amy Qiu约个飞书会议") is True
+    assert session_service_module._is_feishu_coordination_intent("Schedule a Feishu meeting with Amy Q") is True
+
+
+def test_feishu_coordination_intent_ignores_non_feishu_prompt():
+    assert session_service_module._is_feishu_coordination_intent("Run NVDA backtest for 2024") is False
+
+
+def test_resolve_enabled_toolsets_disables_delegate_and_terminal_for_feishu():
+    toolsets = session_service_module._resolve_enabled_toolsets("帮我安排一个飞书会议并邀请Amy Q")
+    assert "delegation" not in toolsets
+    assert "terminal" not in toolsets
+    assert "vibe_trading" not in toolsets
+    assert "skills" in toolsets
+
+
+def test_resolve_enabled_toolsets_disables_backtest_toolset_for_feishu_non_backtest_prompt():
+    toolsets = session_service_module._resolve_enabled_toolsets("Use Feishu bot to schedule a meeting for Chris Han and Amy Q")
+
+    assert "vibe_trading" not in toolsets
+    assert "delegation" not in toolsets
+    assert "terminal" not in toolsets
+
+
+def test_resolve_enabled_toolsets_keeps_defaults_for_non_feishu():
+    toolsets = session_service_module._resolve_enabled_toolsets("Generate a backtest report")
+    assert "delegation" in toolsets
+    assert "terminal" in toolsets
+
+
 def test_reportable_tool_result_accepts_successful_document_reads():
     parsed = {"status": "ok", "file": "earnings.pdf", "text": "Revenue increased 17%."}
 
