@@ -90,6 +90,67 @@ def test_system_skills_reports_three_tiers_with_workspace_mutability(
     assert skills["builtin-beta"]["builtin"] is True
 
 
+def test_system_skills_exposes_declared_config_fields(tmp_path: Path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    workspaces_dir = repo_root / "workspaces"
+    template_hermes_home = tmp_path / "template-hermes"
+
+    monkeypatch.setattr(api_server, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(api_server, "WORKSPACES_DIR", workspaces_dir)
+    monkeypatch.setattr(api_server, "_TEMPLATE_HERMES_HOME", template_hermes_home)
+    monkeypatch.setenv("VIBE_TRADING_ROOT", str(repo_root))
+
+    skill_dir = repo_root / "agent" / "src" / "skills" / "app-infra" / "feishu-search"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        (
+            "---\n"
+            "name: feishu-search\n"
+            "description: Search contacts and schedule meetings\n"
+            "metadata:\n"
+            "  hermes:\n"
+            "    config:\n"
+            "      - key: feishu.bot.identity\n"
+            "        label: Bot identity\n"
+            "        required: true\n"
+            "      - key: feishu.bot.contact_scope\n"
+            "        description: Department scope id\n"
+            "        default: 0\n"
+            "---\n\n"
+            "# Feishu Search\n"
+        ),
+        encoding="utf-8",
+    )
+
+    template_hermes_home.mkdir(parents=True, exist_ok=True)
+    (template_hermes_home / "config.yaml").write_text(
+        "skills:\n  external_dirs:\n    - ${VIBE_TRADING_ROOT}/agent/src/skills\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(api_server.app)
+    response = client.get("/system/skills")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    skill = next((entry for entry in payload["skills"] if entry["name"] == "feishu-search"), None)
+    assert skill is not None
+    assert skill["configFields"] == [
+        {
+            "key": "feishu.bot.identity",
+            "label": "Bot identity",
+            "type": "string",
+            "required": True,
+        },
+        {
+            "key": "feishu.bot.contact_scope",
+            "description": "Department scope id",
+            "type": "string",
+            "default": 0,
+        },
+    ]
+
+
 def test_system_skill_install_targets_active_workspace(monkeypatch, tmp_path: Path):
     repo_root = tmp_path / "repo"
     workspaces_dir = repo_root / "workspaces"
@@ -105,11 +166,12 @@ def test_system_skill_install_targets_active_workspace(monkeypatch, tmp_path: Pa
 
     captured: dict[str, object] = {}
 
-    def fake_install_skill_into_workspace(workspace, *, identifier: str, category: str = "", force: bool = False):
+    def fake_install_skill_into_workspace(workspace, *, identifier: str, category: str = "", force: bool = False, config=None):
         captured["workspace"] = workspace
         captured["identifier"] = identifier
         captured["category"] = category
         captured["force"] = force
+        captured["config"] = config
         return {
             "name": identifier,
             "install_path": f"{identifier}/SKILL.md",
@@ -122,7 +184,12 @@ def test_system_skill_install_targets_active_workspace(monkeypatch, tmp_path: Pa
     client = TestClient(api_server.app)
     response = client.post(
         "/system/skills/install",
-        json={"identifier": "market-skill", "category": "finance", "force": True},
+        json={
+            "identifier": "market-skill",
+            "category": "finance",
+            "force": True,
+            "config": {"feishu.bot.identity": "bot"},
+        },
     )
 
     assert response.status_code == 200, response.text
@@ -130,7 +197,124 @@ def test_system_skill_install_targets_active_workspace(monkeypatch, tmp_path: Pa
     assert captured["identifier"] == "market-skill"
     assert captured["category"] == "finance"
     assert captured["force"] is True
+    assert captured["config"] == {"feishu.bot.identity": "bot"}
     assert captured["workspace"].hermes_home == workspaces_dir / "public" / ".hermes"
+
+
+def test_install_skill_persists_declared_workspace_config(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    workspaces_dir = repo_root / "workspaces"
+    template_hermes_home = tmp_path / "template-hermes"
+
+    monkeypatch.setattr(api_server, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(api_server, "WORKSPACES_DIR", workspaces_dir)
+    monkeypatch.setattr(api_server, "_TEMPLATE_HERMES_HOME", template_hermes_home)
+    monkeypatch.setattr(api_server, "_feishu_oauth_enabled", lambda: False)
+
+    template_hermes_home.mkdir(parents=True, exist_ok=True)
+    (template_hermes_home / "config.yaml").write_text("skills:\n  external_dirs: []\n", encoding="utf-8")
+
+    workspace = api_server.ensure_workspace(workspaces_dir, "public", template_hermes_home, workspace_slug="public")
+    skill_dir = workspace.hermes_home / "skills" / "productivity" / "feishu-bot-calendar"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        (
+            "---\n"
+            "name: feishu-bot-calendar\n"
+            "description: Bot calendar workspace skill\n"
+            "metadata:\n"
+            "  hermes:\n"
+            "    config:\n"
+            "      - key: feishu.bot.identity\n"
+            "        description: Organizer identity for Feishu meeting workflows\n"
+            "      - key: feishu.bot.timezone\n"
+            "        description: Default timezone for scheduled meetings\n"
+            "---\n\n"
+            "# Feishu Bot Calendar\n"
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_install_skill_from_hub(identifier: str, *, category: str = "", force: bool = False, invalidate_cache: bool = True):
+        return {
+            "name": identifier,
+            "install_path": "productivity/feishu-bot-calendar/SKILL.md",
+        }
+
+    monkeypatch.setattr("hermes_cli.web_server._install_skill_from_hub", fake_install_skill_from_hub)
+
+    result = api_server._install_skill_into_workspace(
+        workspace,
+        identifier="feishu-bot-calendar",
+        category="productivity",
+        config={
+            "feishu.bot.identity": "bot",
+            "feishu.bot.timezone": "Asia/Shanghai",
+        },
+    )
+
+    assert result["appliedConfig"] == {
+        "feishu.bot.identity": "bot",
+        "feishu.bot.timezone": "Asia/Shanghai",
+    }
+
+    config_text = (workspace.hermes_home / "config.yaml").read_text(encoding="utf-8")
+    assert "identity: bot" in config_text
+    assert "timezone: Asia/Shanghai" in config_text
+
+
+def test_install_skill_rejects_undeclared_workspace_config(monkeypatch, tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    workspaces_dir = repo_root / "workspaces"
+    template_hermes_home = tmp_path / "template-hermes"
+
+    monkeypatch.setattr(api_server, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(api_server, "WORKSPACES_DIR", workspaces_dir)
+    monkeypatch.setattr(api_server, "_TEMPLATE_HERMES_HOME", template_hermes_home)
+    monkeypatch.setattr(api_server, "_feishu_oauth_enabled", lambda: False)
+
+    template_hermes_home.mkdir(parents=True, exist_ok=True)
+    (template_hermes_home / "config.yaml").write_text("skills:\n  external_dirs: []\n", encoding="utf-8")
+
+    workspace = api_server.ensure_workspace(workspaces_dir, "public", template_hermes_home, workspace_slug="public")
+    skill_dir = workspace.hermes_home / "skills" / "productivity" / "feishu-bot-calendar"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        (
+            "---\n"
+            "name: feishu-bot-calendar\n"
+            "description: Bot calendar workspace skill\n"
+            "metadata:\n"
+            "  hermes:\n"
+            "    config:\n"
+            "      - key: feishu.bot.identity\n"
+            "        description: Organizer identity for Feishu meeting workflows\n"
+            "---\n\n"
+            "# Feishu Bot Calendar\n"
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_install_skill_from_hub(identifier: str, *, category: str = "", force: bool = False, invalidate_cache: bool = True):
+        return {
+            "name": identifier,
+            "install_path": "productivity/feishu-bot-calendar/SKILL.md",
+        }
+
+    monkeypatch.setattr("hermes_cli.web_server._install_skill_from_hub", fake_install_skill_from_hub)
+
+    try:
+        api_server._install_skill_into_workspace(
+            workspace,
+            identifier="feishu-bot-calendar",
+            category="productivity",
+            config={"feishu.bot.unknown": "value"},
+        )
+    except api_server.HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail["unknownKeys"] == ["feishu.bot.unknown"]
+    else:
+        raise AssertionError("Expected install-time config validation to fail")
 
 
 def test_build_workspace_tool_inventory_reports_semantier_source_tiers(monkeypatch):

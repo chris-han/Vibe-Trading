@@ -1,363 +1,292 @@
-# Feishu Integration Plan (WebUI + Gateway + larksuite/cli)
+# Feishu Integration Plan (Direct Bot/API)
 
-## 1. Goal
+## 1. Decision
 
-Integrate larksuite/cli capabilities into semantier so users can:
+For the scheduling use case, we should not use `larksuite/cli`.
 
-- authenticate and manage Feishu app/user auth from WebUI,
-- route Feishu chat traffic through our existing gateway path,
-- safely execute Feishu CLI flows in workspace-isolated runtime,
-- keep one canonical session history across WebUI and gateway channels.
+We already have the required bot credentials and Feishu gateway surfaces in the backend:
 
-This plan is based on:
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_CONNECTION_MODE=websocket`
+- existing Feishu message ingress and session routing in `agent/api_server.py`
 
-- upstream larksuite/cli command behavior and source layout,
-- semantier current backend/auth/gateway/session architecture,
-- existing Feishu login + gateway sync regression tests.
+The best implementation path is:
 
-## 2. What We Learned From larksuite/cli Source
+- use Feishu bot/app credentials directly,
+- call Feishu Open Platform APIs from deterministic backend code,
+- keep WebUI and Feishu chat on the same session/gateway architecture,
+- avoid CLI process management, device flow, and token-wrapper complexity.
 
-### 2.1 Core command model
+## 2. Why This Is Better Than Feishu CLI
 
-larksuite/cli is a Cobra-based CLI with strong auth/config workflows:
+For this use case, CLI adds no real value.
 
-- `config init`, `config bind`, `config show`, `config remove`
-- `auth login`, `auth status`, `auth check`, `auth scopes`, `auth list`, `auth logout`
+Using direct bot/API integration is better because it:
 
-Key auth flow characteristics:
+- removes interactive login and token lifecycle complexity,
+- avoids subprocess orchestration and env-injection security risk,
+- fits our existing FastAPI + gateway control plane,
+- keeps retries, validation, logging, and idempotency in Python backend code,
+- aligns with repo policy that deterministic operations belong in code, not prompt/runtime shell flows.
 
-- Device Flow first-class (`auth login`), including `--no-wait` and `--device-code` resume.
-- JSON output mode for machine orchestration (`--json`).
-- Explicit scope/domain model (`--scope`, `--domain`, `--recommend`).
-- Strict-mode and identity constraints (user vs bot).
-- Workspace detection via env (`HERMES_HOME`, OPENCLAW env, etc.).
-
-### 2.2 Why this matters for semantier
-
-For WebUI orchestration, `auth login --no-wait` + `--device-code` is the best primitive:
-
-- start authorization without blocking request lifecycle,
-- show verification URL in WebUI,
-- poll/resume from backend job worker,
-- persist final token/status deterministically.
-
-For config onboarding, `config init --new` and/or `config bind --source hermes` can be delegated from backend wrappers as controlled operations.
-
-## 3. Current Semantier Surfaces We Should Reuse
-
-### 3.1 Existing backend auth and Feishu routing
+## 3. Current Repo Surfaces To Reuse
 
 We already have:
 
-- Feishu OAuth endpoints in `agent/api_server.py` (`/auth/feishu/login`, callback).
-- Feishu webhook handling (`/feishu/webhook`) and `_feishu_route_message(...)`.
-- Per-user workspace resolution + isolation when OAuth is enabled.
-- Messaging config API (`/messaging/platforms`, `/messaging/{platform}`).
+- Feishu bot credentials configured in `agent/.env`.
+- Feishu long-connection / webhook support in `agent/api_server.py`.
+- Feishu inbound routing via `_feishu_route_message(...)`.
+- workspace-aware session continuity through gateway/session sync.
+- messaging config persistence and workspace gateway restart helpers.
 
-### 3.2 Existing gateway/session consistency model
+This means the missing piece is not channel connectivity. The missing piece is outbound Feishu productivity capability: contact lookup and calendar event creation.
 
-We already maintain bidirectional continuity:
+## 4. P0 Use Case
 
-- gateway -> SessionStore sync (`_sync_gateway_session_messages_to_store(...)`),
-- SessionStore -> gateway projection into workspace `.hermes/state.db`.
+Implement this first:
 
-This is the right architecture; integration should plug into it, not bypass it.
+- the bot can search users who have added the bot or are otherwise visible to the app,
+- the bot can create a meeting event as the bot organizer,
+- the bot can invite one or more resolved contacts,
+- the result is visible and actionable from WebUI and later from chat flows.
 
-### 3.3 Existing frontend entry points
+## 5. Product Assumptions
 
-WebUI already supports Feishu sign-in links and auth state fetch:
+This design assumes:
 
-- `frontend/src/lib/api.ts`
-- `frontend/src/pages/Home.tsx`
-- `frontend/src/components/layout/Layout.tsx`
+- every participating user adds the bot or is otherwise visible through app/org policy,
+- the app has the required Feishu scopes enabled,
+- the bot is allowed to invite those users to calendar events,
+- organizer identity being the bot is acceptable.
 
-## 4. Recommended Integration Strategy
+Important limitation:
 
-## 4.1 Decision: Wrapper-First, Not Embedded SDK
+- this coordinates meetings as the bot, not as each end user.
+- it should not be described as acting on behalf of the user's private calendar.
 
-Best path: treat larksuite/cli as an external capability behind deterministic backend wrappers.
+## 6. Architecture
+
+### 6.1 Core rule
+
+Treat meeting coordination as a direct backend integration service.
 
 Do not:
 
-- shell out directly from prompts/tools ad hoc,
-- push CLI orchestration into frontend,
-- duplicate larksuite/cli auth state machine in Python.
+- shell out to `lark-cli`,
+- build a token-injected CLI wrapper,
+- use interactive OAuth for P0,
+- route business logic through prompt text.
 
 Do:
 
-- build a backend Feishu CLI adapter/service that owns process invocation, env, parsing, retries, and state persistence.
+- introduce a deterministic Feishu scheduling service in backend code,
+- use app credentials to obtain tenant access token,
+- call Feishu contact and calendar APIs directly,
+- normalize responses into stable backend schemas.
 
-Rationale:
+### 6.2 Recommended module layout
 
-- lowest maintenance against upstream CLI evolution,
-- easiest to keep deterministic and testable,
-- aligns with repo policy: file/dir ops in deterministic code paths.
+- `agent/src/integrations/feishu_client.py`
+- `agent/src/integrations/feishu_contacts_service.py`
+- `agent/src/integrations/feishu_calendar_service.py`
 
-## 4.2 Integration topology
+`api_server.py` should stay thin and delegate to these services.
 
-1. WebUI calls backend Feishu integration endpoints.
-2. Backend Feishu adapter runs larksuite/cli with workspace-scoped env.
-3. Backend stores command state + auth progress in Auth store (plus optional runtime cache).
-4. Gateway configuration is updated via existing messaging config + `config.yaml` sync path.
-5. Feishu chat messages still flow through existing `/feishu/webhook` -> `_feishu_route_message(...)`.
+## 7. API Design
 
-## 4.3 Workspace and env contract
-
-For every CLI invocation:
-
-- enforce workspace context before execution,
-- set deterministic env (including `HERMES_HOME`, config directory, non-global overrides),
-- prohibit process-wide mutable auth/env side effects crossing workspaces.
-
-## 5. API Additions (Backend)
-
-Add a new Feishu integration API namespace in `agent/api_server.py` (or a new router module).
-
-### 5.1 Proposed endpoints
-
-- `POST /integrations/feishu/cli/config/init`
-- `POST /integrations/feishu/cli/config/bind`
-- `POST /integrations/feishu/cli/auth/login/start`
-- `POST /integrations/feishu/cli/auth/login/poll`
-- `GET /integrations/feishu/cli/auth/status`
-- `POST /integrations/feishu/cli/auth/check`
-- `POST /integrations/feishu/cli/auth/logout`
-
-### 5.2 Endpoint behavior
-
-`login/start`:
-
-- execute `lark-cli auth login --json --no-wait ...`,
-- return verification URL + device code,
-- persist operation record keyed by workspace + user.
-
-`login/poll`:
-
-- execute `lark-cli auth login --json --device-code <code>`,
-- return completion status and granted/missing scopes,
-- update integration state and telemetry.
-
-`auth/status`:
-
-- execute `lark-cli auth status` (prefer JSON mode if available),
-- normalize to stable API schema for frontend.
-
-## 5.3 First Implementation Slice (P0): Contact Search + Bot Calendar Invite
-
-This is the first production use case to implement.
-
-User intent:
-
-- search Feishu contacts from the bot context,
-- choose one or more recipients,
-- create a meeting event on the bot calendar,
-- send invitation to selected contacts.
-
-### 5.3.1 P0 endpoints
+### 7.1 Endpoints
 
 - `GET /integrations/feishu/contacts/search?q=<text>&limit=<n>`
 - `POST /integrations/feishu/calendar/meetings`
 
-`contacts/search` response shape:
+### 7.2 Contact search response
 
-- `items[]` with stable fields:
-  - `display_name`
-  - `open_id`
-  - `union_id` (optional)
-  - `email` (optional)
-  - `mobile` (optional, masked)
-  - `source` (`gateway_directory` | `feishu_api`)
-  - `score` (name match confidence)
+Return normalized candidates:
 
-`calendar/meetings` request shape:
+- `display_name`
+- `open_id`
+- `union_id` (optional)
+- `avatar_url` (optional)
+- `email` (optional when policy allows)
+- `department_names` (optional)
+- `match_reason`
+- `score`
 
-- `title` (required)
-- `start_time` (ISO8601, required)
-- `end_time` (ISO8601, required)
-- `timezone` (required)
-- `attendees` (required; supports `open_id` or email forms)
+### 7.3 Meeting create request
+
+- `title`
+- `start_time`
+- `end_time`
+- `timezone`
+- `attendees`
 - `description` (optional)
 - `location` (optional)
-- `idempotency_key` (required)
+- `idempotency_key`
 
-`calendar/meetings` response shape:
+Attendees can be submitted as:
+
+- exact `open_id`
+- exact email
+- unresolved text candidates coming from a prior search selection
+
+### 7.4 Meeting create response
 
 - `event_id`
+- `organizer_identity = bot`
 - `calendar_id`
-- `join_url` (if returned by Feishu)
-- `attendee_results[]` (resolved recipient status)
+- `join_url` (if provided by Feishu)
+- `attendee_results[]`
 - `warnings[]`
 
-### 5.3.2 Execution pipeline
+## 8. Execution Flow
 
-1. Validate workspace auth context and resolve workspace-local runtime.
-2. Run recipient resolution:
-   - query gateway channel directory cache first (fast local hit),
-   - query Feishu contact API for authoritative lookup,
-   - merge and rank results, dedupe by `open_id`.
-3. Validate minimum required scopes with `lark-cli auth check` (or equivalent service wrapper).
-4. Create calendar event on bot calendar through deterministic adapter call.
-5. Add/invite resolved attendees.
-6. Persist operation audit record (workspace/user/request/result IDs).
-7. Return normalized response to WebUI.
+### 8.1 Contact search
 
-### 5.3.3 Identity mode for this use case
+1. Validate request and workspace context.
+2. Acquire tenant access token using `FEISHU_APP_ID` + `FEISHU_APP_SECRET`.
+3. Query Feishu-visible contact directory.
+4. Rank and normalize results.
+5. Return candidates for explicit user confirmation when ambiguous.
 
-P0 should run in bot identity mode by default:
+### 8.2 Meeting creation
 
-- organizer is the bot calendar/account,
-- invitees are selected contacts,
-- no user impersonation required.
+1. Validate request and workspace context.
+2. Resolve all attendees to stable Feishu identities.
+3. Fail fast on ambiguity.
+4. Acquire tenant access token.
+5. Create calendar event as bot organizer.
+6. Attach or invite attendees.
+7. Persist operation audit metadata.
+8. Return normalized result.
 
-If bot permissions are insufficient, return explicit actionable error and required scope hints.
+## 9. Identity Model
 
-### 5.3.4 Recipient resolution rules
+P0 is bot-only.
 
-- If caller provides `open_id`, use it directly after existence validation.
-- If caller provides free text, perform fuzzy search and return top candidates.
-- If multiple high-confidence matches exist, require explicit confirmation in UI before create.
-- Never auto-invite ambiguous recipients.
+- organizer is the Feishu bot/app calendar identity,
+- contacts are bot-visible users,
+- invitations are sent by the bot/app,
+- no user access token is needed.
 
-### 5.3.5 Failure handling
+If later we need true user-calendar ownership, that becomes a separate v2 user-identity design.
 
-- Partial attendee failure must not silently pass.
-- Return per-attendee status:
-  - `invited`
-  - `not_found`
-  - `permission_denied`
-  - `invalid_contact`
-- Meeting creation must be idempotent by `idempotency_key` per workspace.
+## 10. Contact Visibility Rules
 
-### 5.3.6 Security controls
+The design should assume contact search is limited to users visible to the bot/app.
 
-- Mask PII in logs (mobile/email).
-- Log only hashed contact identifiers in structured telemetry where possible.
-- Keep raw Feishu payloads out of frontend responses unless explicitly required.
+Expected behavior:
 
-### 5.3.7 P0 tests
+- if a user added the bot and org policy allows lookup, they are searchable,
+- if multiple users match, return candidates and require confirmation,
+- if no visible user matches, return `not_found` rather than guessing,
+- never auto-invite an ambiguous target.
 
-Add targeted tests for this slice:
+## 11. Error Handling
 
-- contact search by exact display name,
-- contact search by partial/fuzzy keyword,
-- create meeting with one resolved contact,
-- create meeting with multiple contacts,
-- ambiguous contact requires user disambiguation,
-- attendee partial failure surfaced correctly,
-- idempotency key replay returns same meeting result,
-- cross-workspace isolation for contacts and meeting operations.
+Return normalized errors such as:
 
-## 6. WebUI Plan
+- `not_found`
+- `ambiguous_contact`
+- `permission_denied`
+- `scope_not_enabled`
+- `bot_not_allowed`
+- `rate_limited`
+- `invalid_request`
+- `upstream_api_error`
 
-### 6.1 UX flow
+For attendee-level failures, return per-attendee status:
 
-Add an Integration panel (or Messaging settings extension) for Feishu CLI:
+- `invited`
+- `not_found`
+- `permission_denied`
+- `invalid_contact`
 
-- Connect app credentials (init/bind),
-- Start user authorization,
-- Show verification URL + copy action,
-- Live status polling with clear states:
-  - idle
-  - waiting_user_authorization
-  - authorized
-  - missing_scopes
-  - failed
+Meeting creation must be idempotent per workspace via `idempotency_key`.
 
-### 6.2 UX guardrails
+## 12. Security
 
-- Make identity mode explicit (bot-only vs user-default) where relevant.
-- Show scope deltas (requested/granted/missing) after login completion.
-- Never expose app secret or raw tokens in UI payloads/logs.
+- do not expose raw Feishu tokens in logs or responses,
+- keep tenant token acquisition inside backend service helpers,
+- mask PII in logs where possible,
+- keep all path/file/state operations inside deterministic backend code.
 
-## 7. Gateway Integration Plan
+## 13. WebUI
 
-### 7.1 Keep current runtime path
+Add a scheduling panel or action flow with:
 
-Do not alter primary gateway routing semantics. Continue using:
+- contact search box,
+- candidate disambiguation picker,
+- meeting title/time form,
+- result panel showing invited and failed attendees,
+- explicit note that organizer is the bot.
 
-- `/feishu/webhook`
-- `_feishu_route_message(...)`
-- session mapping via workspace-aware keys
+The UI should not mention CLI, login, or token injection for P0.
 
-### 7.2 Bridge CLI auth state into gateway config lifecycle
+## 14. Testing Plan
 
-After successful CLI config/auth operations:
+### 14.1 Unit tests
 
-- validate and persist platform config in auth store,
-- apply to workspace `.hermes/config.yaml` through existing helper path,
-- force-restart workspace gateway when required.
+Add tests for:
 
-This keeps one control plane for config + one execution plane for gateway transport.
+- tenant token acquisition helper,
+- contact search normalization and scoring,
+- attendee resolution,
+- meeting create request builder,
+- error mapping from Feishu responses.
 
-## 8. Security and Compliance
+### 14.2 Regression tests
 
-- Secrets must remain in backend-managed stores and workspace-local secure files only.
-- Redact process arguments/log lines that may contain sensitive data.
-- Keep per-workspace command execution and state directories isolated.
-- Enforce allowlisted command templates; no arbitrary command passthrough.
+Add regression coverage for:
 
-## 9. Testing Plan
+- exact contact search,
+- fuzzy contact search,
+- ambiguous name returns multiple candidates,
+- single-recipient meeting success,
+- multi-recipient meeting success,
+- partial attendee failure reporting,
+- idempotent replay with same key,
+- workspace isolation.
 
-## 9.1 Unit tests
+### 14.3 Existing suites to preserve
 
-Add tests for Feishu CLI adapter:
+- Feishu login workspace regression tests
+- Feishu streaming card tests
+- messaging gateway config API tests
 
-- command construction,
-- env injection,
-- JSON parsing and error normalization,
-- state transitions for start/poll flows.
+These are still relevant because chat ingress and session continuity remain part of the platform.
 
-## 9.2 Regression tests
+## 15. Rollout
 
-Extend existing regressions in `agent/tests/regression/`:
+Phase 1:
 
-- login start/poll happy path,
-- missing-scope path,
-- stale/invalid device code,
-- cross-workspace isolation (cannot poll another workspace device code),
-- gateway config apply + restart behavior after success.
+- implement direct Feishu backend client and service,
+- implement contact search endpoint,
+- implement bot-calendar meeting create endpoint,
+- add regression tests.
 
-## 9.3 Non-regression
+Phase 2:
 
-Ensure existing suites still pass:
+- integrate WebUI scheduling flow,
+- add clear invite result rendering,
+- add operator-facing error messages.
 
-- `test_feishu_login_workspace.py`
-- `test_feishu_streaming_cards.py`
-- messaging gateway config API tests.
+Phase 3:
 
-## 10. Rollout Phases
+- connect chat-triggered scheduling flows,
+- add audit views and operational telemetry,
+- harden retries and rate-limit handling.
 
-Phase 1: backend adapter + API
+## 16. Explicit Non-Goals For P0
 
-- implement deterministic Feishu CLI adapter module,
-- expose minimal login start/poll/status APIs,
-- implement P0 endpoints: contact search + bot calendar meeting invite,
-- add telemetry and regression tests.
+- no `lark-cli` wrapper,
+- no interactive Feishu CLI login,
+- no user-token injection mode,
+- no user-calendar ownership,
+- no per-user delegated OAuth scheduling flow.
 
-Phase 2: WebUI integration
+## 17. Open Questions
 
-- integrate new API flows into settings/auth surfaces,
-- add user-visible status handling and errors.
-
-Phase 3: gateway coupling hardening
-
-- verify config apply/restart contract under concurrency,
-- add recovery paths for partial failures.
-
-Phase 4: operational polish
-
-- metrics dashboards (success rate, time-to-authorize, scope mismatch rate),
-- docs/runbooks.
-
-## 11. Implementation Notes
-
-- Prefer introducing `agent/src/integrations/feishu_cli_service.py` and keeping API handlers thin.
-- Keep invocation contract stable so frontend remains decoupled from CLI output changes.
-- Avoid touching `hermes-agent/` internals unless strictly required.
-
-## 12. Open Questions For Review
-
-1. Should we support both `config init --new` and `config bind --source hermes` in v1, or only `bind` for existing app credentials?
-2. Do we expose advanced scope selection in WebUI v1, or start with a safe recommended set and add advanced mode later?
-3. Should gateway auto-restart happen immediately after successful login/config, or only after explicit user confirmation in UI?
-4. Do we need org-level policy controls (allowed scopes/domains) in v1, or defer to v2?
+1. Which exact Feishu APIs and scopes should we standardize for bot-visible contact lookup in this tenant?
+2. Does the bot organizer model satisfy the product expectation for all meeting invites?
+3. Should failed attendees block the whole operation, or should we allow partial success by default?

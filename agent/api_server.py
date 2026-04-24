@@ -880,6 +880,7 @@ def _build_workspace_skill_inventory(workspace: WorkspacePaths, *, is_admin: boo
             description = str(frontmatter.get("description") or "").strip() or _first_skill_body_line(body)
             tags = _normalize_skill_string_list(frontmatter.get("tags"))
             triggers = _normalize_skill_string_list(frontmatter.get("triggers"))
+            config_fields = _extract_declared_skill_config_fields(frontmatter)
             metadata = _skill_source_metadata(skill_dir, workspace_skills_dir, workspace.hermes_home, is_admin=is_admin)
 
             file_count = 0
@@ -902,6 +903,7 @@ def _build_workspace_skill_inventory(workspace: WorkspacePaths, *, is_admin: boo
                     "icon": metadata["icon"],
                     "content": "",
                     "fileCount": file_count,
+                    "configFields": config_fields,
                     "sourcePath": str(skill_dir),
                     "installed": True,
                     "enabled": name not in disabled,
@@ -973,6 +975,7 @@ def _install_skill_into_workspace(
     identifier: str,
     category: str = "",
     force: bool = False,
+    config: Optional[Dict[str, Any]] = None,
 ) -> dict[str, Any]:
     from hermes_cli.web_server import _install_skill_from_hub
 
@@ -990,9 +993,165 @@ def _install_skill_into_workspace(
     install_path = str(result.get("install_path") or "").strip()
     if install_path:
         result["absolute_install_path"] = str((workspace.hermes_home / "skills" / install_path).resolve())
+    applied_config = _apply_workspace_skill_install_config(
+        workspace,
+        install_path=install_path,
+        skill_name=str(result.get("name") or identifier).strip() or identifier,
+        config=config or {},
+    )
+    if applied_config:
+        result["appliedConfig"] = applied_config
     result["sourceTier"] = "workspace"
     result["sourceLabel"] = "Workspace"
     return result
+
+
+def _extract_declared_skill_config_fields(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = frontmatter.get("metadata")
+    if not isinstance(metadata, dict):
+        return []
+    hermes = metadata.get("hermes")
+    if not isinstance(hermes, dict):
+        return []
+    raw_config = hermes.get("config")
+    if isinstance(raw_config, dict):
+        raw_config = [raw_config]
+    if not isinstance(raw_config, list):
+        return []
+
+    fields: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_config:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+
+        field: Dict[str, Any] = {"key": key}
+        label = str(item.get("label") or "").strip()
+        if label:
+            field["label"] = label
+
+        description = str(item.get("description") or "").strip()
+        if description:
+            field["description"] = description
+
+        prompt = str(item.get("prompt") or "").strip()
+        if prompt:
+            field["prompt"] = prompt
+
+        placeholder = str(item.get("placeholder") or "").strip()
+        if placeholder:
+            field["placeholder"] = placeholder
+
+        field_type = str(item.get("type") or "string").strip().lower()
+        field["type"] = field_type if field_type in {"string", "number", "boolean", "select"} else "string"
+
+        if isinstance(item.get("required"), bool):
+            field["required"] = bool(item.get("required"))
+
+        if isinstance(item.get("secret"), bool):
+            field["secret"] = bool(item.get("secret"))
+
+        if "default" in item:
+            field["default"] = item.get("default")
+
+        options = item.get("options")
+        if isinstance(options, list):
+            normalized_options: list[dict[str, str]] = []
+            for option in options:
+                if isinstance(option, str):
+                    value = option.strip()
+                    if value:
+                        normalized_options.append({"label": value, "value": value})
+                    continue
+                if not isinstance(option, dict):
+                    continue
+                option_value = str(option.get("value") or "").strip()
+                if not option_value:
+                    continue
+                option_label = str(option.get("label") or option_value).strip() or option_value
+                normalized_options.append({"label": option_label, "value": option_value})
+            if normalized_options:
+                field["options"] = normalized_options
+
+        fields.append(field)
+    return fields
+
+
+def _extract_declared_skill_config(frontmatter: dict[str, Any]) -> list[str]:
+    return [str(field.get("key") or "") for field in _extract_declared_skill_config_fields(frontmatter) if field.get("key")]
+
+
+def _set_nested_config_value(config: dict[str, Any], dotted_key: str, value: Any) -> None:
+    current = config
+    parts = [part.strip() for part in dotted_key.split(".") if part.strip()]
+    if not parts:
+        return
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[parts[-1]] = value
+
+
+def _resolve_installed_skill_file(workspace: WorkspacePaths, *, install_path: str, skill_name: str) -> Optional[Path]:
+    workspace_skills_root = workspace.hermes_home / "skills"
+    if install_path:
+        candidate = workspace_skills_root / install_path
+        if candidate.is_file():
+            return candidate
+        if candidate.is_dir() and (candidate / "SKILL.md").is_file():
+            return candidate / "SKILL.md"
+
+    skill_dir = _find_skill_dir_by_name(skill_name, workspace_skills_root)
+    if skill_dir is None:
+        return None
+    skill_file = skill_dir / "SKILL.md"
+    return skill_file if skill_file.is_file() else None
+
+
+def _apply_workspace_skill_install_config(
+    workspace: WorkspacePaths,
+    *,
+    install_path: str,
+    skill_name: str,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not config:
+        return {}
+
+    skill_file = _resolve_installed_skill_file(workspace, install_path=install_path, skill_name=skill_name)
+    if skill_file is None:
+        raise HTTPException(status_code=500, detail="Installed skill could not be resolved for config application")
+
+    frontmatter, _ = _parse_skill_frontmatter(skill_file)
+    declared_keys = set(_extract_declared_skill_config(frontmatter))
+    if not declared_keys:
+        raise HTTPException(status_code=400, detail="This skill does not declare any install-time config keys")
+
+    unknown_keys = sorted(key for key in config if key not in declared_keys)
+    if unknown_keys:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Install config contains undeclared skill settings",
+                "unknownKeys": unknown_keys,
+                "declaredKeys": sorted(declared_keys),
+            },
+        )
+
+    config_path = workspace.hermes_home / "config.yaml"
+    existing = _load_yaml_mapping(config_path)
+    for key, value in config.items():
+        _set_nested_config_value(existing, f"skills.config.{key}", value)
+
+    config_path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+    return {key: config[key] for key in sorted(config)}
 
 
 def _toggle_workspace_skill(
@@ -1429,6 +1588,7 @@ class SystemSkillInstallRequest(BaseModel):
     identifier: str = Field(..., min_length=1)
     category: str = Field(default="")
     force: bool = Field(default=False)
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SystemSkillToggleRequest(BaseModel):
@@ -1493,6 +1653,7 @@ async def system_install_skill(request: Request, body: SystemSkillInstallRequest
         identifier=body.identifier.strip(),
         category=body.category.strip(),
         force=body.force,
+        config=body.config,
     )
 
 
