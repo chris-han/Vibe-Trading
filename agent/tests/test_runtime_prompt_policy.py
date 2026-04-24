@@ -38,7 +38,7 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "use skill_manage instead of terminal commands or general file-editing tools" in prompt
     assert "if the user asks for a global install, admin-home install, or user-level skill install" in prompt
     assert "active workspace HERMES_HOME/skills directory" in prompt
-    assert "Terminal skill installation and file writes to .agents/skills" in prompt
+    assert "file writes to .agents/skills or HERMES_HOME/skills are blocked" in prompt
     assert "Never install skills to `~/.agents/skills`" in prompt
     assert "relative .hermes/skills paths resolve inside the active run/artifacts sandbox" in prompt
     assert "use python3 from the preconfigured session environment" in prompt
@@ -53,6 +53,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "For DOCX, XLSX, or similar local document formats" in prompt
     assert "Never use terminal ls/cd commands against the /workspace upload alias" in prompt
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
+    assert "```a2ui JSON block" in prompt
+    assert "root component 'schema_form'" in prompt
     assert prompt.endswith("skill-body-for:web\n")
 
 

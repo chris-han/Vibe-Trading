@@ -59,7 +59,7 @@ def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
     )
     monkeypatch.setattr('src.session.service.ensure_runtime_env', lambda: None)
     monkeypatch.setattr('src.session.service.get_hermes_agent_kwargs', lambda: {})
-    monkeypatch.setattr('src.session.service.build_session_runtime_prompt', lambda *args: '')
+    monkeypatch.setattr('src.session.service.build_session_runtime_prompt', lambda *args, **kwargs: '')
     monkeypatch.setattr('src.session.service.is_backtest_prompt', lambda prompt: False)
     monkeypatch.delenv('TERMINAL_CWD', raising=False)
 
@@ -135,7 +135,7 @@ def test_run_with_agent_uses_admin_sandbox_root(tmp_path, monkeypatch):
     )
     monkeypatch.setattr('src.session.service.ensure_runtime_env', lambda: None)
     monkeypatch.setattr('src.session.service.get_hermes_agent_kwargs', lambda: {})
-    monkeypatch.setattr('src.session.service.build_session_runtime_prompt', lambda *args: '')
+    monkeypatch.setattr('src.session.service.build_session_runtime_prompt', lambda *args, **kwargs: '')
     monkeypatch.setattr('src.session.service.is_backtest_prompt', lambda prompt: False)
     monkeypatch.delenv('TERMINAL_CWD', raising=False)
 
@@ -208,6 +208,33 @@ def test_has_run_artifact_accepts_metrics_without_report(tmp_path):
     run_dir.mkdir(parents=True)
 
     assert SessionService._has_run_artifact(str(run_dir), {"sharpe": 1.2}) is True
+
+
+def test_extract_a2ui_schema_from_text_returns_schema_and_strips_fence():
+    text = (
+        "请补充以下信息。\n\n"
+        "```a2ui\n"
+        '{"version":"1.0","root":{"component":"schema_form","props":{"fields":[{"key":"topic","label":"会议主题","type":"text","required":true}]}}}\n'
+        "```\n\n"
+        "提交后我继续执行。"
+    )
+
+    stripped, schema = SessionService._extract_a2ui_schema_from_text(text)
+
+    assert schema is not None
+    assert schema["root"]["component"] == "schema_form"
+    assert "```a2ui" not in stripped
+    assert "请补充以下信息" in stripped
+    assert "提交后我继续执行" in stripped
+
+
+def test_extract_a2ui_schema_from_text_ignores_invalid_payload():
+    text = "```a2ui\n{not valid json}\n```"
+
+    stripped, schema = SessionService._extract_a2ui_schema_from_text(text)
+
+    assert schema is None
+    assert stripped == text
 
 
 def test_reportable_tool_result_accepts_successful_document_reads():
@@ -463,7 +490,7 @@ def test_run_with_agent_retries_once_after_incomplete_final_response(tmp_path, m
     )
     monkeypatch.setattr("src.session.service.ensure_runtime_env", lambda: None)
     monkeypatch.setattr("src.session.service.get_hermes_agent_kwargs", lambda: {})
-    monkeypatch.setattr("src.session.service.build_session_runtime_prompt", lambda *args: "")
+    monkeypatch.setattr("src.session.service.build_session_runtime_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr("src.session.service.is_backtest_prompt", lambda prompt: False)
     monkeypatch.delenv("TERMINAL_CWD", raising=False)
 

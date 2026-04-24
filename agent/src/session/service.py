@@ -85,6 +85,10 @@ _SKILL_NAME_RE = re.compile(
     r"(?:add|install)\s+(?:--[a-z-]+\s+)*([a-z0-9][a-z0-9._/-]*|https?://[^\s]+?)(?:\s|$)",
     re.IGNORECASE,
 )
+_A2UI_FENCE_RE = re.compile(
+    r"```a2ui\s*(\{[\s\S]*?\})\s*```",
+    re.IGNORECASE,
+)
 
 
 def _is_terminal_skills_install_command(command: str) -> bool:
@@ -1114,6 +1118,35 @@ class SessionService:
             for pattern in _INCOMPLETE_CONTINUATION_PATTERNS
         )
 
+    @staticmethod
+    def _extract_a2ui_schema_from_text(text: str) -> tuple[str, Optional[Dict[str, Any]]]:
+        """Extract one fenced ```a2ui JSON block from assistant text when present."""
+        raw_text = str(text or "")
+        match = _A2UI_FENCE_RE.search(raw_text)
+        if not match:
+            return raw_text, None
+
+        json_payload = (match.group(1) or "").strip()
+        if not json_payload:
+            return raw_text, None
+
+        try:
+            parsed = json.loads(json_payload)
+        except Exception:
+            return raw_text, None
+
+        if not isinstance(parsed, dict):
+            return raw_text, None
+
+        has_root = isinstance(parsed.get("root"), dict)
+        has_nodes = isinstance(parsed.get("nodes"), list)
+        has_blocks = isinstance(parsed.get("blocks"), list)
+        if not (has_root or has_nodes or has_blocks):
+            return raw_text, None
+
+        stripped = (raw_text[: match.start()] + raw_text[match.end() :]).strip()
+        return stripped, parsed
+
     async def _run_attempt(self, session: Session, attempt: Attempt) -> None:
         """Execute an Attempt in the background."""
         attempt.mark_running()
@@ -1159,6 +1192,9 @@ class SessionService:
             reply_metadata["status"] = attempt.status.value
             if attempt.metrics:
                 reply_metadata["metrics"] = attempt.metrics
+            ui_schema = result.get("ui_schema")
+            if isinstance(ui_schema, dict):
+                reply_metadata["ui_schema"] = ui_schema
 
             reply = Message(
                 session_id=session.session_id, role="assistant",
@@ -1639,6 +1675,7 @@ class SessionService:
                     "run_id": run_dir.name,
                 }
             else:
+                final_text, ui_schema = self._extract_a2ui_schema_from_text(final_text)
                 # Persist assistant markdown for every successful response so the
                 # run directory always has a user-visible report artifact.
                 if final_text:
@@ -1652,6 +1689,8 @@ class SessionService:
                     "run_dir": str(run_dir),
                     "run_id": run_dir.name,
                 }
+                if ui_schema:
+                    result["ui_schema"] = ui_schema
         except Exception as exc:
             logger.error("[%s] agent exception in run_dir=%s: %s", sid[:8], run_dir, exc, exc_info=True)
             state_store.mark_failure(run_dir, str(exc))
