@@ -36,8 +36,9 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "call skill_view(name=...) first" in prompt
     assert "load_skill(\"strategy-generate\")" not in prompt
     assert "use skill_manage instead of terminal commands or general file-editing tools" in prompt
+    assert "if the user asks for a global install, admin-home install, or user-level skill install" in prompt
     assert "active workspace HERMES_HOME/skills directory" in prompt
-    assert "Never run `skills add`, `npx skills`, or any `--global` skill install command" in prompt
+    assert "Never run `skills add`, `skills install`, or `npx skills` in terminal sessions" in prompt
     assert "Never install skills to `~/.agents/skills`" in prompt
     assert "relative .hermes/skills paths resolve inside the active run/artifacts sandbox" in prompt
     assert "use python3 from the preconfigured session environment" in prompt

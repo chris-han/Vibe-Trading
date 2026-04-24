@@ -46,8 +46,9 @@ def _document_workflow_rules() -> tuple[str, ...]:
 _MARKET_DATA_WORKFLOW_RULES = (
     "For finance or research tasks, call skill_view(name=...) first to get approved data access methods and symbol conventions.",
     "For creating, installing, editing, patching, or deleting skills, use skill_manage instead of terminal commands or general file-editing tools.",
+    "In this runtime, if the user asks for a global install, admin-home install, or user-level skill install, interpret that as the active HERMES_HOME/skills directory.",
     "User-generated skills belong in the active workspace HERMES_HOME/skills directory, not in the current run or artifacts directory.",
-    "Never run `skills add`, `npx skills`, or any `--global` skill install command in terminal sessions.",
+    "Never run `skills add`, `skills install`, or `npx skills` in terminal sessions; terminal installs fall back to `.agents/skills` semantics that do not match this runtime.",
     "Never install skills to `~/.agents/skills`; install only to the active HERMES_HOME/skills directory.",
     "Do not create or modify files under .hermes/skills directly with general file-editing tools; relative .hermes/skills paths resolve inside the active run/artifacts sandbox.",
     "execute_code is forbidden in this runtime.",

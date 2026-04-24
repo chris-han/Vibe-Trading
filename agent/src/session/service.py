@@ -54,6 +54,12 @@ _INCOMPLETE_RESPONSE_KEYWORDS = (
     "初始化",
 )
 
+_INCOMPLETE_RESPONSE_RETRY_PROMPT = (
+    "Your previous response stopped before completing the requested action. "
+    "Continue from the next concrete step now. Do not restate prior progress, "
+    "and do not end with a planning sentence such as 'let me ...'."
+)
+
 _FILE_MUTATION_TOOL_NAMES = {
     "write_file",
     "edit_file",
@@ -68,20 +74,25 @@ _SKILLS_GLOBAL_FLAG_RE = re.compile(r"(^|\s)--global(\s|$)|(^|\s)-[a-z]*g[a-z]*(
 _TERMINAL_GUARD_PATCH_ATTR = "_semantier_global_skills_guard_patched"
 
 
-def _has_forbidden_global_skills_flags(command: str) -> bool:
-    """Return True when command attempts global skills installation."""
+def _is_terminal_skills_install_command(command: str) -> bool:
+    """Return True when command shells out to external skills install flows."""
     if not isinstance(command, str):
         return False
     normalized = " ".join(command.strip().split())
     if not normalized:
         return False
-    if _SKILLS_INSTALL_RE.search(normalized) is None:
+    return _SKILLS_INSTALL_RE.search(normalized) is not None
+
+
+def _has_forbidden_global_skills_flags(command: str) -> bool:
+    """Return True when command attempts explicit global skills installation."""
+    if not _is_terminal_skills_install_command(command):
         return False
-    return _SKILLS_GLOBAL_FLAG_RE.search(normalized) is not None
+    return _SKILLS_GLOBAL_FLAG_RE.search(" ".join(command.strip().split())) is not None
 
 
 def _blocked_global_skills_install_message(active_hermes_home: Optional[Path]) -> str:
-    """Build deterministic error text for blocked global skills installs."""
+    """Build deterministic error text for blocked terminal skill installs."""
     configured = (os.getenv("HERMES_HOME") or "").strip()
     if configured:
         target_dir = f"{configured.rstrip('/')}/skills"
@@ -90,14 +101,15 @@ def _blocked_global_skills_install_message(active_hermes_home: Optional[Path]) -
     else:
         target_dir = "HERMES_HOME/skills"
     return (
-        "Blocked: global skills installation is disabled in this runtime. "
-        "Do not use --global/-g with skills add/install. "
-        f"Install skills into the active workspace/admin directory: {target_dir}."
+        "Blocked: terminal-driven skills installation is disabled in this runtime. "
+        "In this runtime, any user request for a global/admin-home skill install resolves to the active HERMES_HOME/skills directory. "
+        "Do not run skills add/install via terminal, with or without --global/-g. "
+        f"Use the skills toolchain and target: {target_dir}."
     )
 
 
 def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -> None:
-    """Patch terminal adapter in wrapper process to block global skills install flags."""
+    """Patch terminal adapter in wrapper process to block shell-based skill installs."""
     try:
         from tools import terminal_tool as terminal_tool_module
     except Exception:
@@ -109,7 +121,7 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
     original_terminal_tool = terminal_tool_module.terminal_tool
 
     def _guarded_terminal_tool(command: str, *args: Any, **kwargs: Any) -> str:
-        if _has_forbidden_global_skills_flags(command):
+        if _is_terminal_skills_install_command(command):
             return json.dumps(
                 {
                     "output": "",
@@ -1206,32 +1218,55 @@ class SessionService:
         try:
             loop = asyncio.get_event_loop()
             run_context = contextvars.copy_context()
-            raw = await loop.run_in_executor(
-                _AGENT_EXECUTOR,
-                lambda: run_context.run(
-                    lambda: agent.run_conversation(
-                        user_message=attempt.prompt,
-                        conversation_history=history,
-                        task_id=sid,
-                    )
-                ),
-            )
-            final_text = (raw.get("final_response") or "").strip()
-            if not final_text and latest_useful_tool_output:
-                final_text = latest_useful_tool_output.strip()
-                logger.info(
-                    "[%s] using tool-result fallback for empty final response",
-                    sid[:8],
+
+            async def _run_turn(user_message: str, conversation_history: list[Dict[str, Any]]) -> Dict[str, Any]:
+                return await loop.run_in_executor(
+                    _AGENT_EXECUTOR,
+                    lambda: run_context.run(
+                        lambda: agent.run_conversation(
+                            user_message=user_message,
+                            conversation_history=conversation_history,
+                            task_id=sid,
+                        )
+                    ),
                 )
-            incomplete_final_text = self._looks_incomplete_final_response(final_text)
-            if incomplete_final_text and latest_useful_tool_output and saw_successful_file_mutation and not is_backtest_task:
+
+            def _normalize_final_text(raw_response: Dict[str, Any]) -> tuple[str, bool]:
+                resolved_text = (raw_response.get("final_response") or "").strip()
+                if not resolved_text and latest_useful_tool_output:
+                    logger.info(
+                        "[%s] using tool-result fallback for empty final response",
+                        sid[:8],
+                    )
+                    return latest_useful_tool_output.strip(), False
+
+                is_incomplete = self._looks_incomplete_final_response(resolved_text)
+                if is_incomplete and latest_useful_tool_output and saw_successful_file_mutation and not is_backtest_task:
+                    logger.warning(
+                        "[%s] using file-tool fallback for incomplete final response: %s",
+                        sid[:8],
+                        resolved_text[:200],
+                    )
+                    return latest_useful_tool_output.strip(), False
+
+                return resolved_text, is_incomplete
+
+            raw = await _run_turn(attempt.prompt, history)
+            final_text, incomplete_final_text = _normalize_final_text(raw)
+
+            if incomplete_final_text and not is_backtest_task:
                 logger.warning(
-                    "[%s] using file-tool fallback for incomplete final response: %s",
+                    "[%s] retrying once after incomplete final response: %s",
                     sid[:8],
                     final_text[:200],
                 )
-                final_text = latest_useful_tool_output.strip()
-                incomplete_final_text = False
+                retry_history = [
+                    *history,
+                    {"role": "assistant", "content": final_text},
+                    {"role": "user", "content": _INCOMPLETE_RESPONSE_RETRY_PROMPT},
+                ]
+                raw = await _run_turn(_INCOMPLETE_RESPONSE_RETRY_PROMPT, retry_history)
+                final_text, incomplete_final_text = _normalize_final_text(raw)
 
             if incomplete_final_text:
                 incomplete_final_response = True

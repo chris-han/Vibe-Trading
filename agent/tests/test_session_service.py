@@ -85,7 +85,7 @@ def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
     assert captured['hermes_home'] == str(hermes_home)
     assert register_calls
     assert register_calls[-1]['safe_write_root'] == str(tmp_path / 'runs' / 'run-1')
-    assert register_calls[-1]['env'] == {'HERMES_HOME': str(hermes_home)}
+    assert 'env' not in register_calls[-1]
 
 
 
@@ -252,6 +252,18 @@ def test_format_result_message_keeps_failure_text_and_report_link(tmp_path):
     assert '[Full report](/runs/20260422_010101_bb22)' in result
 
 
+def test_wrapper_guard_detects_terminal_skill_install_commands():
+    assert session_service_module._is_terminal_skills_install_command(
+        "npx -y skills add https://open.feishu.cn --skill -y"
+    )
+    assert session_service_module._is_terminal_skills_install_command(
+        "npx skills install https://open.feishu.cn -yg"
+    )
+    assert not session_service_module._is_terminal_skills_install_command(
+        "npx skills list -g"
+    )
+
+
 def test_wrapper_guard_detects_global_skills_flags():
     assert session_service_module._has_forbidden_global_skills_flags(
         "npx -y skills add https://open.feishu.cn --skill -y --global"
@@ -270,5 +282,97 @@ def test_wrapper_guard_message_uses_active_hermes_home(monkeypatch, tmp_path):
 
     message = session_service_module._blocked_global_skills_install_message(hermes_home)
 
-    assert "--global/-g" in message
+    assert "global/admin-home skill install resolves to the active HERMES_HOME/skills directory" in message
+    assert "with or without --global/-g" in message
     assert f"{hermes_home}/skills" in message
+
+
+def test_run_with_agent_retries_once_after_incomplete_final_response(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    hermes_home = tmp_path / "workspace" / ".hermes"
+    hermes_home.mkdir(parents=True)
+
+    captured_calls: list[dict[str, object]] = []
+
+    fake_run_agent = types.ModuleType("run_agent")
+
+    class FakeAIAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def run_conversation(self, **kwargs):
+            captured_calls.append(
+                {
+                    "user_message": kwargs.get("user_message"),
+                    "conversation_history": list(kwargs.get("conversation_history") or []),
+                }
+            )
+            if len(captured_calls) == 1:
+                return {
+                    "final_response": "The CLI is installed. Now let me install the CLI SKILL as required:",
+                }
+            return {
+                "final_response": "Installed the CLI skill successfully.",
+            }
+
+    fake_run_agent.AIAgent = FakeAIAgent
+    monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
+
+    fake_state_module = types.ModuleType("src.core.state")
+
+    class FakeRunStateStore:
+        def create_run_dir(self, runs_dir):
+            run_dir = runs_dir / "run-1"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
+
+        def save_request(self, run_dir, prompt, metadata):
+            return None
+
+        def mark_success(self, run_dir):
+            return None
+
+        def mark_failure(self, run_dir, reason):
+            return None
+
+    fake_state_module.RunStateStore = FakeRunStateStore
+    monkeypatch.setitem(sys.modules, "src.core.state", fake_state_module)
+
+    monkeypatch.setattr(
+        "src.session.service.prepare_hermes_project_context",
+        lambda chdir=False: repo_root,
+    )
+    monkeypatch.setattr("src.session.service.ensure_runtime_env", lambda: None)
+    monkeypatch.setattr("src.session.service.get_hermes_agent_kwargs", lambda: {})
+    monkeypatch.setattr("src.session.service.build_session_runtime_prompt", lambda *args: "")
+    monkeypatch.setattr("src.session.service.is_backtest_prompt", lambda prompt: False)
+    monkeypatch.delenv("TERMINAL_CWD", raising=False)
+
+    monkeypatch.setattr("tools.terminal_tool.register_task_env_overrides", lambda _task_id, overrides: None)
+    monkeypatch.setattr("tools.terminal_tool.clear_task_env_overrides", lambda _task_id: None)
+
+    store = SessionStore(tmp_path / "sessions")
+    event_bus = EventBus()
+    service = SessionService(
+        store=store,
+        event_bus=event_bus,
+        runs_dir=tmp_path / "runs",
+        hermes_home=hermes_home,
+    )
+    session = service.create_session(config={"sandbox_role": "regular_user"})
+    attempt = Attempt(session_id=session.session_id, prompt="install Feishu CLI skill")
+
+    result = asyncio.run(service._run_with_agent(attempt, messages=[]))
+
+    assert result["status"] == "success"
+    assert result["content"] == "Installed the CLI skill successfully."
+    assert len(captured_calls) == 2
+    assert captured_calls[1]["user_message"] == session_service_module._INCOMPLETE_RESPONSE_RETRY_PROMPT
+    assert captured_calls[1]["conversation_history"][-2] == {
+        "role": "assistant",
+        "content": "The CLI is installed. Now let me install the CLI SKILL as required:",
+    }
+    assert captured_calls[1]["conversation_history"][-1] == {
+        "role": "user",
+        "content": session_service_module._INCOMPLETE_RESPONSE_RETRY_PROMPT,
+    }

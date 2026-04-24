@@ -858,3 +858,101 @@ failed_trajectories.jsonl
 * trajectory 开关读取顺序为 `SAVE_TRAJECTORIES` -> `HERMES_SAVE_TRAJECTORIES`（取第一个显式布尔值）。
 * 轨迹写入路径始终锚定到 `HERMES_HOME`，不随工作目录漂移。
 
+## ---
+
+**11. Bash Tool PTY 增强（Interactive Login Auto-PTY，已实现）**
+
+本节记录 `agent/src/tools/bash_tool.py` 的增强：当命令属于交互式登录/鉴权流程时，wrapper 会自动启用 PTY（pseudo-terminal），使 WebUI 发起的登录体验与原生 CLI 保持一致。
+
+### **11.1 背景与问题定义**
+
+在浏览器会话（WebUI）中，Agent 通过 bash tool 执行登录命令时，默认是非 PTY 子进程。许多 CLI（如 `lark-cli`、`gh`、`firebase`）在无 TTY 环境下会出现：
+
+* 链接打印后阻塞等待，且回调状态不稳定；
+* 交互提示不可见或行为退化；
+* 与用户在真实终端中的行为不一致。
+
+目标是让“WebUI 发起命令”在交互登录场景中具备与终端一致的 TTY 语义。
+
+### **11.2 设计目标**
+
+* **自动化**：对常见交互登录命令自动开启 PTY，无需调用方显式配置。
+* **安全边界清晰**：仅对交互登录类命令触发，不扩大到普通查询命令。
+* **可观测**：输出 JSON 中暴露 `used_pty`，便于排障。
+* **兼容性**：保留显式参数 `pty` / `timeout_seconds`，与已有调用方兼容。
+
+### **11.3 已实现行为（Custom Code）**
+
+文件：`agent/src/tools/bash_tool.py`
+
+**① 新增 PTY 执行路径**
+
+* 新增 `_run_with_pty(...)`：使用 `pty.openpty()` + `subprocess.Popen(...)` + `select.select(...)` 循环读取输出。
+* PTY 模式将 stdout/stderr 合流（TTY 语义），超时或退出后返回统一 JSON。
+
+**② 自动识别交互登录命令**
+
+* 新增 `_should_force_pty_for_command(...)`：
+    * 显式匹配（兼容 Feishu）：
+        * `lark-cli config init --new`
+        * `lark-cli auth login ...`
+        * `npx @larksuite/cli config init --new`
+        * `npx @larksuite/cli auth login ...`
+    * 通用 token 规则：匹配 `login/signin/auth/oauth/sso` 及 `*-login`、`*-auth`。
+    * 负向约束：若窗口内出现 `status/list/whoami/doctor/help/-h/--help`，则不强制 PTY。
+
+**③ 超时策略升级**
+
+* 普通命令默认超时：`120s`。
+* 交互登录自动 PTY 命令默认超时：`300s`。
+* 新增 `timeout_seconds` 参数（上限 `1800s`）支持调用方覆盖。
+
+**④ 超时输出保留**
+
+* 非 PTY 超时场景，保留 `TimeoutExpired` 的部分 stdout/stderr（例如登录 URL）。
+* 返回中统一包含：`status/error/stdout/stderr/used_pty`。
+
+**⑤ PTY 环境变量与窗口大小配置**
+
+* **TERM 环境变量**：设置为 `xterm-256color` 以确保 CLI 工具的 TTY 检测顺利通过。许多交互式 CLI 不仅检查 `isatty()`，还检查 `$TERM` 变量。
+* **PTY 窗口大小**：通过 `fcntl.ioctl(TIOCSWINSZ)` 设置 PTY 为 24×80 尺寸，使 CLI 工具检测到真实的终端尺寸。
+  - 实现位置：`bash_tool.py` 中的 `_set_pty_size()` 函数。
+  - 调用时机：进程创建后、关闭 slave FD 后立即调用。
+
+这两项配置确保 Feishu `lark-cli config init --new` 等工具在 WebUI 的伪终端中能够正确识别 TTY 环境，避免"requires a terminal for interactive mode"错误。
+
+### **11.4 行为边界（Non-Goals）**
+
+* 不将所有命令切换到 PTY；仅作用于交互登录类命令。
+* 不在 bash tool 层自动“判定登录成功”（例如不隐式执行 `auth status`）。
+* 不改变上层会话编排语义（SessionService 事件流保持不变）。
+
+### **11.5 测试与回归锁定**
+
+文件：`agent/tests/test_bash_tool.py`
+
+已覆盖：
+
+* Feishu 命令自动 PTY。
+* 通用登录命令（`gh auth login`、`firebase login`、`oauth/sso`）自动 PTY。
+* 查询类命令（`auth status`、`login --help`）不触发自动 PTY。
+* 超时时保留部分输出。
+* 显式 `pty=True` 路径可正常返回输出。
+
+### **11.6 运维与排障建议**
+
+* 若登录流程在 WebUI 中异常，优先检查工具返回 JSON 的 `used_pty` 是否为 `true`。
+* 对首次配置类命令（会输出授权链接）建议保留默认 300s；若网络慢可显式传 `timeout_seconds`。
+* 若命令属于“仅查询状态”，应避免含有误导 token，或显式设置 `pty=false` 以固定行为。
+
+### **11.7 配置与行为矩阵**
+
+| 命令类型 | 自动 PTY | 默认超时 | 输出特征 |
+| :---- | :---- | :---- | :---- |
+| 交互登录（如 `gh auth login`） | 是 | 300s | `used_pty=true` |
+| Feishu 配置/登录（`lark-cli ...`） | 是 | 300s | `used_pty=true` |
+| 状态查询（如 `auth status`） | 否 | 120s | `used_pty=false` |
+| 普通 shell 命令 | 否（除非显式 `pty=true`） | 120s | `used_pty=false` |
+
+这项增强的核心价值是：**在不改变上层业务协议的前提下，让 WebUI 的登录交互语义对齐真实终端，降低“浏览器里登录不生效/不可见”的运行差异。**
+

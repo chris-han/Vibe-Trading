@@ -1227,3 +1227,18 @@ class TestHermesSwarmWorkerEvents:
         assert runtime_prompt_policy.BACKTEST_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.DOCUMENT_WORKFLOW_PROMPT in prompt
         assert runtime_prompt_policy.MARKET_DATA_WORKFLOW_PROMPT in prompt
+
+    def test_worker_applies_terminal_skills_install_guard(self, tmp_path):
+        from src.swarm.worker import run_worker
+        spec, task = self._make_spec_and_task()
+
+        mock_inst = MagicMock()
+        mock_inst.run_conversation.return_value = {"final_response": "done", "status": "success"}
+        sys.modules["run_agent"].AIAgent = MagicMock(return_value=mock_inst)
+
+        with patch("src.swarm.worker._install_wrapper_terminal_policy_patch") as mock_patch:
+            result = run_worker(spec, task, {}, {"topic": "BTC"}, tmp_path)
+
+        assert result.status == "completed"
+        expected_hermes_home = tmp_path.parents[2] / ".hermes"
+        mock_patch.assert_called_once_with(expected_hermes_home)

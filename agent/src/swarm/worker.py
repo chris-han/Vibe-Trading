@@ -13,6 +13,7 @@ from src.runtime_prompt_policy import (
     DOCUMENT_WORKFLOW_PROMPT,
     MARKET_DATA_WORKFLOW_PROMPT,
 )
+from src.session.service import _install_wrapper_terminal_policy_patch
 from src.swarm.models import (
     SwarmAgentSpec,
     SwarmEvent,
@@ -277,6 +278,7 @@ def run_worker(
 
     ensure_runtime_env()
     agent_kwargs = get_hermes_agent_kwargs()
+    _install_wrapper_terminal_policy_patch(hermes_home)
 
     agent = AIAgent(
         model=agent_spec.model_name or os.getenv("HERMES_MODEL", ""),
