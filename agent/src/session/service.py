@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import shutil
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 from pathlib import Path
@@ -72,6 +73,13 @@ _FILE_MUTATION_TOOL_NAMES = {
 _SKILLS_INSTALL_RE = re.compile(r"\bskills\s+(add|install)\b", re.IGNORECASE)
 _SKILLS_GLOBAL_FLAG_RE = re.compile(r"(^|\s)--global(\s|$)|(^|\s)-[a-z]*g[a-z]*(\s|$)", re.IGNORECASE)
 _TERMINAL_GUARD_PATCH_ATTR = "_semantier_global_skills_guard_patched"
+_INTERACTIVE_LOGIN_COMMAND_HINTS = (
+    "lark-cli config init --new",
+    "lark-cli auth login",
+    "npx @larksuite/cli config init --new",
+    "npx @larksuite/cli auth login",
+)
+_URL_RE = re.compile(r"https?://[^\s)\]>\"']+", re.IGNORECASE)
 # Captures: simple name, category/name, or https URLs (non-greedy word boundary before space/option)
 _SKILL_NAME_RE = re.compile(
     r"(?:add|install)\s+(?:--[a-z-]+\s+)*([a-z0-9][a-z0-9._/-]*|https?://[^\s]+?)(?:\s|$)",
@@ -87,6 +95,77 @@ def _is_terminal_skills_install_command(command: str) -> bool:
     if not normalized:
         return False
     return _SKILLS_INSTALL_RE.search(normalized) is not None
+
+
+def _is_interactive_login_command(command: str) -> bool:
+    """Return True for commands that require browser handoff + terminal polling."""
+    if not isinstance(command, str):
+        return False
+    normalized = " ".join(command.lower().split())
+    if not normalized:
+        return False
+    return any(hint in normalized for hint in _INTERACTIVE_LOGIN_COMMAND_HINTS)
+
+
+def _extract_urls(text: str) -> list[str]:
+    """Extract unique URLs from process output while preserving appearance order."""
+    if not text:
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in _URL_RE.findall(text):
+        candidate = match.rstrip(".,;)")
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            urls.append(candidate)
+    return urls
+
+
+def _build_interactive_login_payload(raw_result: str) -> str:
+    """Attach initial background output and URLs for interactive login commands."""
+    try:
+        payload = json.loads(raw_result)
+    except Exception:
+        return raw_result
+
+    if not isinstance(payload, dict):
+        return raw_result
+
+    session_id = str(payload.get("session_id") or "").strip()
+    if not session_id:
+        return raw_result
+
+    output_preview = ""
+    try:
+        from tools.process_registry import process_registry
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            polled = process_registry.poll(session_id)
+            output_preview = str(polled.get("output_preview") or "").strip()
+            if output_preview:
+                break
+            time.sleep(0.25)
+
+        if not output_preview:
+            log_result = process_registry.read_log(session_id, offset=0, limit=80)
+            output_preview = str(log_result.get("output") or "").strip()
+    except Exception:
+        output_preview = ""
+
+    urls = _extract_urls(output_preview)
+    interactive_meta: Dict[str, Any] = {
+        "mode": "background_pty",
+        "session_id": session_id,
+        "poll_hint": "Use process(action='poll') to stream progress while waiting for browser completion.",
+    }
+    if urls:
+        interactive_meta["verification_urls"] = urls
+    if output_preview:
+        interactive_meta["initial_output"] = output_preview[-3000:]
+
+    payload["interactive_login"] = interactive_meta
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _has_forbidden_global_skills_flags(command: str) -> bool:
@@ -323,6 +402,12 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
                 },
                 ensure_ascii=False,
             )
+        if _is_interactive_login_command(command):
+            forced_kwargs = dict(kwargs)
+            forced_kwargs["pty"] = True
+            forced_kwargs["background"] = True
+            result = original_terminal_tool(command, *args, **forced_kwargs)
+            return _build_interactive_login_payload(result)
         return original_terminal_tool(command, *args, **kwargs)
 
     terminal_tool_module.terminal_tool = _guarded_terminal_tool

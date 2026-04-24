@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import types
 
@@ -494,3 +495,42 @@ def test_run_with_agent_retries_once_after_incomplete_final_response(tmp_path, m
         "role": "user",
         "content": session_service_module._INCOMPLETE_RESPONSE_RETRY_PROMPT,
     }
+
+
+def test_terminal_wrapper_forces_background_pty_for_interactive_login(monkeypatch):
+    terminal_module = __import__("tools.terminal_tool", fromlist=["terminal_tool"])
+    process_module = __import__("tools.process_registry", fromlist=["process_registry"])
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_terminal(command: str, *args, **kwargs):
+        captured_kwargs.clear()
+        captured_kwargs.update(kwargs)
+        return json.dumps({
+            "output": "Background process started",
+            "session_id": "proc_test_123",
+            "exit_code": 0,
+            "error": None,
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(terminal_module, "terminal_tool", _fake_terminal)
+    monkeypatch.setattr(terminal_module, session_service_module._TERMINAL_GUARD_PATCH_ATTR, False, raising=False)
+    monkeypatch.setattr(
+        process_module.process_registry,
+        "poll",
+        lambda _sid: {
+            "status": "running",
+            "output_preview": "Open link: https://open.lark.example/verify?code=abc",
+        },
+    )
+
+    session_service_module._install_wrapper_terminal_policy_patch(active_hermes_home=None)
+
+    result = terminal_module.terminal_tool("lark-cli auth login")
+    payload = json.loads(result)
+
+    assert captured_kwargs["pty"] is True
+    assert captured_kwargs["background"] is True
+    assert payload["session_id"] == "proc_test_123"
+    assert payload["interactive_login"]["session_id"] == "proc_test_123"
+    assert payload["interactive_login"]["verification_urls"] == ["https://open.lark.example/verify?code=abc"]

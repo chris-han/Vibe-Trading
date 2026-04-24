@@ -783,6 +783,7 @@ def _load_workspace_skill_settings(hermes_home: Path) -> tuple[list[Path], set[s
 
 def _skill_source_metadata(skill_dir: Path, workspace_skills_dir: Path, hermes_home: Path, *, is_admin: bool = False) -> dict[str, Any]:
     hermes_builtin_root = (REPO_ROOT / "hermes-agent" / "skills").resolve()
+    shared_builtin_root = (_AGENT_DIR / ".hermes" / "skills" / "builtin").resolve()
     app_shared_root = (REPO_ROOT / "agent" / "src" / "skills").resolve()
 
     if _path_is_within(skill_dir, workspace_skills_dir):
@@ -809,7 +810,7 @@ def _skill_source_metadata(skill_dir: Path, workspace_skills_dir: Path, hermes_h
             "canModify": False,
         }
 
-    if _path_is_within(skill_dir, hermes_builtin_root):
+    if _path_is_within(skill_dir, shared_builtin_root) or _path_is_within(skill_dir, hermes_builtin_root):
         return {
             "sourceTier": "builtin",
             "sourceLabel": "Hermes Built-in",
@@ -1976,6 +1977,76 @@ def _ensure_gateway_health_webhook(hermes_home: Path) -> None:
             logging.getLogger(__name__).warning("Could not inject webhook platform into config.yaml: %s", exc)
 
 
+def _sync_builtin_skills_to_shared_home() -> None:
+    """Copy bundled hermes skills from hermes-agent/skills/ into agent/.hermes/skills/builtin/.
+
+    This runs once at server startup so all workspaces share a single copy of the
+    bundled skills rather than each workspace gateway duplicating them on first launch.
+
+    The source is the hermes-agent/skills/ tree.  The destination is
+    agent/.hermes/skills/builtin/.  Both are gitignored; this function is
+    idempotent and skips individual skills whose destination already matches
+    the source hash (same logic as tools/skills_sync.py but scoped to the
+    shared builtin directory and never per-workspace).
+
+    Workspace gateways are started with HERMES_BUNDLED_SKILLS pointing here
+    so hermes_cli/main.py:sync_skills() reads from this directory and finds
+    it already populated, writing nothing to the per-workspace HERMES_HOME.
+    """
+    import hashlib
+    import shutil
+
+    src_root = (REPO_ROOT / "hermes-agent" / "skills").resolve()
+    dst_root = (_AGENT_DIR / ".hermes" / "skills" / "builtin").resolve()
+
+    if not src_root.exists():
+        return
+
+    dst_root.mkdir(parents=True, exist_ok=True)
+
+    _logger = logging.getLogger(__name__)
+
+    def _dir_hash(directory: Path) -> str:
+        hasher = hashlib.md5()
+        try:
+            for fpath in sorted(directory.rglob("*")):
+                if fpath.is_file():
+                    rel = fpath.relative_to(directory)
+                    hasher.update(str(rel).encode("utf-8"))
+                    hasher.update(fpath.read_bytes())
+        except OSError:
+            pass
+        return hasher.hexdigest()
+
+    copied = updated = skipped = 0
+    for skill_md in sorted(src_root.rglob("SKILL.md")):
+        path_str = str(skill_md)
+        if "/.git/" in path_str or "/.github/" in path_str or "/.hub/" in path_str:
+            continue
+        skill_src = skill_md.parent
+        rel = skill_src.relative_to(src_root)
+        skill_dst = dst_root / rel
+
+        src_hash = _dir_hash(skill_src)
+        if skill_dst.exists():
+            if _dir_hash(skill_dst) == src_hash:
+                skipped += 1
+                continue
+            shutil.rmtree(skill_dst, ignore_errors=True)
+            updated += 1
+        else:
+            copied += 1
+
+        try:
+            skill_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(skill_src, skill_dst)
+        except Exception as exc:
+            _logger.warning("Failed to sync builtin skill %s: %s", rel, exc)
+
+    if copied or updated:
+        _logger.info("Builtin skills synced to %s: %d copied, %d updated, %d skipped", dst_root, copied, updated, skipped)
+
+
 def _start_workspace_hermes_gateway(hermes_home: Path, skip_health_check: bool = False) -> Dict[str, Any]:
     import subprocess
 
@@ -2000,6 +2071,15 @@ def _start_workspace_hermes_gateway(hermes_home: Path, skip_health_check: bool =
     env["PATH"] = (
         f"{agent_dir / '.venv' / 'bin'}:{agent_dir / 'venv' / 'bin'}:{env.get('PATH', '')}"
     )
+    # Prevent the hermes CLI from syncing bundled skills into the per-workspace
+    # HERMES_HOME/skills directory on every gateway launch.  Builtin skills are
+    # installed once into the shared agent/.hermes/skills/builtin/ path at
+    # server startup (see _sync_builtin_skills_to_shared_home) and made
+    # available to all workspaces via the external_dirs config entry.
+    # Pointing HERMES_BUNDLED_SKILLS at a non-existent sentinel causes
+    # tools/skills_sync.py:_get_bundled_dir() to return a missing path, which
+    # makes sync_skills() exit early without copying anything.
+    env["HERMES_BUNDLED_SKILLS"] = str(_AGENT_DIR / ".hermes" / "skills" / "builtin")
 
     proc = subprocess.Popen(
         [python, "-m", "hermes_cli.main", "gateway", "run", "--replace"],
@@ -4457,6 +4537,15 @@ def _start_feishu_websocket(main_loop: asyncio.AbstractEventLoop) -> None:
 @app.on_event("startup")
 async def _feishu_ws_startup() -> None:
     """Launch Feishu WebSocket long-connection client alongside the WebUI at startup."""
+    # Sync bundled skills from hermes-agent/skills/ to agent/.hermes/skills/builtin/
+    # so workspace gateways never need to duplicate them per-workspace.
+    try:
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        loop.run_in_executor(None, _sync_builtin_skills_to_shared_home)
+    except Exception:
+        logging.getLogger(__name__).warning("Failed to schedule builtin skill sync", exc_info=True)
+
     if _FEISHU_CONNECTION_MODE == "websocket" and _FEISHU_APP_ID:
         loop = asyncio.get_running_loop()
         _start_feishu_websocket(loop)

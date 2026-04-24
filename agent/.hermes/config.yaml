@@ -39,7 +39,10 @@ agent:
 skills:
   external_dirs:
     - ${VIBE_TRADING_ROOT}/agent/src/skills
-    - ${VIBE_TRADING_ROOT}/hermes-agent/skills
+    # Shared builtin skills synced from hermes-agent/skills/ at server startup.
+    # All workspaces inherit this path so bundled skills are not duplicated into
+    # each workspace's .hermes/skills/ directory.
+    - ${VIBE_TRADING_ROOT}/agent/.hermes/skills/builtin
 
 fallback_model:
   provider: dashscope
