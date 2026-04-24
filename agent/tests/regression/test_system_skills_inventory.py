@@ -82,7 +82,7 @@ def test_system_skills_reports_three_tiers_with_workspace_mutability(
     assert skills["workspace-gamma"]["canEdit"] is True
 
     assert skills["shared-alpha"]["sourceTier"] == "application"
-    assert skills["shared-alpha"]["canUninstall"] is False
+    assert skills["shared-alpha"]["canUninstall"] is True  # Admin (unauthenticated) can uninstall Semantier skills
     assert skills["shared-alpha"]["canEdit"] is False
 
     assert skills["builtin-beta"]["sourceTier"] == "builtin"

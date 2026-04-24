@@ -733,6 +733,27 @@ def _first_skill_body_line(body: str) -> str:
     return ""
 
 
+def _find_skill_dir_by_name(skill_name: str, root: Path) -> Optional[Path]:
+    """Recursively search *root* for a skill directory whose SKILL.md frontmatter name matches *skill_name*.
+
+    Handles the common case where the directory name differs from the frontmatter name
+    (e.g. directory ``feishu-cli-admin/`` with ``name: feishu-cli`` in frontmatter).
+    Returns the first matching directory, or None if not found.
+    """
+    if not root.exists():
+        return None
+    for skill_file in root.rglob("SKILL.md"):
+        skill_dir = skill_file.parent
+        try:
+            frontmatter, _ = _parse_skill_frontmatter(skill_file)
+            candidate_name = str(frontmatter.get("name") or skill_dir.name).strip()
+        except Exception:
+            candidate_name = skill_dir.name
+        if candidate_name == skill_name or skill_dir.name == skill_name:
+            return skill_dir
+    return None
+
+
 def _path_is_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -760,15 +781,15 @@ def _load_workspace_skill_settings(hermes_home: Path) -> tuple[list[Path], set[s
     return external_dirs, disabled
 
 
-def _skill_source_metadata(skill_dir: Path, workspace_skills_dir: Path) -> dict[str, Any]:
+def _skill_source_metadata(skill_dir: Path, workspace_skills_dir: Path, hermes_home: Path, *, is_admin: bool = False) -> dict[str, Any]:
     hermes_builtin_root = (REPO_ROOT / "hermes-agent" / "skills").resolve()
     app_shared_root = (REPO_ROOT / "agent" / "src" / "skills").resolve()
 
     if _path_is_within(skill_dir, workspace_skills_dir):
         return {
             "sourceTier": "workspace",
-            "sourceLabel": "Workspace",
-            "author": "Workspace",
+            "sourceLabel": "User",
+            "author": "User",
             "icon": "✍️",
             "builtin": False,
             "canEdit": True,
@@ -784,7 +805,7 @@ def _skill_source_metadata(skill_dir: Path, workspace_skills_dir: Path) -> dict[
             "icon": "🧩",
             "builtin": False,
             "canEdit": False,
-            "canUninstall": False,
+            "canUninstall": is_admin,
             "canModify": False,
         }
 
@@ -827,7 +848,7 @@ def _infer_skill_category(frontmatter: dict[str, Any], skill_dir: Path, source_r
     return "Productivity"
 
 
-def _build_workspace_skill_inventory(workspace: WorkspacePaths) -> list[dict[str, Any]]:
+def _build_workspace_skill_inventory(workspace: WorkspacePaths, *, is_admin: bool = False) -> list[dict[str, Any]]:
     workspace_skills_dir = (workspace.hermes_home / "skills").resolve()
     external_dirs, disabled = _load_workspace_skill_settings(workspace.hermes_home)
 
@@ -858,7 +879,7 @@ def _build_workspace_skill_inventory(workspace: WorkspacePaths) -> list[dict[str
             description = str(frontmatter.get("description") or "").strip() or _first_skill_body_line(body)
             tags = _normalize_skill_string_list(frontmatter.get("tags"))
             triggers = _normalize_skill_string_list(frontmatter.get("triggers"))
-            metadata = _skill_source_metadata(skill_dir, workspace_skills_dir)
+            metadata = _skill_source_metadata(skill_dir, workspace_skills_dir, workspace.hermes_home, is_admin=is_admin)
 
             file_count = 0
             try:
@@ -1002,11 +1023,59 @@ def _uninstall_workspace_skill(
     *,
     name: str,
 ) -> dict[str, Any]:
+    """Uninstall a workspace skill.
+
+    This handles:
+    1. Hub-installed skills (stored in the hub lock file)
+    2. Local workspace skills (manually added to .hermes/skills)
+    3. Semantier application skills (only for admin users)
+
+    For local skills that aren't in the hub lock file, we delete them directly.
+    For Semantier skills, we delete them from the shared location.
+    """
     from hermes_cli.web_server import _uninstall_skill_from_hub
+    import shutil
 
     token = set_active_hermes_home(workspace.hermes_home)
     try:
-        return _uninstall_skill_from_hub(name, invalidate_cache=True)
+        # First, try to uninstall via the hub mechanism
+        try:
+            return _uninstall_skill_from_hub(name, invalidate_cache=True)
+        except HTTPException as http_err:
+            # If the hub uninstall fails (e.g., "not a hub-installed skill"),
+            # try to delete it as a local workspace skill or Semantier skill
+            error_detail = str(http_err.detail).lower() if hasattr(http_err, 'detail') else str(http_err).lower()
+            if "not a hub-installed skill" in error_detail or "not found" in error_detail:
+                # Search recursively for SKILL.md files whose frontmatter name matches
+                # (directory name may differ from the skill name in frontmatter)
+                skill_dir = _find_skill_dir_by_name(name, workspace.hermes_home / "skills")
+                if skill_dir is not None:
+                    try:
+                        shutil.rmtree(skill_dir)
+                        return {
+                            "ok": True,
+                            "name": name,
+                            "message": f"Uninstalled '{name}' from workspace skills",
+                        }
+                    except Exception as delete_error:
+                        raise Exception(f"Failed to delete skill directory: {delete_error}")
+
+                # Try Semantier application skill
+                app_shared_root = (REPO_ROOT / "agent" / "src" / "skills").resolve()
+                skill_dir = _find_skill_dir_by_name(name, app_shared_root)
+                if skill_dir is not None:
+                    try:
+                        shutil.rmtree(skill_dir)
+                        return {
+                            "ok": True,
+                            "name": name,
+                            "message": f"Uninstalled Semantier skill '{name}'",
+                        }
+                    except Exception as delete_error:
+                        raise Exception(f"Failed to delete Semantier skill: {delete_error}")
+
+            # If it's a different error or skill not found anywhere, re-raise
+            raise
     finally:
         reset_active_hermes_home(token)
 
@@ -1400,7 +1469,9 @@ async def system_skills(request: Request):
     source-tier and mutability metadata for the workspace UI.
     """
     ctx = _resolve_request_context(request, require_login=False)
-    skills = _build_workspace_skill_inventory(ctx.workspace)
+    # is_admin is True for unauthenticated users (public workspace)
+    is_admin = not ctx.authenticated
+    skills = _build_workspace_skill_inventory(ctx.workspace, is_admin=is_admin)
     categories = sorted({str(skill.get("category") or "") for skill in skills if skill.get("category")})
     return {
         "skills": skills,

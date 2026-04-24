@@ -46,11 +46,15 @@ def _document_workflow_rules() -> tuple[str, ...]:
 _MARKET_DATA_WORKFLOW_RULES = (
     "For finance or research tasks, call skill_view(name=...) first to get approved data access methods and symbol conventions.",
     "For creating, installing, editing, patching, or deleting skills, use skill_manage instead of terminal commands or general file-editing tools.",
+    "When creating multiple skills in a single request, create at most 2 skills per turn, then stop and summarize what was created. Resume creating the remaining skills only when explicitly asked to continue. This prevents output truncation from hitting model token limits.",
+    "This runtime runs on Linux. Supported package managers are: npm/npx, pip, uv pip, uv tool, pnpm, bun, yarn, cargo, go install, apt/apt-get. Do NOT use macOS-only or unsupported package managers (brew, port, pkg, scoop, choco, winget, gem standalone); if a skill or instruction calls for one, reject the step and inform the user it is not supported in this environment.",
+    "Before installing any external CLI tool via a supported package manager (npm install -g, pip install, uv pip install, uv tool install, pnpm add -g, bun add -g, yarn global add, cargo install, go install, apt install), ALWAYS check if the tool is already installed first (e.g. `<tool> --version` or `which <tool>`). If already installed, skip the install step entirely and proceed with configuration.",
+    "If skill_view returns a skill successfully, treat the CLI described in that skill as potentially already installed; verify with a version check before running any package manager install.",
     "In this runtime, if the user asks for a global install, admin-home install, or user-level skill install, interpret that as the active HERMES_HOME/skills directory.",
     "User-generated skills belong in the active workspace HERMES_HOME/skills directory, not in the current run or artifacts directory.",
-    "Never run `skills add`, `skills install`, or `npx skills` in terminal sessions; terminal installs fall back to `.agents/skills` semantics that do not match this runtime.",
-    "Never install skills to `~/.agents/skills`; install only to the active HERMES_HOME/skills directory.",
-    "Do not create or modify files under .hermes/skills directly with general file-editing tools; relative .hermes/skills paths resolve inside the active run/artifacts sandbox.",
+    "Hermes skill registry installation (e.g. `npx skills add`, `skills install`) enforces the upstream override hierarchy: bundled skills > external configured skills > workspace local skills. Terminal Hermes-skill-registry commands and file writes to .agents/skills or HERMES_HOME/skills are blocked by the runtime; use skill_manage tool or skills API endpoint instead. This restriction applies only to Hermes skill management — installing external CLI tools or npm packages via `npm install -g <package>` is a normal terminal operation and is NOT blocked.",
+    "Never install skills to `~/.agents/skills`; all skill installations are restricted to the active HERMES_HOME/skills directory only. To configure custom skill directories, edit external_dirs in ~/.hermes/config.yaml.",
+    "Do not create or modify files under .hermes/skills directly with general file-editing tools; relative .hermes/skills paths resolve inside the active run/artifacts sandbox. Use skill_manage for skill creation and editing.",
     "execute_code is forbidden in this runtime.",
     "Do NOT fetch market data with curl, ad hoc HTTP endpoints, or raw requests scripts.",
     "When you need current news, policy documents, or source pages and the exact URL is not already known, use the Hermes web_search tool first to find the canonical source.",
@@ -110,11 +114,33 @@ def load_output_format_skill(channel: str) -> str:
     return text.strip()
 
 
+_ADMIN_INSTALL_RULES = _format_rules(
+    "System-level install rules (administrator only)",
+    (
+        "This session has administrator privileges.",
+        "System-level package managers (apt/apt-get) are permitted for installing system dependencies.",
+        "Prefer apt-get over apt for non-interactive scripting. Always pass -y to avoid prompts.",
+    ),
+)
+
+_REGULAR_USER_INSTALL_RULES = _format_rules(
+    "Install scope rules (regular user)",
+    (
+        "This session does NOT have administrator privileges.",
+        "System-level package managers (apt, apt-get) are FORBIDDEN. If a task requires them, reject the step and tell the user to ask an administrator.",
+        "Allowed package managers are limited to user-space tools: npm/npx, pip, uv pip, uv tool, pnpm, bun, yarn, cargo, go install — scoped to the active workspace only.",
+        "Do not attempt to install system libraries, kernel modules, or any package requiring root/sudo access.",
+        "For skill and agent tool installation, use skill_manage targeting the workspace HERMES_HOME/skills directory only.",
+    ),
+)
+
+
 def build_session_runtime_prompt(
     run_dir: str,
     session_id: str,
     channel: str,
     *,
+    sandbox_role: str = "regular_user",
     display_workspace_root: str | None = None,
     display_run_dir: str | None = None,
     display_artifacts_dir: str | None = None,
@@ -124,6 +150,7 @@ def build_session_runtime_prompt(
     visible_run_dir = display_run_dir or run_dir
     visible_artifacts_dir = display_artifacts_dir or f"{visible_run_dir.rstrip('/')}/artifacts"
     visible_uploads_dir = f"{visible_workspace_root.rstrip('/')}/sessions/{session_id}/uploads"
+    role_install_rules = _ADMIN_INSTALL_RULES if sandbox_role == "administrator" else _REGULAR_USER_INSTALL_RULES
     return (
         f"Run directory: {visible_run_dir}\n"
         f"Session workspace: {visible_workspace_root}\n"
@@ -134,6 +161,7 @@ def build_session_runtime_prompt(
         "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
         "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"
+        f"{role_install_rules}"
         f"{BACKTEST_WORKFLOW_PROMPT}"
         f"{DOCUMENT_WORKFLOW_PROMPT}"
         f"{MARKET_DATA_WORKFLOW_PROMPT}"

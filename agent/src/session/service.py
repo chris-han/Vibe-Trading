@@ -72,6 +72,11 @@ _FILE_MUTATION_TOOL_NAMES = {
 _SKILLS_INSTALL_RE = re.compile(r"\bskills\s+(add|install)\b", re.IGNORECASE)
 _SKILLS_GLOBAL_FLAG_RE = re.compile(r"(^|\s)--global(\s|$)|(^|\s)-[a-z]*g[a-z]*(\s|$)", re.IGNORECASE)
 _TERMINAL_GUARD_PATCH_ATTR = "_semantier_global_skills_guard_patched"
+# Captures: simple name, category/name, or https URLs (non-greedy word boundary before space/option)
+_SKILL_NAME_RE = re.compile(
+    r"(?:add|install)\s+(?:--[a-z-]+\s+)*([a-z0-9][a-z0-9._/-]*|https?://[^\s]+?)(?:\s|$)",
+    re.IGNORECASE,
+)
 
 
 def _is_terminal_skills_install_command(command: str) -> bool:
@@ -91,8 +96,72 @@ def _has_forbidden_global_skills_flags(command: str) -> bool:
     return _SKILLS_GLOBAL_FLAG_RE.search(" ".join(command.strip().split())) is not None
 
 
-def _blocked_global_skills_install_message(active_hermes_home: Optional[Path]) -> str:
-    """Build deterministic error text for blocked terminal skill installs."""
+def _extract_skill_name_from_command(command: str) -> Optional[str]:
+    """Extract the skill name/identifier from a terminal skills install command.
+    
+    Returns the name (e.g., 'feishu-cli') or URL if present, None otherwise.
+    """
+    normalized = " ".join(command.strip().split())
+    match = _SKILL_NAME_RE.search(normalized)
+    return match.group(1) if match else None
+
+
+def _find_skill_in_hermes_home(skill_name: str, hermes_home: Optional[Path]) -> Optional[Path]:
+    """Check if a skill exists in the workspace HERMES_HOME/skills directory.
+    
+    Searches by directory name and respects the tool override hierarchy
+    (workspace > external > bundled). Returns the skill directory path if found.
+    
+    Args:
+        skill_name: Name to search for (e.g., 'feishu-cli', 'productivity/feishu-cli')
+        hermes_home: Workspace HERMES_HOME path
+    
+    Returns:
+        Path to skill directory if found, None otherwise.
+    """
+    if hermes_home is None:
+        return None
+    
+    skills_dir = hermes_home / "skills"
+    if not skills_dir.exists():
+        return None
+    
+    # Extract base name (e.g., 'feishu-cli' from 'productivity/feishu-cli')
+    base_name = skill_name.rsplit("/", 1)[-1] if "/" in skill_name else skill_name
+    base_name = base_name.strip().lower()
+    
+    if not base_name:
+        return None
+    
+    # Search local skills directory recursively
+    try:
+        for skill_md in skills_dir.rglob("SKILL.md"):
+            if skill_md.parent.name.lower() == base_name:
+                return skill_md.parent
+    except (OSError, PermissionError):
+        pass
+    
+    return None
+
+
+def _blocked_global_skills_install_message(
+    active_hermes_home: Optional[Path],
+    skill_name: Optional[str] = None,
+    existing_skill_path: Optional[Path] = None,
+) -> str:
+    """Build deterministic error text for blocked terminal skill installs.
+    
+    Checks if the skill already exists in the workspace and provides
+    appropriate messaging based on the tool override hierarchy.
+    
+    Args:
+        active_hermes_home: Active workspace HERMES_HOME
+        skill_name: Extracted skill name from the command
+        existing_skill_path: Path to existing skill if found
+    
+    Returns:
+        Error message for terminal blocking.
+    """
     configured = (os.getenv("HERMES_HOME") or "").strip()
     if configured:
         target_dir = f"{configured.rstrip('/')}/skills"
@@ -100,6 +169,19 @@ def _blocked_global_skills_install_message(active_hermes_home: Optional[Path]) -
         target_dir = f"{str(active_hermes_home).rstrip('/')}/skills"
     else:
         target_dir = "HERMES_HOME/skills"
+    
+    # If skill exists, provide location-aware message
+    if existing_skill_path is not None:
+        relative_path = existing_skill_path.relative_to(
+            active_hermes_home / "skills" if active_hermes_home else existing_skill_path
+        ) if active_hermes_home else existing_skill_path
+        return (
+            f"Skill '{skill_name or 'requested'}' is already installed at workspace location: "
+            f"skills/{relative_path}.\n"
+            "Terminal-driven skills installation is disabled in this runtime. "
+            f"To reinstall, use the API endpoint with force=true, or remove and reinstall via the skills toolchain."
+        )
+    
     return (
         "Blocked: terminal-driven skills installation is disabled in this runtime. "
         "In this runtime, any user request for a global/admin-home skill install resolves to the active HERMES_HOME/skills directory. "
@@ -108,8 +190,67 @@ def _blocked_global_skills_install_message(active_hermes_home: Optional[Path]) -
     )
 
 
+def _is_prohibited_skills_path(command: str) -> bool:
+    """Check if command targets prohibited skills paths.
+    
+    Prohibited paths:
+    - ~/.agents/skills (legacy path not supported in this runtime)
+    - .agents/skills (relative variant)
+    
+    Returns True if a prohibited path is detected in the command.
+    """
+    normalized = command.lower()
+    return ".agents/skills" in normalized or "~/.agents/skills" in normalized
+
+
+def _find_skill_in_upstream_scope(skill_name: str) -> Optional[Path]:
+    """Check if a skill exists in bundled or external skills directories.
+    
+    Upstream scope = bundled skills + configured external skills directories.
+    These take precedence over local workspace skills.
+    
+    Args:
+        skill_name: Name to search for (e.g., 'feishu-cli', 'productivity/feishu-cli')
+    
+    Returns:
+        Path to skill directory if found in upstream, None otherwise.
+    """
+    try:
+        from agent.skill_utils import get_external_skills_dirs
+    except ImportError:
+        return None
+    
+    base_name = skill_name.rsplit("/", 1)[-1] if "/" in skill_name else skill_name
+    base_name = base_name.strip().lower()
+    
+    if not base_name:
+        return None
+    
+    # Check external skills directories first
+    try:
+        for ext_dir in get_external_skills_dirs():
+            if ext_dir.exists():
+                for skill_md in ext_dir.rglob("SKILL.md"):
+                    if skill_md.parent.name.lower() == base_name:
+                        return skill_md.parent
+    except (OSError, PermissionError):
+        pass
+    
+    return None
+
+
 def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -> None:
-    """Patch terminal adapter in wrapper process to block shell-based skill installs."""
+    """Patch terminal adapter to enforce skill installation hierarchy.
+    
+    Checks for skills in upstream scope (bundled/external). If a skill exists
+    upstream, local installation is blocked to respect the override hierarchy:
+    - Bundled skills (cannot override)
+    - External skills (cannot override)
+    - Workspace local skills (can be installed if not in upstream)
+    
+    Checks for existing skills and provides appropriate messaging based on
+    the tool override hierarchy.
+    """
     try:
         from tools import terminal_tool as terminal_tool_module
     except Exception:
@@ -122,11 +263,62 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
 
     def _guarded_terminal_tool(command: str, *args: Any, **kwargs: Any) -> str:
         if _is_terminal_skills_install_command(command):
+            # Check for prohibited skills paths first
+            if _is_prohibited_skills_path(command):
+                error_msg = (
+                    "Installation to ~/.agents/skills or .agents/skills is not supported in this runtime. "
+                    "Install skills to the active HERMES_HOME/skills directory instead. "
+                    "For custom skill locations, configure external_dirs in ~/.hermes/config.yaml."
+                )
+                return json.dumps(
+                    {
+                        "output": "",
+                        "exit_code": -1,
+                        "error": error_msg,
+                        "status": "blocked",
+                    },
+                    ensure_ascii=False,
+                )
+            
+            # Extract skill name and check upstream scope
+            skill_name = _extract_skill_name_from_command(command)
+            upstream_skill = None
+            if skill_name:
+                upstream_skill = _find_skill_in_upstream_scope(skill_name)
+            
+            # If skill exists in upstream, block local installation
+            if upstream_skill is not None:
+                error_msg = (
+                    f"Skill '{skill_name or 'requested'}' already exists in upstream scope "
+                    f"(bundled or external skills). Upstream skills override local installations. "
+                    f"To use a different version, configure external_dirs in ~/.hermes/config.yaml "
+                    f"to change the skill lookup order."
+                )
+                return json.dumps(
+                    {
+                        "output": "",
+                        "exit_code": -1,
+                        "error": error_msg,
+                        "status": "blocked",
+                    },
+                    ensure_ascii=False,
+                )
+            
+            # Check local workspace scope
+            existing_skill = None
+            if skill_name:
+                existing_skill = _find_skill_in_hermes_home(skill_name, active_hermes_home)
+            
+            error_msg = _blocked_global_skills_install_message(
+                active_hermes_home,
+                skill_name=skill_name,
+                existing_skill_path=existing_skill,
+            )
             return json.dumps(
                 {
                     "output": "",
                     "exit_code": -1,
-                    "error": _blocked_global_skills_install_message(active_hermes_home),
+                    "error": error_msg,
                     "status": "blocked",
                 },
                 ensure_ascii=False,
@@ -135,6 +327,83 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
 
     terminal_tool_module.terminal_tool = _guarded_terminal_tool
     setattr(terminal_tool_module, _TERMINAL_GUARD_PATCH_ATTR, True)
+
+
+_FILE_TOOLS_GUARD_PATCH_ATTR = "_semantier_file_tools_skills_guard_patched"
+
+
+def _install_wrapper_file_policy_patch(active_hermes_home: Optional[Path]) -> None:
+    """Patch file_tools write/patch adapters to block writes to .agents/skills paths.
+
+    The upstream hermes-agent runtime does not enforce this boundary, so the
+    wrapper applies it here.  Any write_file or patch call whose target path
+    contains '.agents/skills' is rejected with a message that directs the
+    agent to the workspace-specific HERMES_HOME/skills directory and its
+    accompanying config.yaml.
+    """
+    try:
+        from tools import file_tools as file_tools_module
+    except Exception:
+        return
+
+    if getattr(file_tools_module, _FILE_TOOLS_GUARD_PATCH_ATTR, False):
+        return
+
+    config_yaml_hint = (
+        f"{active_hermes_home}/config.yaml" if active_hermes_home else "HERMES_HOME/config.yaml"
+    )
+    skills_dir_hint = (
+        f"{active_hermes_home}/skills" if active_hermes_home else "HERMES_HOME/skills"
+    )
+
+    def _blocked_file_write_response(filepath: str) -> str:
+        return json.dumps(
+            {
+                "error": (
+                    f"Writing to .agents/skills is not supported in this runtime: {filepath}\n"
+                    f"Install skills to {skills_dir_hint} instead. "
+                    f"For custom skill locations, configure external_dirs in {config_yaml_hint}."
+                ),
+                "status": "blocked",
+            },
+            ensure_ascii=False,
+        )
+
+    def _targets_prohibited_skills_path(filepath: str) -> bool:
+        try:
+            normalized = os.path.normpath(os.path.expanduser(filepath))
+            resolved = os.path.realpath(os.path.expanduser(filepath))
+        except (OSError, ValueError):
+            normalized = filepath
+            resolved = filepath
+        return ".agents/skills" in normalized or ".agents/skills" in resolved
+
+    original_write_file = file_tools_module.write_file_tool
+    original_patch = file_tools_module.patch_tool
+
+    def _guarded_write_file(path: str, content: str, *args: Any, **kwargs: Any) -> str:
+        if _targets_prohibited_skills_path(path):
+            return _blocked_file_write_response(path)
+        return original_write_file(path, content, *args, **kwargs)
+
+    def _guarded_patch(mode: str = "replace", path: str = None, *args: Any, **kwargs: Any) -> str:
+        if path and _targets_prohibited_skills_path(path):
+            return _blocked_file_write_response(path)
+        # For V4A patch mode, extract target paths from the patch string
+        patch_str = kwargs.get("patch") or (args[3] if len(args) > 3 else None)
+        if mode == "patch" and patch_str:
+            import re as _re
+            for _m in _re.finditer(
+                r'^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$', patch_str, _re.MULTILINE
+            ):
+                if _targets_prohibited_skills_path(_m.group(1).strip()):
+                    return _blocked_file_write_response(_m.group(1).strip())
+        return original_patch(mode, path, *args, **kwargs)
+
+    file_tools_module.write_file_tool = _guarded_write_file
+    file_tools_module.patch_tool = _guarded_patch
+    setattr(file_tools_module, _FILE_TOOLS_GUARD_PATCH_ATTR, True)
+
 
 # Dedicated thread pool limited to four concurrent agents to avoid exhausting the default executor.
 _AGENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent")
@@ -907,6 +1176,7 @@ class SessionService:
             else None
         )
         _install_wrapper_terminal_policy_patch(self.hermes_home)
+        _install_wrapper_file_policy_patch(self.hermes_home)
         latest_prepared_run_dir: str | None = None
         latest_backtest_run_dir: str | None = None
         latest_useful_tool_output: str | None = None
@@ -1175,6 +1445,7 @@ class SessionService:
                 str(run_dir),
                 sid,
                 active_session.config.get("channel", ""),
+                sandbox_role=sandbox_role,
             ),
             skip_context_files=True,
             **agent_kwargs,
