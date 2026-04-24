@@ -80,6 +80,7 @@ OUTPUT_FORMAT_PROMPT = _format_rules(
     (
         "Prefer Markdown, Mermaid, and structured chart blocks for rich visual output.",
         "When asking users for multiple structured inputs, emit one fenced ```a2ui JSON block with a root component 'schema_form' and props.fields (key, label, type, required, placeholder), then provide brief plain-language guidance.",
+        "If the active skill defines an explicit A2UI/schema_form contract for missing inputs, follow that schema exactly instead of inventing new field labels or paraphrasing instruction text into fields.",
         "Render tables as Markdown pipe-tables.",
         "Use Mermaid for diagrams and flowcharts.",
         "For Mermaid, the first line inside the fence MUST be a supported diagram keyword such as graph TD, flowchart TD, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, pie, timeline, mindmap, or gitGraph.",

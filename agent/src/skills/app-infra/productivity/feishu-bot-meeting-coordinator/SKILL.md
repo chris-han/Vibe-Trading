@@ -76,6 +76,85 @@ When this skill is installed into a workspace, use the configured values as foll
 5. Summarize invitees, timezone, and schedule before final confirmation when the user request is ambiguous.
 6. Treat app secrets, user tokens, and webhook secrets as backend-owned secrets. Never ask the user to paste them into chat or store them in skill config.
 
+## Missing Input A2UI Contract
+
+When the user wants to schedule a meeting but required fields are missing, do not ask with a free-form bullet list like `根据技能说明，我需要...`.
+
+Instead, emit exactly one fenced `a2ui` JSON block using `schema_form`, then add one short plain-language sentence below it.
+
+Use this schema shape exactly for meeting scheduling:
+
+```a2ui
+{
+  "version": "1.0",
+  "root": {
+    "component": "schema_form",
+    "props": {
+      "title": "请补充飞书会议信息",
+      "submitLabel": "提交会议信息",
+      "followUp": "请根据以上会议信息继续搜索联系人并创建飞书会议。",
+      "fields": [
+        {
+          "key": "meeting_title",
+          "label": "会议主题",
+          "type": "text",
+          "required": true,
+          "placeholder": "例如：项目周会"
+        },
+        {
+          "key": "meeting_time",
+          "label": "会议时间",
+          "type": "text",
+          "required": true,
+          "placeholder": "例如：今天下午 3:40 或 2026-04-24 15:40"
+        },
+        {
+          "key": "duration_value",
+          "label": "会议时长数值",
+          "type": "number",
+          "required": true,
+          "placeholder": "例如：30"
+        },
+        {
+          "key": "duration_unit",
+          "label": "会议时长单位",
+          "type": "select",
+          "required": true,
+          "default": "分钟",
+          "options": [
+            { "label": "分钟", "value": "分钟" },
+            { "label": "小时", "value": "小时" }
+          ],
+          "placeholder": "请选择时长单位"
+        },
+        {
+          "key": "attendees",
+          "label": "参会人员",
+          "type": "text",
+          "required": true,
+          "placeholder": "例如：张三, Henry Wang"
+        },
+        {
+          "key": "meeting_description",
+          "label": "会议描述",
+          "type": "textarea",
+          "required": false,
+          "placeholder": "可选：补充会议背景、议程或备注"
+        }
+      ]
+    }
+  }
+}
+```
+
+Rules for this schema:
+
+- Never include meta-instruction labels such as `根据技能说明`, `我需要了解以下信息`, or `我来帮您安排会议` as form fields.
+- Never merge `会议时长` into a single hardcoded hour assumption. Always collect `duration_value` and `duration_unit` separately.
+- `meeting_description` is optional and must remain `required: false`.
+- If the user already supplied some fields, keep the same schema keys and only ask for the missing ones.
+- If the attendee names might be ambiguous, still collect them in `attendees` first; resolve them through backend contact search after submit.
+
 ## Response Shape
 
 For contact search results, prefer compact tables with columns for display name, Feishu identifier, and confidence or matching note.

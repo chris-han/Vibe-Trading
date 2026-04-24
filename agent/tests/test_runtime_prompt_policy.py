@@ -55,6 +55,7 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert runtime_prompt_policy.OUTPUT_FORMAT_PROMPT in prompt
     assert "```a2ui JSON block" in prompt
     assert "root component 'schema_form'" in prompt
+    assert "follow that schema exactly" in prompt
     assert prompt.endswith("skill-body-for:web\n")
 
 
