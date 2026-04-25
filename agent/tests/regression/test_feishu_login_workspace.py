@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -547,3 +548,71 @@ def test_feishu_gateway_requires_linked_login_before_routing(tmp_path, monkeypat
         "chat_id": "oc_unlinked_chat",
         "text": "Your Feishu account is not linked yet. Sign in first: http://testserver/auth/feishu/login",
     }]
+
+
+def test_extract_feishu_card_action_approval_update_supports_nested_form_values():
+    payload = {
+        "form_value": {
+            "organizer_approval_required": True,
+            "organizer_approval": "approve",
+        }
+    }
+
+    update = api_server._extract_feishu_card_action_approval_update(payload)
+
+    assert update == {
+        "organizer_approval_required": True,
+        "organizer_approval": "approve",
+    }
+
+
+def test_feishu_card_action_updates_bound_session_state(monkeypatch):
+    monkeypatch.setattr(api_server, "_feishu_oauth_enabled", lambda: False)
+    monkeypatch.setattr(api_server, "_get_feishu_bound_session_id", lambda _key: "sid-card-1")
+
+    class FakeStore:
+        def __init__(self):
+            self.updated = 0
+
+        def update_session(self, session):
+            self.updated += 1
+
+    class FakeService:
+        def __init__(self):
+            self.session = type("Session", (), {"config": {"channel": "feishu"}})()
+            self.store = FakeStore()
+
+        def get_session(self, session_id):
+            if session_id == "sid-card-1":
+                return self.session
+            return None
+
+        def _apply_feishu_organizer_approval_update(self, session, content):
+            payload = json.loads(content)
+            session.config["feishu_organizer_approval"] = {
+                "required": bool(payload.get("organizer_approval_required")),
+                "approved": payload.get("organizer_approval") == "approve",
+            }
+            return True
+
+    svc = FakeService()
+
+    changed = asyncio.run(
+        api_server._feishu_apply_card_action_to_session(
+            svc,
+            "oc_card_chat",
+            {
+                "form_value": {
+                    "organizer_approval_required": True,
+                    "organizer_approval": "approve",
+                }
+            },
+        )
+    )
+
+    assert changed is True
+    assert svc.session.config["feishu_organizer_approval"] == {
+        "required": True,
+        "approved": True,
+    }
+    assert svc.store.updated == 1

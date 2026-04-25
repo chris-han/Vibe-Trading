@@ -86,10 +86,60 @@ _A2UI_FENCE_RE = re.compile(
     r"```a2ui\s*(\{[\s\S]*?\})\s*```",
     re.IGNORECASE,
 )
+_FEISHU_MEETING_CREATE_CMD_RE = re.compile(
+    r"\bfeishu_bot_api\.py\b.*\b(create-meeting|finalize-negotiation)\b",
+    re.IGNORECASE,
+)
+_ORGANIZER_APPROVAL_REQUIRED_RE = re.compile(
+    r'"?organizer_approval_required"?\s*[:=]\s*"?(true|false|1|0|yes|no)"?',
+    re.IGNORECASE,
+)
+_ORGANIZER_APPROVAL_VALUE_RE = re.compile(
+    r'"?organizer_approval"?\s*[:=]\s*"?(approve|edit|reject|deny|decline)"?',
+    re.IGNORECASE,
+)
 
 
 def _is_non_empty_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
+def _is_feishu_meeting_create_command(command: str) -> bool:
+    normalized = " ".join(str(command or "").strip().split())
+    if not normalized:
+        return False
+    return _FEISHU_MEETING_CREATE_CMD_RE.search(normalized) is not None
+
+
+def _extract_feishu_organizer_approval_update(content: str) -> Dict[str, Any]:
+    """Extract organizer approval state updates from user content.
+
+    Supports plain text and schema-form-like key/value payloads.
+    """
+    update: Dict[str, Any] = {}
+    normalized = str(content or "")
+    if not normalized.strip():
+        return update
+
+    required_match = _ORGANIZER_APPROVAL_REQUIRED_RE.search(normalized)
+    if required_match:
+        update["required"] = _is_truthy(required_match.group(1))
+
+    approval_match = _ORGANIZER_APPROVAL_VALUE_RE.search(normalized)
+    if approval_match:
+        value = approval_match.group(1).strip().lower()
+        update["approval"] = value
+
+    return update
 
 _DEFAULT_ENABLED_TOOLSETS = [
     "terminal",
@@ -311,6 +361,31 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
         return Path.cwd().resolve()
 
     def _guarded_terminal_tool(command: str, *args: Any, **kwargs: Any) -> str:
+        task_id_raw = kwargs.get("task_id")
+        task_id = str(task_id_raw).strip() if task_id_raw is not None else None
+
+        if _is_feishu_meeting_create_command(command):
+            try:
+                overrides_map = getattr(terminal_tool_module, "_task_env_overrides", {})
+                task_overrides = overrides_map.get(task_id, {}) if isinstance(overrides_map, dict) and task_id else {}
+            except Exception:
+                task_overrides = {}
+            approval_required = _is_truthy(task_overrides.get("feishu_organizer_approval_required"))
+            organizer_approved = _is_truthy(task_overrides.get("feishu_organizer_approved"))
+            if approval_required and not organizer_approved:
+                return json.dumps(
+                    {
+                        "output": "",
+                        "exit_code": -1,
+                        "error": (
+                            "Blocked: organizer approval is required but not approved in persisted Hermes session state. "
+                            "Ask organizer to submit organizer_approval=approve before create-meeting/finalize-negotiation."
+                        ),
+                        "status": "blocked",
+                    },
+                    ensure_ascii=False,
+                )
+
         if _is_terminal_skills_install_command(command):
             # Check for prohibited skills paths first
             if _is_prohibited_skills_path(command):
@@ -374,8 +449,6 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
             )
         rewritten_command = command
         materialized_paths: list[str] = []
-        task_id_raw = kwargs.get("task_id")
-        task_id = str(task_id_raw).strip() if task_id_raw is not None else None
         task_cwd = _resolve_terminal_task_cwd(task_id)
 
         try:
@@ -575,6 +648,48 @@ class SessionService:
                 session.session_id,
                 exc_info=True,
             )
+
+    @staticmethod
+    def _resolve_feishu_organizer_approval_flags(session: Optional[Session]) -> tuple[bool, bool]:
+        cfg = session.config if isinstance(getattr(session, "config", None), dict) else {}
+        state = cfg.get("feishu_organizer_approval") if isinstance(cfg.get("feishu_organizer_approval"), dict) else {}
+        required = _is_truthy(state.get("required"))
+        approved = _is_truthy(state.get("approved"))
+        return required, approved
+
+    @staticmethod
+    def _apply_feishu_organizer_approval_update(session: Session, content: str) -> bool:
+        cfg = session.config if isinstance(getattr(session, "config", None), dict) else {}
+        if str(cfg.get("channel") or "").strip().lower() != "feishu":
+            return False
+
+        update = _extract_feishu_organizer_approval_update(content)
+        if not update:
+            return False
+
+        state = cfg.get("feishu_organizer_approval") if isinstance(cfg.get("feishu_organizer_approval"), dict) else {}
+        next_state: Dict[str, Any] = dict(state)
+
+        required = update.get("required")
+        if required is not None:
+            next_state["required"] = bool(required)
+            if bool(required):
+                # Fresh required gate starts as not approved until explicit organizer approve.
+                next_state["approved"] = False
+
+        approval_value = str(update.get("approval") or "").strip().lower()
+        if approval_value:
+            next_state["last_response"] = approval_value
+            next_state.setdefault("required", True)
+            if approval_value == "approve":
+                next_state["approved"] = True
+            elif approval_value in {"edit", "reject", "deny", "decline"}:
+                next_state["approved"] = False
+
+        next_state["updated_at"] = datetime.now().isoformat()
+        cfg["feishu_organizer_approval"] = next_state
+        session.config = cfg
+        return True
 
     def create_session(self, title: str = "", config: Optional[Dict[str, Any]] = None) -> Session:
         """Create a new session.
@@ -805,6 +920,10 @@ class SessionService:
         session = self.store.get_session(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+
+        if role == "user" and self._apply_feishu_organizer_approval_update(session, content):
+            session.updated_at = datetime.now().isoformat()
+            self.store.update_session(session)
 
         message = Message(session_id=session_id, role=role, content=content)
         self._persist_message(session, message)
@@ -1545,6 +1664,7 @@ class SessionService:
 
         active_session = self.store.get_session(sid) or Session()
         sandbox_role = self._resolve_sandbox_role(active_session)
+        organizer_approval_required, organizer_approved = self._resolve_feishu_organizer_approval_flags(active_session)
 
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
@@ -1644,6 +1764,8 @@ class SessionService:
                     "display_cwd": "/workspace/admin",
                     "display_safe_read_root": "/workspace/admin",
                     "display_safe_write_root": "/workspace/admin",
+                    "feishu_organizer_approval_required": organizer_approval_required,
+                    "feishu_organizer_approved": organizer_approved,
                 })
             else:
                 register_task_env_overrides(sid, {
@@ -1653,6 +1775,8 @@ class SessionService:
                     "display_cwd": "/workspace/run/artifacts",
                     "display_safe_read_root": "/workspace",
                     "display_safe_write_root": "/workspace/run",
+                    "feishu_organizer_approval_required": organizer_approval_required,
+                    "feishu_organizer_approved": organizer_approved,
                 })
             _hermes_overrides_set = True
         except Exception:

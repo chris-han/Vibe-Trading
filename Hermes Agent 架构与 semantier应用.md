@@ -956,3 +956,270 @@ failed_trajectories.jsonl
 
 这项增强的核心价值是：**在不改变上层业务协议的前提下，让 WebUI 的登录交互语义对齐真实终端，降低“浏览器里登录不生效/不可见”的运行差异。**
 
+## ---
+
+**12. Feishu 会议审批状态机（Wrapper-Only Persisted Approval Flag）**
+
+本节定义 Feishu 会议创建在超时与跨轮次场景中的强一致审批机制。
+
+### **12.1 目标与约束**
+
+目标：当会话流程因 Feishu bridge 超时或 Session 超时中断后，后续继续流程必须依赖 Hermes 持久化审批状态，而不是仅依赖模型短期上下文。
+
+约束：
+
+* 仅在 `/agent` wrapper 层实现，不修改 `hermes-agent/` upstream。
+* 审批状态必须写入可持久化会话状态（session state），可跨 attempt、跨消息恢复。
+* `create-meeting` / `finalize-negotiation` 必须由 wrapper 在执行层进行硬拦截，不依赖 prompt 软约束。
+
+### **12.2 持久化状态模型（Hermes Session State）**
+
+建议在 session config 中维护：
+
+```json
+{
+  "feishu_organizer_approval": {
+     "required": true,
+     "approved": false,
+     "last_response": "edit|approve|reject",
+     "updated_at": "2026-04-25T13:30:00"
+  }
+}
+```
+
+语义：
+
+* `required=true`：当前流程存在 organizer 审批门禁。
+* `approved=true`：已取得 organizer 明确同意，可进入创建阶段。
+* `approved=false`：审批未完成或被驳回/要求修改，不可创建事件。
+
+### **12.3 状态机定义（State Machine）**
+
+状态集合：
+
+* `IDLE`：`required=false`
+* `PENDING_APPROVAL`：`required=true, approved=false`
+* `APPROVED`：`required=true, approved=true`
+
+事件与迁移：
+
+1. 进入审批：检测到 organizer 审批门禁（如 organizer/initiator 不一致）
+    * `IDLE -> PENDING_APPROVAL`
+2. organizer 明确同意（`organizer_approval=approve`）
+    * `PENDING_APPROVAL -> APPROVED`
+3. organizer 要求修改/拒绝（`organizer_approval=edit|reject`）
+    * `APPROVED -> PENDING_APPROVAL`
+    * `PENDING_APPROVAL -> PENDING_APPROVAL`
+4. 事件创建完成后（可选策略）
+    * 复位为 `IDLE` 或保留最近审批结果（按业务策略）
+
+### **12.4 超时场景处理（Feishu Bridge / Session Timeout）**
+
+超时不改变审批真值，只终止当前流式等待：
+
+* Feishu bridge 超时（例如 600s）后，session state 中审批标志保持不变。
+* 用户后续消息进入同一会话时，读取持久化 `feishu_organizer_approval` 继续执行。
+* 若仍为 `PENDING_APPROVAL`，任何创建命令都必须被阻断并提示继续审批。
+
+这保证了“流程中断可恢复”与“审批门禁不丢失”同时成立。
+
+### **12.5 执行层硬拦截（Wrapper Guard）**
+
+在 wrapper terminal guard 中识别：
+
+* `feishu_bot_api.py create-meeting`
+* `feishu_bot_api.py finalize-negotiation`
+
+拦截规则：
+
+* 若 `required=true && approved=false`，返回 `status=blocked`，拒绝执行。
+* 若 `approved=true`，允许执行。
+
+该拦截位于工具执行层，不依赖模型是否遵循提示词。
+
+### **12.6 与 A2UI 表单契约协同**
+
+表单负责“采集与确认”，状态机负责“可执行性约束”：
+
+* A2UI `schema_form` 输出 `organizer_approval` 字段用于驱动状态迁移。
+* 会话层解析用户提交并持久化到 `session.config`。
+* terminal guard 读取持久化标志做最终放行/拦截。
+
+### **12.7 兼容性与落地边界**
+
+* 不要求修改 Hermes 内核；仅在 `agent/src/session/service.py` 和 Feishu wrapper 路径实现。
+* 与现有 SessionStore / SQLiteStore 兼容（`config` 字段已可持久化 JSON）。
+* 该机制同样适用于“用户回复晚于桥接超时”的恢复路径。
+
+### **12.8 状态持久化文件结构图（File Structure Diagram）**
+
+下图展示了 wrapper 层 state 持久化的双存储面：
+
+* 文件面：`sessions/<session_id>/...`
+* SQLite 面：`webui_sessions` / `webui_attempts` / `webui_events`
+
+```mermaid
+graph TD
+        subgraph WorkspaceRoot["workspaces/<user_id>/"]
+                A1[".hermes/"]
+                A2["sessions/"]
+                A3["state.db (optional sqlite backend)"]
+
+                subgraph SessionTree["sessions/<session_id>/"]
+                        S1["session.json\nstatus/config/last_attempt_id"]
+                        S2["events.jsonl\nmessage/tool/attempt events"]
+                        S3["artifacts.json\nexternal artifact pointers"]
+                        S4["attempts/<attempt_id>/attempt.json"]
+                end
+        end
+
+        subgraph SQLiteMirror["SQLite tables (same workspace scope)"]
+                Q1[("webui_sessions\nconfig_json contains\nfeishu_organizer_approval")]
+                Q2[("webui_attempts")]
+                Q3[("webui_events")]
+                Q4[("webui_artifacts")]
+        end
+
+        S1 -->|update_session| Q1
+        S4 -->|create/update attempt| Q2
+        S2 -->|append_event| Q3
+        S3 -->|register_artifact| Q4
+```
+
+目录示例：
+
+```text
+workspaces/<user_id>/
+    .hermes/
+        config.yaml
+    sessions/
+        <session_id>/
+            session.json
+            events.jsonl
+            artifacts.json
+            attempts/
+                <attempt_id>/
+                    attempt.json
+    state.db
+```
+
+### **12.9 如何使用 SQLite 做状态持久化（How-To）**
+
+本节给出最小可用的运行与排障方法，面向 wrapper 层运维与开发。
+
+**A. 启用与定位数据库**
+
+1. 使用 `SQLiteSessionStore` 作为 `SessionStore` 的 backend 实例。
+2. 确保 `db_path` 位于当前 workspace（例如 `workspaces/<user_id>/state.db`）。
+3. 保持“同 workspace 同 db”原则，避免跨租户共享 `state.db`。
+
+**B. 关键表与职责**
+
+* `webui_sessions`: 会话主记录（`config_json` 包含审批状态机标志）。
+* `webui_attempts`: 每次执行尝试与状态。
+* `webui_events`: 事件流（message/tool/attempt）。
+* `webui_artifacts`: 会话关联产物索引。
+
+**C. 审批状态查询（只读）**
+
+```sql
+SELECT
+        session_id,
+        json_extract(config_json, '$.feishu_organizer_approval.required') AS approval_required,
+        json_extract(config_json, '$.feishu_organizer_approval.approved') AS approval_approved,
+        json_extract(config_json, '$.feishu_organizer_approval.last_response') AS last_response,
+        updated_at
+FROM webui_sessions
+WHERE session_id = :session_id;
+```
+
+**D. 事件追踪查询（只读）**
+
+```sql
+SELECT
+        event_id,
+        event_type,
+        timestamp,
+        tool,
+        status,
+        metadata_json
+FROM webui_events
+WHERE session_id = :session_id
+ORDER BY id DESC
+LIMIT 100;
+```
+
+**E. 运维建议**
+
+1. 对线上库使用 WAL（当前实现已启用）。
+2. 优先通过 wrapper API 变更会话状态，避免手工 SQL 直接写 `config_json`。
+3. 若必须手工修复，先备份 `state.db`，并记录修复前后 `session_id` 快照。
+4. 定期归档历史 `webui_events`（超大会话）并保留 `session_id` 对应审计链路。
+
+**F. 与超时恢复的关系**
+
+* Feishu bridge 超时后，不应清空 `webui_sessions.config_json` 内审批标志。
+* 后续消息到达时，wrapper 从同一 `session_id` 读取审批状态并继续 gate。
+* 只有在“流程明确结束”时，才按策略复位为 `IDLE`（`required=false`）。
+
+### **12.10 长流程审批示例：Feishu Gateway + Card 2.0 Callback-to-State Wiring**
+
+下图展示一个“跨超时、跨轮次”的真实审批长流程：
+
+* 首轮由 Agent 输出 Card 2.0（含 `organizer_approval` 选择）。
+* 用户晚于流式等待窗口点击卡片，回调事件通过 Feishu gateway 写回 session 持久化状态。
+* 后续继续消息触发 create 命令时，wrapper guard 读取同一持久化标志决定放行。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Organizer/User
+    participant C as Feishu Card 2.0
+    participant FG as Feishu Gateway (Webhook/WS)
+    participant API as agent/api_server.py
+    participant SS as SessionService
+    participant DB as SessionStore/SQLite
+    participant TG as Wrapper Terminal Guard
+    participant FB as feishu_bot_api.py
+
+    U->>FG: "安排会议，organizer=Chris，initiator=Amy"
+    FG->>API: im.message.receive_v1
+    API->>SS: send_message(session_id, content)
+    SS->>DB: persist feishu_organizer_approval.required=true, approved=false
+    SS-->>API: attempt_id + schema_form(A2UI)
+    API-->>FG: Card 2.0 (review/approval form)
+    FG-->>C: render card
+
+    Note over API,FG: 流式等待窗口结束（例如 600s）
+    API-->>FG: await timeout / stop waiting
+
+    U->>C: 点击 approve（晚于超时）
+    C->>FG: card.action.trigger(value.organizer_approval=approve)
+    FG->>API: callback payload
+    API->>SS: _feishu_apply_card_action_to_session(...)
+    SS->>DB: update feishu_organizer_approval.approved=true
+    SS-->>API: state updated
+
+    U->>FG: "继续创建会议"
+    FG->>API: im.message.receive_v1
+    API->>SS: send_message(session_id, content)
+    SS->>TG: execute create-meeting command
+    TG->>DB: read required/approved flags
+
+    alt required=true AND approved=false
+        TG-->>SS: blocked(status=blocked)
+        SS-->>API: ask for organizer approval
+    else required=true AND approved=true
+        TG->>FB: allow create-meeting/finalize-negotiation
+        FB-->>SS: event created
+        SS->>DB: persist event + optional approval state reset policy
+        SS-->>API: success summary
+    end
+```
+
+实现要点（与当前 wrapper 路径对齐）：
+
+1. Callback 不直接触发创建动作，只负责写入可审计的 approval state。
+2. 创建动作只在后续显式用户继续指令下执行，并经过 terminal guard 二次判定。
+3. 审批真值来自持久化 session state（`session.json`/`webui_sessions.config_json`），不依赖模型短期上下文。
+

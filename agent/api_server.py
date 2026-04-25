@@ -4637,14 +4637,46 @@ def _feishu_ws_event_handler_factory(main_loop: asyncio.AbstractEventLoop) -> An
             _feishu_logger.warning("[Feishu WS] Error in message handler", exc_info=True)
 
     def _on_card_action(data: Any) -> None:
-        """Log card action triggers (button clicks). Extend here for interactive flows."""
+        """Apply organizer approval updates from card action callbacks."""
         try:
-            event = getattr(data, "event", None) or {}
-            action = getattr(event, "action", None) or {}
-            action_value = getattr(action, "value", {}) or {}
-            context = getattr(event, "context", None) or {}
-            chat_id = getattr(context, "open_chat_id", "") or ""
-            _feishu_logger.info("[Feishu WS] Card action from chat=%s value=%s", chat_id, action_value)
+            event = _feishu_obj_get(data, "event", {}) or {}
+            action = _feishu_obj_get(event, "action", {}) or {}
+            action_value = _feishu_obj_get(action, "value", {}) or {}
+            context = _feishu_obj_get(event, "context", {}) or {}
+            chat_id = str(_feishu_obj_get(context, "open_chat_id", "") or "")
+            operator = _feishu_obj_get(event, "operator", {}) or {}
+            operator_id = (
+                _feishu_obj_get(operator, "operator_id", None)
+                or _feishu_obj_get(operator, "sender_id", None)
+                or _feishu_obj_get(operator, "user_id", None)
+                or {}
+            )
+            sender_open_id = str(_feishu_obj_get(operator_id, "open_id", "") or "")
+            sender_union_id = str(_feishu_obj_get(operator_id, "union_id", "") or "")
+
+            if not chat_id:
+                _feishu_logger.info("[Feishu WS] Card action ignored (missing chat id), value=%s", action_value)
+                return
+
+            svc = _get_session_service()
+            if svc is None:
+                _feishu_logger.warning("[Feishu WS] Session service not available, dropping card action for chat=%s", chat_id)
+                return
+
+            future = asyncio.run_coroutine_threadsafe(
+                _feishu_apply_card_action_to_session(
+                    svc,
+                    chat_id,
+                    action_value,
+                    sender_open_id=sender_open_id,
+                    sender_union_id=sender_union_id,
+                ),
+                main_loop,
+            )
+            future.add_done_callback(
+                lambda f: _feishu_logger.warning("[Feishu WS] Card action route error: %s", f.exception())
+                if f.exception() else None
+            )
         except Exception:
             _feishu_logger.warning("[Feishu WS] Error in card action handler", exc_info=True)
 
@@ -4835,6 +4867,116 @@ def _feishu_verify_signature(headers: Any, body_bytes: bytes) -> bool:
     content = f"{timestamp}{nonce}{_FEISHU_ENCRYPT_KEY}{body_str}"
     computed = hashlib.sha256(content.encode("utf-8")).hexdigest()
     return _hmac.compare_digest(computed, signature)
+
+
+def _feishu_obj_get(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _extract_feishu_card_action_approval_update(action_value: Any) -> Dict[str, Any]:
+    """Extract organizer approval fields from Feishu card action payloads."""
+    update: Dict[str, Any] = {}
+    candidate_payloads: List[Dict[str, Any]] = []
+
+    if isinstance(action_value, dict):
+        candidate_payloads.append(action_value)
+        for key in ("form_value", "formValue", "data", "fields"):
+            nested = action_value.get(key)
+            if isinstance(nested, dict):
+                candidate_payloads.append(nested)
+
+    for payload in candidate_payloads:
+        if "organizer_approval_required" in payload:
+            update["organizer_approval_required"] = payload.get("organizer_approval_required")
+            break
+
+    approval_keys = ("organizer_approval", "approval", "decision", "action")
+    for payload in candidate_payloads:
+        for key in approval_keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            normalized = str(value).strip().lower()
+            if normalized in {"approve", "edit", "reject", "deny", "decline"}:
+                update["organizer_approval"] = normalized
+                break
+        if "organizer_approval" in update:
+            break
+
+    return update
+
+
+async def _feishu_apply_card_action_to_session(
+    svc: Any,
+    chat_id: str,
+    action_value: Any,
+    *,
+    sender_open_id: str = "",
+    sender_union_id: str = "",
+) -> bool:
+    """Persist organizer approval updates from Feishu card callbacks."""
+    if not chat_id:
+        return False
+
+    update_payload = _extract_feishu_card_action_approval_update(action_value)
+    if not update_payload:
+        return False
+
+    resolved_user = _resolve_feishu_auth_user(open_id=sender_open_id, union_id=sender_union_id)
+    resolved_workspace: Optional[WorkspacePaths] = None
+    if _feishu_oauth_enabled():
+        if resolved_user is None:
+            _feishu_logger.info(
+                "Ignoring Feishu card action from unlinked sender open_id=%s union_id=%s chat=%s",
+                sender_open_id,
+                sender_union_id,
+                chat_id,
+            )
+            await _feishu_send_reply(chat_id, _feishu_login_required_message())
+            return False
+        resolved_workspace = ensure_workspace(
+            WORKSPACES_DIR,
+            resolved_user.user_id,
+            _TEMPLATE_HERMES_HOME,
+            workspace_slug=resolved_user.workspace_slug,
+        )
+        svc = _get_session_service(resolved_workspace)
+
+    session_key = _feishu_session_map_key(chat_id, resolved_user)
+    session_id = _get_feishu_bound_session_id(session_key)
+    if not session_id:
+        _feishu_logger.info("[Feishu WS] Card action ignored for chat=%s (no bound session)", chat_id)
+        return False
+
+    session = svc.get_session(session_id)
+    if session is None:
+        _feishu_logger.info("[Feishu WS] Card action ignored for stale session %s", session_id)
+        return False
+
+    apply_update = getattr(svc, "_apply_feishu_organizer_approval_update", None)
+    if not callable(apply_update):
+        _feishu_logger.warning("[Feishu WS] Session service missing organizer-approval updater; skip callback apply")
+        return False
+
+    content = json.dumps(update_payload, ensure_ascii=False)
+    changed = bool(apply_update(session, content))
+    if not changed:
+        return False
+
+    store = getattr(svc, "store", None)
+    update_session = getattr(store, "update_session", None)
+    if callable(update_session):
+        update_session(session)
+
+    _feishu_logger.info(
+        "[Feishu WS] Applied card action approval update chat=%s session=%s payload=%s",
+        chat_id,
+        session_id,
+        update_payload,
+    )
+    return True
 
 
 def _extract_feishu_text(message: Dict[str, Any]) -> str:

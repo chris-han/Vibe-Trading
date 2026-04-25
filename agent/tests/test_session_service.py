@@ -280,6 +280,63 @@ def test_resolve_enabled_toolsets_disables_delegate_and_terminal_for_feishu():
     assert "skills" in toolsets
 
 
+def test_apply_feishu_organizer_approval_update_persists_state_machine_flags():
+    session = session_service_module.Session(
+        title="Feishu test",
+        config={"channel": "feishu"},
+    )
+
+    changed = SessionService._apply_feishu_organizer_approval_update(
+        session,
+        '{"organizer_approval_required": true}',
+    )
+    assert changed is True
+    assert session.config["feishu_organizer_approval"]["required"] is True
+    assert session.config["feishu_organizer_approval"]["approved"] is False
+
+    changed = SessionService._apply_feishu_organizer_approval_update(
+        session,
+        '{"organizer_approval": "approve"}',
+    )
+    assert changed is True
+    assert session.config["feishu_organizer_approval"]["approved"] is True
+
+    changed = SessionService._apply_feishu_organizer_approval_update(
+        session,
+        '{"organizer_approval": "edit"}',
+    )
+    assert changed is True
+    assert session.config["feishu_organizer_approval"]["approved"] is False
+
+
+def test_terminal_guard_blocks_feishu_create_without_persisted_approval(monkeypatch):
+    tools_module = types.ModuleType("tools")
+    terminal_tool_module = types.ModuleType("tools.terminal_tool")
+    terminal_tool_module.terminal_tool = lambda command, *args, **kwargs: json.dumps({"output": "ok", "exit_code": 0})
+    terminal_tool_module._task_env_overrides = {
+        "sid-1": {
+            "feishu_organizer_approval_required": True,
+            "feishu_organizer_approved": False,
+        }
+    }
+    terminal_tool_module.__dict__[session_service_module._TERMINAL_GUARD_PATCH_ATTR] = False
+    tools_module.terminal_tool = terminal_tool_module
+
+    monkeypatch.setitem(sys.modules, "tools", tools_module)
+    monkeypatch.setitem(sys.modules, "tools.terminal_tool", terminal_tool_module)
+
+    session_service_module._install_wrapper_terminal_policy_patch(None)
+
+    result_raw = terminal_tool_module.terminal_tool(
+        'python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py create-meeting --title "x"',
+        task_id="sid-1",
+    )
+    result = json.loads(result_raw)
+
+    assert result["status"] == "blocked"
+    assert "organizer approval is required" in result["error"]
+
+
 def test_resolve_enabled_toolsets_disables_backtest_toolset_for_feishu_non_backtest_prompt():
     toolsets = session_service_module._resolve_enabled_toolsets("Use Feishu bot to schedule a meeting for Chris Han and Amy Q")
 
