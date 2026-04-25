@@ -15,6 +15,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 def test_target_file_selection_matches_guard_scope():
+    assert MODULE.is_target_file("agent/src/runtime_prompt_policy.py")
+    assert MODULE.is_target_file("agent/api_server.py")
+    assert MODULE.is_target_file("agent/src/skills/script_loader.py")
     assert MODULE.is_target_file("agent/src/session/service.py")
     assert MODULE.is_target_file("agent/src/swarm/worker.py")
     assert MODULE.is_target_file("agent/cli.py")
@@ -53,4 +56,25 @@ def test_scan_content_allows_runtime_relative_guidance():
         "- Use the runtime-provided cwd instead.\n"
         "- Keep output paths relative so the runtime chooses the final location.\n"
     )
+    assert violations == []
+
+
+def test_scan_content_flags_single_location_skill_lookup_without_fallback():
+    violations = MODULE.scan_content(
+        'skills_dir = Path(__file__).resolve().parent / "skills"\n'
+        'skill_file = skills_dir / skill_name / "SKILL.md"\n'
+        'text = skill_file.read_text(encoding="utf-8")\n'
+    )
+
+    assert any(v.rule_id == "backend_single_location_skill_lookup" for v in violations)
+
+
+def test_scan_content_allows_recursive_skill_lookup_fallback():
+    violations = MODULE.scan_content(
+        'skills_dir = Path(__file__).resolve().parent / "skills"\n'
+        'candidate_files = [skills_dir / skill_name / "SKILL.md"]\n'
+        'for nested in skills_dir.rglob("SKILL.md"):\n'
+        '    pass\n'
+    )
+
     assert violations == []

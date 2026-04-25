@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from src import runtime_prompt_policy
 from src.upload_capabilities import format_supported_upload_extensions
 
@@ -71,3 +73,45 @@ def test_build_session_runtime_prompt_uses_requested_channel(monkeypatch):
     runtime_prompt_policy.build_session_runtime_prompt("/tmp/run-1", "session-1", "feishu")
 
     assert seen == ["feishu"]
+
+
+def test_load_output_format_skill_resolves_nested_domain_path(monkeypatch):
+    module_file = Path(runtime_prompt_policy.__file__).resolve()
+    expected = (
+        module_file.parent
+        / "skills"
+        / "domain"
+        / "vibe-trading"
+        / "output-format-feishu"
+        / "SKILL.md"
+    )
+
+    class _FakePath(Path):
+        _flavour = type(Path())._flavour
+
+    monkeypatch.setattr(runtime_prompt_policy, "Path", _FakePath)
+
+    content = runtime_prompt_policy.load_output_format_skill("feishu")
+
+    assert content
+    assert expected.exists()
+
+
+def test_load_output_format_skill_falls_back_to_recursive_lookup(monkeypatch, tmp_path):
+    skills_root = tmp_path / "skills"
+    target = skills_root / "custom" / "nested" / "output-format-web" / "SKILL.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("recursive skill body", encoding="utf-8")
+
+    module_file = tmp_path / "runtime_prompt_policy.py"
+    module_file.write_text("stub", encoding="utf-8")
+
+    class _FakePath(Path):
+        _flavour = type(Path())._flavour
+
+    monkeypatch.setattr(runtime_prompt_policy, "Path", _FakePath)
+    monkeypatch.setattr(runtime_prompt_policy, "__file__", str(module_file))
+
+    content = runtime_prompt_policy.load_output_format_skill("web")
+
+    assert content == "recursive skill body"

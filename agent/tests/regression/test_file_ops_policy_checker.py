@@ -17,8 +17,17 @@ SPEC.loader.exec_module(MODULE)
 def test_target_file_selection_matches_policy_scope():
     assert MODULE.is_target_file(".github/skills/deterministic-file-ops-policy/SKILL.md")
     assert MODULE.is_target_file(".github/skills/runtime-code-sanitizer/SKILL.md")
+    assert MODULE.is_target_file("agent/src/runtime_prompt_policy.py")
+    assert MODULE.is_target_file("agent/api_server.py")
+    assert MODULE.is_target_file("agent/src/skills/script_loader.py")
     assert not MODULE.is_target_file("frontend/src/pages/Agent.tsx")
-    assert not MODULE.is_target_file("agent/src/session/service.py")
+
+
+def test_backend_target_classification_is_separate_from_skill_text_targets():
+    assert MODULE.is_skill_text_target(".github/skills/runtime-code-sanitizer/SKILL.md")
+    assert not MODULE.is_skill_text_target("agent/src/runtime_prompt_policy.py")
+    assert MODULE.is_backend_target("agent/src/runtime_prompt_policy.py")
+    assert not MODULE.is_backend_target(".github/skills/runtime-code-sanitizer/SKILL.md")
 
 
 def test_scan_content_flags_write_file_instruction():
@@ -47,4 +56,25 @@ def test_scan_content_ignores_negative_policy_text():
         "- Do not use `write_file` in prompts.\n"
         "- File ops must live in deterministic code.\n"
     )
+    assert violations == []
+
+
+def test_scan_backend_content_flags_single_location_skill_lookup_without_fallback():
+    violations = MODULE.scan_backend_content(
+        'skills_dir = Path(__file__).resolve().parent / "skills"\n'
+        'skill_file = skills_dir / skill_name / "SKILL.md"\n'
+        'text = skill_file.read_text(encoding="utf-8")\n'
+    )
+
+    assert any(v.rule_id == "backend_single_location_skill_lookup" for v in violations)
+
+
+def test_scan_backend_content_allows_recursive_skill_fallback():
+    violations = MODULE.scan_backend_content(
+        'skills_dir = Path(__file__).resolve().parent / "skills"\n'
+        'candidate_files = [skills_dir / skill_name / "SKILL.md"]\n'
+        'for nested in skills_dir.rglob("SKILL.md"):\n'
+        '    pass\n'
+    )
+
     assert violations == []

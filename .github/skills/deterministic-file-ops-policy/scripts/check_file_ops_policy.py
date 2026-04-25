@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Commit-time checker for prompt-level file and directory operation policy.
+"""Commit-time checker for deterministic file/path policy.
 
 This guard enforces the repo rule that prompts and skill text must not encode
-file or directory create/update/delete behavior. Those behaviors must live in
-deterministic code paths such as tools, adapters, helpers, or backend runtime
-services.
+file or directory create/update/delete behavior, and selected backend helpers
+must not rely on single-location skill path assumptions. Those behaviors must
+live in deterministic code paths such as tools, adapters, helpers, or backend
+runtime services.
 """
 
 from __future__ import annotations
@@ -17,9 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-TARGET_FILE_RE = re.compile(
+SKILL_TEXT_TARGET_RE = re.compile(r"^(\.github/skills/.*)$")
+BACKEND_TARGET_RE = re.compile(
     r"^("
-    r"\.github/skills/.*"
+    r"agent/src/runtime_prompt_policy\.py|"
+    r"agent/api_server\.py|"
+    r"agent/src/skills/script_loader\.py|"
+    r"agent/src/session/service\.py"
     r")$"
 )
 
@@ -87,6 +92,8 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
     ),
 ]
 
+BACKEND_SINGLE_PATH_LOOKUP_RE = re.compile(r'skills_dir\s*/\s*skill_name\s*/\s*["\']SKILL\.md["\']')
+
 
 PASS = "\033[32m✔\033[0m"
 FAIL = "\033[31m✘\033[0m"
@@ -101,7 +108,15 @@ def _repo_root() -> Path:
 
 
 def is_target_file(path: str) -> bool:
-    return bool(TARGET_FILE_RE.match(path))
+    return bool(SKILL_TEXT_TARGET_RE.match(path) or BACKEND_TARGET_RE.match(path))
+
+
+def is_skill_text_target(path: str) -> bool:
+    return bool(SKILL_TEXT_TARGET_RE.match(path))
+
+
+def is_backend_target(path: str) -> bool:
+    return bool(BACKEND_TARGET_RE.match(path))
 
 
 def _git_list(root: Path, *args: str) -> list[str]:
@@ -150,10 +165,38 @@ def scan_content(text: str) -> list[Violation]:
     return violations
 
 
+def scan_backend_content(text: str) -> list[Violation]:
+    violations: list[Violation] = []
+    direct_match = BACKEND_SINGLE_PATH_LOOKUP_RE.search(text)
+    if not direct_match:
+        return violations
+
+    has_recursive_fallback = 'rglob("SKILL.md")' in text or "rglob('SKILL.md')" in text
+    if has_recursive_fallback:
+        return violations
+
+    line_no = text.count("\n", 0, direct_match.start()) + 1
+    line = text.splitlines()[line_no - 1].strip()
+    violations.append(
+        Violation(
+            rule_id="backend_single_location_skill_lookup",
+            line_no=line_no,
+            line=line,
+            message=(
+                "Backend helpers must not rely on a single skills_dir/skill_name/SKILL.md lookup; "
+                "add fallback candidates or recursive skill discovery."
+            ),
+        )
+    )
+    return violations
+
+
 def scan_file(root: Path, path: str, *, staged: bool) -> list[Violation]:
     if path in EXEMPT_FILES:
         return []
     text = read_staged_text(root, path) if staged else read_worktree_text(root, path)
+    if is_backend_target(path):
+        return scan_backend_content(text)
     return scan_content(text)
 
 

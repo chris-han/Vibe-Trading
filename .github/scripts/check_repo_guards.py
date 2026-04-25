@@ -7,6 +7,7 @@ covered by Hermes' external skills security scanner:
 - no hardcoded output paths like /app/agent/...
 - no root-level artifact paths like agent/foo.json
 - no prompt text telling models to change into or assume agent/ as cwd
+- no backend helpers relying on single-location skill path assumptions
 """
 from __future__ import annotations
 
@@ -19,6 +20,9 @@ from pathlib import Path
 
 TARGET_FILE_RE = re.compile(
     r"^("
+    r"agent/src/runtime_prompt_policy\.py|"
+    r"agent/api_server\.py|"
+    r"agent/src/skills/script_loader\.py|"
     r"agent/src/session/service\.py|"
     r"agent/src/swarm/worker\.py|"
     r"agent/cli\.py|"
@@ -89,6 +93,8 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
     ),
 ]
 
+BACKEND_SINGLE_PATH_LOOKUP_RE = re.compile(r'skills_dir\s*/\s*skill_name\s*/\s*["\']SKILL\.md["\']')
+
 
 PASS = "\033[32m✔\033[0m"
 FAIL = "\033[31m✘\033[0m"
@@ -144,6 +150,22 @@ def scan_content(text: str) -> list[Violation]:
                         message=message,
                     )
                 )
+
+        direct_match = BACKEND_SINGLE_PATH_LOOKUP_RE.search(text)
+        if direct_match and 'rglob("SKILL.md")' not in text and "rglob('SKILL.md')" not in text:
+            line_no = text.count("\n", 0, direct_match.start()) + 1
+            line = text.splitlines()[line_no - 1].strip()
+            violations.append(
+                Violation(
+                    rule_id="backend_single_location_skill_lookup",
+                    line_no=line_no,
+                    line=line,
+                    message=(
+                        "Backend helpers must not rely on a single skills_dir/skill_name/SKILL.md lookup; "
+                        "add fallback candidates or recursive skill discovery."
+                    ),
+                )
+            )
     return violations
 
 

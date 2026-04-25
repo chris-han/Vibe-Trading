@@ -16,7 +16,7 @@ REPO_GUARD_RELEVANT=$(git diff --cached --name-only | grep -E \
   'agent/src/session/service\.py|agent/src/swarm/worker\.py|agent/cli\.py|agent/src/skills/|check_repo_guards\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit' || true)
 
 FILE_OPS_RELEVANT=$(git diff --cached --name-only | grep -E \
-  '\.github/skills/|check_file_ops_policy\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit' || true)
+  '\.github/skills/|check_file_ops_policy\.py|\.github/skills/runtime-code-sanitizer/scripts/pre-commit|agent/src/runtime_prompt_policy\.py|agent/api_server\.py|agent/src/skills/script_loader\.py|agent/src/session/service\.py' || true)
 
 if [ -z "$RELEVANT" ] && [ -z "$REPO_GUARD_RELEVANT" ] && [ -z "$FILE_OPS_RELEVANT" ]; then
   exit 0

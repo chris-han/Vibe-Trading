@@ -112,12 +112,12 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 
 # search-contacts: Find individual contacts by name or email
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
-  search-contacts --query "张三" --limit 10
+  search-contacts --query "Alex" --limit 10
 
 # start-negotiation: Start a multi-round availability negotiation
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   start-negotiation --title "项目汇报会" \
-    --initiator-open-id "ou_owner" --duration-minutes 30 \
+    --initiator-open-id "ou_initiator_001" --duration-minutes 30 \
     --attendee-open-id "ou_a" --attendee-open-id "ou_b" \
     --candidate-slot "2026-04-28 15:00" --candidate-slot "2026-04-28 15:30"
 
@@ -134,7 +134,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   create-meeting --title "项目汇报会" \
     --start-time "2026-04-28 15:00" --end-time "2026-04-28 15:30" \
-    --attendee "张三" --attendee "李四" --description "项目进度汇报"
+    --attendee "ou_attendee_001" --attendee "ou_attendee_002" --description "项目进度汇报"
 ```
 
 ## Installed Skill Config
@@ -194,22 +194,25 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 # {
 #   "ok": true,
 #   "result": [
-#     {"open_id": "ou_xyz123", "display_name": "张三"}
+#     {"open_id": "ou_attendee_001", "display_name": "Alex"}
 #   ]
 # }
 ```
 
 ### Step 3: Propose Meeting Slots
 
+> Important: the state JSON below is a synthetic fixture for documentation tests.
+> Never reuse literal `negotiation_id`, attendee names, or open IDs from examples in live commands.
+
 ```bash
 # Start a multi-round negotiation for the candidate time slots
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   start-negotiation \
     --title "项目汇报会" \
-    --initiator-open-id "ou_owner" \
+    --initiator-open-id "ou_initiator_001" \
     --duration-minutes 30 \
-    --attendee-open-id "ou_xyz123" \
-    --attendee-open-id "ou_abc456" \
+    --attendee-open-id "ou_attendee_001" \
+    --attendee-open-id "ou_attendee_002" \
     --candidate-slot "2026-04-28 15:00" \
     --candidate-slot "2026-04-28 15:30"
 
@@ -217,7 +220,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 # {
 #   "ok": true,
 #   "result": {
-#     "negotiation_id": "prop_123abc",
+#     "negotiation_id": "negotiation_example_001",
 #     "status": "negotiating",
 #     "current_round": 1
 #   }
@@ -234,9 +237,9 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
     --description "按照既定时间进行项目进度汇报" \
     --start-time "2026-04-28 15:00" \
     --end-time "2026-04-28 15:30" \
-    --attendee "ou_xyz123" \
-    --attendee "ou_abc456" \
-    --initiator-open-id "ou_owner"
+    --attendee "ou_attendee_001" \
+    --attendee "ou_attendee_002" \
+    --initiator-open-id "ou_initiator_001"
 
 # Expected output (JSON):
 # {
@@ -261,7 +264,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 # {
 #   "ok": true,
 #   "result": {
-#     "meeting_owner_open_id": "ou_owner",
+#     "meeting_owner_open_id": "ou_initiator_001",
 #     "meetings": []
 #   }
 # }
@@ -434,7 +437,7 @@ Use this schema shape exactly for meeting scheduling:
           "label": "参会人员",
           "type": "text",
           "required": true,
-          "placeholder": "例如：张三, Henry Wang"
+          "placeholder": "例如：ou_attendee_001, ou_attendee_002"
         },
         {
           "key": "meeting_description",

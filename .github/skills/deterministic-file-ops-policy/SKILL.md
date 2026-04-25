@@ -24,11 +24,13 @@ This repo enforces the policy in three places:
 
 1. Runtime code and helpers implement the actual file behavior
 2. `tests/regression/test_prompt_file_ops_policy.py` guards prompt constants in backend runtime code
-3. `.github/skills/deterministic-file-ops-policy/scripts/check_file_ops_policy.py` scans staged prompt and skill files during commit
+3. `.github/skills/deterministic-file-ops-policy/scripts/check_file_ops_policy.py` scans staged prompt/skill files and selected backend path-resolution helpers during commit
 
 ## When to Use This Skill
 
 - You are editing `agent/src/session/service.py`
+- You are editing `agent/src/runtime_prompt_policy.py`
+- You are editing `agent/api_server.py` or `agent/src/skills/script_loader.py`
 - You are editing `agent/src/swarm/worker.py`
 - You are changing runtime prompt text or agent skill text
 - You are adding a new shared skill under `agent/src/skills/` or `.github/skills/`
@@ -41,6 +43,11 @@ This repo enforces the policy in three places:
 - Telling the model where uploads live on disk
 - Telling the model to rely on `uploads/` or hardcoded repo paths
 - Telling the model to create or remove directories directly
+
+## Disallowed in Selected Backend Helpers
+
+- Single-location skill lookups such as `skills_dir / skill_name / "SKILL.md"` without fallback candidates or recursive discovery
+- Backend path-resolution helpers that assume one fixed skill tree layout when the repo supports nested skill domains
 
 ## Allowed Pattern
 

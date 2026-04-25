@@ -106,11 +106,31 @@ def load_output_format_skill(channel: str) -> str:
     """Load the channel-appropriate output-format skill body from its SKILL.md file."""
     skill_name = "output-format-feishu" if channel == "feishu" else "output-format-web"
     skills_dir = Path(__file__).resolve().parent / "skills"
-    skill_file = skills_dir / skill_name / "SKILL.md"
+    candidate_files = [
+        skills_dir / skill_name / "SKILL.md",
+        skills_dir / "domain" / "vibe-trading" / skill_name / "SKILL.md",
+    ]
+    skill_file = None
+    for candidate in candidate_files:
+        if candidate.exists() and candidate.is_file():
+            skill_file = candidate
+            break
+
+    if skill_file is None:
+        # Last resort: resolve by directory name anywhere under skills/.
+        for nested in skills_dir.rglob("SKILL.md"):
+            if nested.parent.name == skill_name:
+                skill_file = nested
+                break
+
+    if skill_file is None:
+        logger.warning("output-format skill not found: %s", candidate_files[0])
+        return ""
+
     try:
         text = skill_file.read_text(encoding="utf-8")
     except Exception:
-        logger.warning("output-format skill not found: %s", skill_file)
+        logger.warning("output-format skill not readable: %s", skill_file)
         return ""
     if text.startswith("---"):
         end = text.find("\n---", 3)

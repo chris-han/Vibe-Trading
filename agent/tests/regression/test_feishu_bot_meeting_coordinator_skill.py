@@ -80,6 +80,16 @@ def test_skill_defines_pre_create_review_form_with_default_values():
     assert '"default": "<resolved_initiator>"' in source
 
 
+def test_skill_example_state_json_uses_synthetic_ids_and_no_legacy_placeholders():
+    source = SKILL_FILE.read_text(encoding="utf-8")
+
+    assert "synthetic fixture" in source
+    assert "Never reuse literal" in source
+    assert "negotiation_example_001" in source
+    assert '"ou_owner"' not in source
+    assert '"prop_123abc"' not in source
+
+
 def test_search_contacts_uses_skill_local_ranking(monkeypatch):
     helper = _load_helper_module()
 
