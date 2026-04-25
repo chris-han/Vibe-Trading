@@ -39,7 +39,12 @@ _INCOMPLETE_CONTINUATION_PATTERNS = (
         r"^\s*(?:now let me|let me|starting by)\s+(?:set up|create|check|load|run|compare|analy[sz]e|inspect|debug|prepare|build|generate|review|look at|verify|summari[sz]e)\b.*(?:[.!?])?\s*$",
         re.IGNORECASE,
     ),
-    re.compile(r"^\s*(?:现在让我|让我)\s*(?:设置|创建|检查|加载|运行|比较|分析|查看|调试|准备|构建|生成|验证|总结).*(?:[。！？])?\s*$"),
+    re.compile(
+        r"(?:^|[。！？.!?]\s*)(?:now let me|let me|starting by)\s+(?:set up|create|check|load|run|compare|analy[sz]e|inspect|debug|prepare|build|generate|review|look at|verify|summari[sz]e)\b.*(?:[.!?])?\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*(?:现在让我|让我)\s*(?:设置|创建|检查|加载|运行|比较|分析|查看|调试|准备|构建|生成|验证|总结|获取).*(?:[。！？])?\s*$"),
+    re.compile(r"(?:^|[。！？.!?]\s*)(?:现在让我|让我)\s*(?:设置|创建|检查|加载|运行|比较|分析|查看|调试|准备|构建|生成|验证|总结|获取).*(?:[。！？])?\s*$"),
 )
 _INCOMPLETE_RESPONSE_KEYWORDS = (
     "let me",

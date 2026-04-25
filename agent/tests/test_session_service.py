@@ -581,6 +581,12 @@ def test_run_with_agent_retries_once_after_incomplete_final_response(tmp_path, m
     }
 
 
+def test_incomplete_response_detection_catches_chinese_progress_sentence_after_completed_clause():
+    text = '找到了"管理层"群组。现在让我获取群里的所有成员信息。'
+
+    assert SessionService._looks_incomplete_final_response(text) is True
+
+
 def test_terminal_wrapper_forces_background_pty_for_interactive_login(monkeypatch):
     terminal_module = __import__("tools.terminal_tool", fromlist=["terminal_tool"])
     process_module = __import__("tools.process_registry", fromlist=["process_registry"])

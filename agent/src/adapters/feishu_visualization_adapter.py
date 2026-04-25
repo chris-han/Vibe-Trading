@@ -511,7 +511,20 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
     ) -> str:
         elements = self.split_card_elements(markdown_body)
         if actions:
-            elements.append({"tag": "action", "actions": actions})
+            action_labels = []
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                label = str(action.get("text") or action.get("label") or action.get("name") or "").strip()
+                if label:
+                    action_labels.append(label)
+            if action_labels:
+                elements.append(
+                    {
+                        "tag": "markdown",
+                        "content": "**Available actions:** " + " | ".join(action_labels),
+                    }
+                )
         return self.build_card_payload_from_elements(title, elements, template=template)
 
     def build_streaming_card_payload(self, title: str, markdown_body: str) -> str:

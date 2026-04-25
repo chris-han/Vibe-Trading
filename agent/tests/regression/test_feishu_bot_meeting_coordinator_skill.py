@@ -53,6 +53,9 @@ def test_skill_a2ui_contract_is_mandatory_and_no_bullet_list_fallback():
     assert '"type": "select"' in source
     assert '"value": "分钟"' in source
     assert '"value": "小时"' in source
+    assert '"default": "分钟"' not in source
+    assert "Do not silently assume a default duration" in source
+    assert "Never prefill or preselect a required field" in source
 
 
 def test_search_contacts_uses_skill_local_ranking(monkeypatch):

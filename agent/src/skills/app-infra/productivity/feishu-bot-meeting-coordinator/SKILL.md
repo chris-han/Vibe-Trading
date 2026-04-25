@@ -149,6 +149,7 @@ When this skill is installed into a workspace, use the configured values as foll
 
 1. Use the Feishu bot identity `semantier` as the organizer identity for contact search, meeting creation, and meeting summaries unless an explicit workspace config override is provided.
 2. **MANDATORY**: When any required meeting field is missing, you MUST emit the `a2ui` `schema_form` block defined in the **Missing Input A2UI Contract** section below. A free-form markdown bullet list asking for the same fields is NEVER acceptable — even when reading the skill for the first time.
+2a. When the agent is not certain about any required meeting field, it must ask the user to clarify via that form. Do not silently assume a default duration, attendee list, or other required value.
 3. Resolve attendees through the materialized `feishu_bot_api.py` script rather than guessing account identifiers.
 4. Confirm ambiguous contact matches before creating the meeting.
 5. Run attendee negotiation rounds until all attendees agree on one slot or rounds are exhausted.
@@ -416,7 +417,6 @@ Use this schema shape exactly for meeting scheduling:
           "label": "会议时长单位",
           "type": "select",
           "required": true,
-          "default": "分钟",
           "options": [
             { "label": "分钟", "value": "分钟" },
             { "label": "小时", "value": "小时" }
@@ -447,6 +447,7 @@ Rules for this schema:
 
 - Never include meta-instruction labels such as `根据技能说明`, `我需要了解以下信息`, or `我来帮您安排会议` as form fields.
 - Never merge `会议时长` into a single hardcoded hour assumption. Always collect `duration_value` and `duration_unit` separately.
+- Never prefill or preselect a required field merely to keep the flow moving. If `duration_value`, `duration_unit`, attendees, or another required field is uncertain, leave it for the user to clarify in the form.
 - `meeting_description` is optional and must remain `required: false`.
 - If the user already supplied some fields, keep the same schema keys and only ask for the missing ones.
 - If the attendee names might be ambiguous, still collect them in `attendees` first; resolve them through backend contact search after submit.
