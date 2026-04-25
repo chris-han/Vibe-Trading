@@ -5,3 +5,6 @@
 [submodule "hermes-workspace"]
 	path = hermes-workspace
 	url = https://github.com/chris-han/hermes-workspace.git
+[submodule "feishu-cli"]
+	path = feishu-cli
+	url = https://github.com/chris-han/feishu-cli.git
