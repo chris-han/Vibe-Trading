@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -22,6 +23,7 @@ def _load_helper_module():
     spec = importlib.util.spec_from_file_location("feishu_bot_api", SCRIPT_FILE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -163,3 +165,147 @@ def test_create_meeting_builds_expected_event_payload(monkeypatch):
     assert result["event_id"] == "evt_123"
     assert result["calendar_id"] == "cal_primary"
     assert result["join_url"] == "https://meet.example.com/evt_123"
+
+
+def test_start_negotiation_creates_deterministic_state():
+    helper = _load_helper_module()
+
+    state = helper.start_negotiation(
+        title="Weekly Sync",
+        initiator_open_id="ou_initiator",
+        attendee_open_ids=["ou_a", "ou_b"],
+        candidate_slots=["2026-04-24 15:40", "2026-04-24 16:40"],
+        duration_minutes=30,
+    )
+
+    assert state["title"] == "Weekly Sync"
+    assert state["initiator_open_id"] == "ou_initiator"
+    assert state["current_round"] == 1
+    assert state["status"] == "negotiating"
+    assert sorted(state["attendees"].keys()) == ["ou_a", "ou_b"]
+    assert len(state["candidate_slots"]) == 2
+
+
+def test_submit_attendee_response_reaches_agreement():
+    helper = _load_helper_module()
+
+    state = helper.start_negotiation(
+        title="Weekly Sync",
+        initiator_open_id="ou_initiator",
+        attendee_open_ids=["ou_a", "ou_b"],
+        candidate_slots=["2026-04-24 15:40", "2026-04-24 16:40"],
+        duration_minutes=30,
+    )
+
+    accepted = ["2026-04-24 15:40"]
+    result_a = helper.submit_attendee_response(state, attendee_open_id="ou_a", accepted_slots=accepted)
+    state_after_a = result_a["state"]
+    assert state_after_a["status"] == "negotiating"
+
+    result_b = helper.submit_attendee_response(state_after_a, attendee_open_id="ou_b", accepted_slots=accepted)
+    state_after_b = result_b["state"]
+    assert state_after_b["status"] == "agreed"
+    assert state_after_b["agreed_slot"] is not None
+
+
+def test_resolve_meeting_attendees_expands_group_phrase(monkeypatch):
+    helper = _load_helper_module()
+
+    def fake_resolve_group_phrase_attendees(group_phrase, *, session=None):
+        assert group_phrase == "管理层群里的所有人"
+        return (
+            [
+                {
+                    "requested": group_phrase,
+                    "status": "resolved",
+                    "display_name": "Chris Han",
+                    "open_id": "ou_chris",
+                    "match_reason": "group_member",
+                },
+                {
+                    "requested": group_phrase,
+                    "status": "resolved",
+                    "display_name": "Amy Q",
+                    "open_id": "ou_amy",
+                    "match_reason": "group_member",
+                },
+            ],
+            [
+                {"type": "user", "user_id": "ou_chris", "is_optional": False},
+                {"type": "user", "user_id": "ou_amy", "is_optional": False},
+            ],
+        )
+
+    monkeypatch.setattr(helper, "_resolve_group_phrase_attendees", fake_resolve_group_phrase_attendees)
+
+    attendee_results, resolved_attendees, warnings = helper._resolve_meeting_attendees(["管理层群里的所有人"])
+
+    assert warnings == []
+    assert len(attendee_results) == 2
+    assert [item["open_id"] for item in attendee_results] == ["ou_chris", "ou_amy"]
+    assert resolved_attendees == [
+        {"type": "user", "user_id": "ou_chris", "is_optional": False},
+        {"type": "user", "user_id": "ou_amy", "is_optional": False},
+    ]
+
+
+def test_finalize_negotiation_creates_meeting_and_sends_invitations(monkeypatch):
+    helper = _load_helper_module()
+    captured: dict[str, object] = {"create_calls": []}
+
+    def fake_calendar_for_user(user_open_id, *, session=None):
+        return f"cal_{user_open_id}"
+
+    def fake_create_meeting(*, title, start_time, end_time, attendees, timezone, description=None, location=None, idempotency_key=None, initiator_open_id=None, initiator_calendar_id=None, session=None):
+        captured["create_calls"].append(
+            {
+                "title": title,
+                "attendees": attendees,
+                "calendar_id": initiator_calendar_id,
+                "initiator_open_id": initiator_open_id,
+            }
+        )
+        return {
+            "event_id": f"evt_{initiator_calendar_id}",
+            "organizer_identity": "semantier",
+            "initiator_open_id": initiator_open_id,
+            "calendar_id": initiator_calendar_id,
+            "join_url": f"https://meet.example.com/{initiator_calendar_id}",
+            "attendee_results": [],
+            "warnings": [],
+        }
+
+    def fake_send_final_invitations(*, attendee_open_ids, title, start_time, end_time, timezone, meeting_link, session=None):
+        captured["notified"] = attendee_open_ids
+        captured["meeting_link"] = meeting_link
+        return {"delivered": attendee_open_ids, "failed": []}
+
+    monkeypatch.setattr(helper, "create_meeting", fake_create_meeting)
+    monkeypatch.setattr(helper, "_primary_calendar_id_for_user", fake_calendar_for_user)
+    monkeypatch.setattr(helper, "send_final_invitations", fake_send_final_invitations)
+
+    state = helper.start_negotiation(
+        title="Weekly Sync",
+        initiator_open_id="ou_initiator",
+        attendee_open_ids=["ou_a", "ou_b"],
+        candidate_slots=["2026-04-24 15:40"],
+        duration_minutes=30,
+    )
+    agreed = helper.submit_attendee_response(state, attendee_open_id="ou_a", accepted_slots=["2026-04-24 15:40"])["state"]
+    agreed = helper.submit_attendee_response(agreed, attendee_open_id="ou_b", accepted_slots=["2026-04-24 15:40"])["state"]
+
+    result = helper.finalize_negotiation_and_create_meeting(
+        agreed,
+        description="Discuss milestones",
+    )
+
+    assert len(captured["create_calls"]) == 3
+    for call in captured["create_calls"]:
+        assert call["title"] == "Weekly Sync"
+        assert call["attendees"] == ["ou_a", "ou_b", "ou_initiator"]
+        assert call["initiator_open_id"] == "ou_initiator"
+    assert captured["notified"] == ["ou_a", "ou_b"]
+    assert captured["meeting_link"] == "https://meet.example.com/cal_ou_initiator"
+    assert result["meeting_owner_open_id"] == "ou_initiator"
+    assert result["primary_meeting"]["calendar_id"] == "cal_ou_initiator"
+    assert len(result["meetings"]) == 3

@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import shutil
-import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 from pathlib import Path
@@ -73,13 +72,6 @@ _FILE_MUTATION_TOOL_NAMES = {
 _SKILLS_INSTALL_RE = re.compile(r"\bskills\s+(add|install)\b", re.IGNORECASE)
 _SKILLS_GLOBAL_FLAG_RE = re.compile(r"(^|\s)--global(\s|$)|(^|\s)-[a-z]*g[a-z]*(\s|$)", re.IGNORECASE)
 _TERMINAL_GUARD_PATCH_ATTR = "_semantier_global_skills_guard_patched"
-_INTERACTIVE_LOGIN_COMMAND_HINTS = (
-    "lark-cli config init --new",
-    "lark-cli auth login",
-    "npx @larksuite/cli config init --new",
-    "npx @larksuite/cli auth login",
-)
-_URL_RE = re.compile(r"https?://[^\s)\]>\"']+", re.IGNORECASE)
 # Captures: simple name, category/name, or https URLs (non-greedy word boundary before space/option)
 _SKILL_NAME_RE = re.compile(
     r"(?:add|install)\s+(?:--[a-z-]+\s+)*([a-z0-9][a-z0-9._/-]*|https?://[^\s]+?)(?:\s|$)",
@@ -104,32 +96,10 @@ _DEFAULT_ENABLED_TOOLSETS = [
     "vibe_trading",
 ]
 
-_FEISHU_COORDINATION_INTENT_RE = re.compile(
-    r"(?:"
-    r"(?:feishu|lark|飞书|会议|meeting|calendar|联系人|contact|invite|邀请|约(?:个)?会)"
-    r"(?:[\s\S]{0,64})"
-    r"(?:meeting|calendar|schedule|contact|invite|会议|联系人|邀请|安排|约)"
-    r"|"
-    r"(?:安排|预约|创建|约)(?:[\s\S]{0,16})(?:飞书|lark|会议|会)"
-    r")",
-    re.IGNORECASE,
-)
-
-
-def _is_feishu_coordination_intent(prompt: str) -> bool:
-    text = str(prompt or "").strip()
-    if not text:
-        return False
-    return _FEISHU_COORDINATION_INTENT_RE.search(text) is not None
-
 
 def _resolve_enabled_toolsets(prompt: str) -> list[str]:
-    toolsets = list(_DEFAULT_ENABLED_TOOLSETS)
-    if _is_feishu_coordination_intent(prompt):
-        # Deterministic guard: Feishu meeting/contact flows must stay in the
-        # main agent with skill_view + backend bot path, no delegation/terminal/backtest.
-        toolsets = [name for name in toolsets if name not in {"delegation", "terminal", "vibe_trading"}]
-    return toolsets
+    _ = prompt
+    return list(_DEFAULT_ENABLED_TOOLSETS)
 
 
 def _is_terminal_skills_install_command(command: str) -> bool:
@@ -142,77 +112,6 @@ def _is_terminal_skills_install_command(command: str) -> bool:
     return _SKILLS_INSTALL_RE.search(normalized) is not None
 
 
-def _is_interactive_login_command(command: str) -> bool:
-    """Return True for commands that require browser handoff + terminal polling."""
-    if not isinstance(command, str):
-        return False
-    normalized = " ".join(command.lower().split())
-    if not normalized:
-        return False
-    return any(hint in normalized for hint in _INTERACTIVE_LOGIN_COMMAND_HINTS)
-
-
-def _extract_urls(text: str) -> list[str]:
-    """Extract unique URLs from process output while preserving appearance order."""
-    if not text:
-        return []
-    urls: list[str] = []
-    seen: set[str] = set()
-    for match in _URL_RE.findall(text):
-        candidate = match.rstrip(".,;)")
-        if candidate and candidate not in seen:
-            seen.add(candidate)
-            urls.append(candidate)
-    return urls
-
-
-def _build_interactive_login_payload(raw_result: str) -> str:
-    """Attach initial background output and URLs for interactive login commands."""
-    try:
-        payload = json.loads(raw_result)
-    except Exception:
-        return raw_result
-
-    if not isinstance(payload, dict):
-        return raw_result
-
-    session_id = str(payload.get("session_id") or "").strip()
-    if not session_id:
-        return raw_result
-
-    output_preview = ""
-    try:
-        from tools.process_registry import process_registry
-
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            polled = process_registry.poll(session_id)
-            output_preview = str(polled.get("output_preview") or "").strip()
-            if output_preview:
-                break
-            time.sleep(0.25)
-
-        if not output_preview:
-            log_result = process_registry.read_log(session_id, offset=0, limit=80)
-            output_preview = str(log_result.get("output") or "").strip()
-    except Exception:
-        output_preview = ""
-
-    urls = _extract_urls(output_preview)
-    interactive_meta: Dict[str, Any] = {
-        "mode": "background_pty",
-        "session_id": session_id,
-        "poll_hint": "Use process(action='poll') to stream progress while waiting for browser completion.",
-    }
-    if urls:
-        interactive_meta["verification_urls"] = urls
-    if output_preview:
-        interactive_meta["initial_output"] = output_preview[-3000:]
-
-    payload["interactive_login"] = interactive_meta
-    return json.dumps(payload, ensure_ascii=False)
-
-
 def _has_forbidden_global_skills_flags(command: str) -> bool:
     """Return True when command attempts explicit global skills installation."""
     if not _is_terminal_skills_install_command(command):
@@ -223,7 +122,7 @@ def _has_forbidden_global_skills_flags(command: str) -> bool:
 def _extract_skill_name_from_command(command: str) -> Optional[str]:
     """Extract the skill name/identifier from a terminal skills install command.
     
-    Returns the name (e.g., 'feishu-cli') or URL if present, None otherwise.
+    Returns the name (e.g., 'my-skill') or URL if present, None otherwise.
     """
     normalized = " ".join(command.strip().split())
     match = _SKILL_NAME_RE.search(normalized)
@@ -237,7 +136,7 @@ def _find_skill_in_hermes_home(skill_name: str, hermes_home: Optional[Path]) -> 
     (workspace > external > bundled). Returns the skill directory path if found.
     
     Args:
-        skill_name: Name to search for (e.g., 'feishu-cli', 'productivity/feishu-cli')
+        skill_name: Name to search for (e.g., 'my-skill', 'productivity/my-skill')
         hermes_home: Workspace HERMES_HOME path
     
     Returns:
@@ -250,7 +149,7 @@ def _find_skill_in_hermes_home(skill_name: str, hermes_home: Optional[Path]) -> 
     if not skills_dir.exists():
         return None
     
-    # Extract base name (e.g., 'feishu-cli' from 'productivity/feishu-cli')
+    # Extract base name (e.g., 'my-skill' from 'productivity/my-skill')
     base_name = skill_name.rsplit("/", 1)[-1] if "/" in skill_name else skill_name
     base_name = base_name.strip().lower()
     
@@ -334,7 +233,7 @@ def _find_skill_in_upstream_scope(skill_name: str) -> Optional[Path]:
     These take precedence over local workspace skills.
     
     Args:
-        skill_name: Name to search for (e.g., 'feishu-cli', 'productivity/feishu-cli')
+        skill_name: Name to search for (e.g., 'my-skill', 'productivity/my-skill')
     
     Returns:
         Path to skill directory if found in upstream, None otherwise.
@@ -384,6 +283,23 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
         return
 
     original_terminal_tool = terminal_tool_module.terminal_tool
+
+    def _resolve_terminal_task_cwd(task_id: Optional[str]) -> Path:
+        """Resolve task-scoped cwd from terminal overrides or env fallback."""
+        if task_id:
+            try:
+                overrides_map = getattr(terminal_tool_module, "_task_env_overrides", {})
+                task_overrides = overrides_map.get(task_id, {}) if isinstance(overrides_map, dict) else {}
+                override_cwd = str(task_overrides.get("cwd") or "").strip()
+                if override_cwd:
+                    return Path(os.path.expanduser(override_cwd)).resolve()
+            except Exception:
+                pass
+
+        env_cwd = str(os.getenv("TERMINAL_CWD", "")).strip()
+        if env_cwd:
+            return Path(os.path.expanduser(env_cwd)).resolve()
+        return Path.cwd().resolve()
 
     def _guarded_terminal_tool(command: str, *args: Any, **kwargs: Any) -> str:
         if _is_terminal_skills_install_command(command):
@@ -447,13 +363,40 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
                 },
                 ensure_ascii=False,
             )
-        if _is_interactive_login_command(command):
-            forced_kwargs = dict(kwargs)
-            forced_kwargs["pty"] = True
-            forced_kwargs["background"] = True
-            result = original_terminal_tool(command, *args, **forced_kwargs)
-            return _build_interactive_login_payload(result)
-        return original_terminal_tool(command, *args, **kwargs)
+        rewritten_command = command
+        materialized_paths: list[str] = []
+        task_id_raw = kwargs.get("task_id")
+        task_id = str(task_id_raw).strip() if task_id_raw is not None else None
+        task_cwd = _resolve_terminal_task_cwd(task_id)
+
+        try:
+            rewritten_command, materialized_paths = materialize_shared_skill_scripts_for_command(
+                command,
+                task_cwd=task_cwd,
+            )
+        except Exception as exc:
+            return json.dumps(
+                {
+                    "output": "",
+                    "exit_code": -1,
+                    "error": (
+                        "Blocked: failed to materialize shared skill script(s) into the task sandbox. "
+                        f"{exc}"
+                    ),
+                    "status": "blocked",
+                },
+                ensure_ascii=False,
+            )
+
+        if materialized_paths:
+            logger.info(
+                "Materialized shared skill scripts for task %s into %s: %s",
+                task_id or "default",
+                task_cwd,
+                ", ".join(materialized_paths),
+            )
+
+        return original_terminal_tool(rewritten_command, *args, **kwargs)
 
     terminal_tool_module.terminal_tool = _guarded_terminal_tool
     setattr(terminal_tool_module, _TERMINAL_GUARD_PATCH_ATTR, True)
@@ -552,6 +495,7 @@ from runtime_env import (
     prepare_hermes_project_context,
 )
 from src.backtest.bootstrap import bootstrap_run_from_prompt, is_backtest_prompt
+from src.skills.script_loader import materialize_shared_skill_scripts_for_command
 from src.session.events import EventBus
 from src.session.models import (
     Attempt,

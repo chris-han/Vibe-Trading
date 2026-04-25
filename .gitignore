@@ -64,3 +64,4 @@ temp_val_venv/
 temp_venv/
 *.db
 agent/.hermes/trajectories/
+/.runtime/

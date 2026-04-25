@@ -4612,11 +4612,16 @@ def _feishu_ws_event_handler_factory(main_loop: asyncio.AbstractEventLoop) -> An
         except Exception:
             _feishu_logger.warning("[Feishu WS] Error in card action handler", exc_info=True)
 
+    def _on_message_read(_data: Any) -> None:
+        """No-op handler to suppress SDK errors for message_read events we do not process."""
+        return
+
     try:
         handler = (
             EventDispatcherHandler
             .builder(_FEISHU_ENCRYPT_KEY, _FEISHU_VERIFICATION_TOKEN)
             .register_p2_im_message_receive_v1(_on_message)
+            .register_p2_im_message_message_read_v1(_on_message_read)
             .register_p2_card_action_trigger(_on_card_action)
             .build()
         )

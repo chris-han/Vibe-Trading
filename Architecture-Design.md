@@ -1,5 +1,53 @@
 # Vibe-Trading Agent Architecture Design
 
+## Architectural Laws & Constraints
+
+These foundational principles govern all implementation decisions and code reviews:
+
+### 1. **Wrapper-First Policy** (No Upstream Forks)
+- **Law**: All multi-tenant, workspace, and request-level concerns are implemented in `/agent/` wrapper layer, **never** in upstream `hermes-agent/`.
+- **Why**: Enables seamless upstream updates and prevents maintenance burden of forked patches.
+- **Pattern**: If a feature requires `hermes-agent` modification, implement it in `agent/` wrapper first (e.g., `hermes_dashboard_wrapper.py` for multi-tenant workspace routing).
+- **Enforcement**: PR review must verify no direct changes to `hermes-agent/` without explicit user approval.
+
+### 2. **Deterministic File Operations Policy**
+- **Law**: All file and directory operations (create, update, delete, path resolution) **must** be implemented in deterministic code paths (tools, adapters, helpers), **never** delegated to prompts or skill text.
+- **Why**: Ensures auditability, reproducibility, and prevents prompt-injection attacks through file operations.
+- **Pattern**: Prompts may reference tools like `load_script(skill_name)` or `setup_task_workspace()`, but the actual filesystem behavior is hardcoded in Python adapters.
+- **Enforcement**: Regression test `test_prompt_file_ops_policy.py` + pre-commit hook `check_file_ops_policy.py` scan staged files.
+
+### 3. **Per-Task Sandboxing with Script Materialization**
+- **Law**: Shared skill scripts (tools, helpers, templates) are **not** accessed via absolute system paths. Instead, they are **materialized into the task sandbox** by a deterministic wrapper layer before execution.
+- **Why**: Prevents sandbox escape; enables per-user/per-session isolation without storage duplication; supports graceful cleanup.
+- **Pattern**:
+  - Shared scripts live at deterministic locations (e.g., `agent/src/skills/app-infra/.../<skill>/scripts/`)
+  - Wrapper layer (e.g., `SharedScriptLoader`) copies/symlinks scripts to `{task_workspace}/.scripts/{skill_name}/` on demand
+  - Task execution references only sandboxed paths; never system paths
+  - On task completion, sandbox is cleaned up
+- **Enforcement**: Task sandbox rejects access to paths outside `{task_workspace}/`; scripts must be materialized first.
+
+### 4. **Request-Level Workspace Isolation**
+- **Law**: Each HTTP request resolves its workspace context at entry (auth → user_id → workspace root) and maintains it throughout the request lifecycle.
+- **Why**: Eliminates request-order dependencies; enables request-level multi-tenancy without global state.
+- **Pattern**: `_resolve_request_context()` parses auth headers → `vt_session` → `workspaces/{user_id}/`, passed to all downstream handlers.
+- **Enforcement**: Every FastAPI route must accept `request: Request` and call resolver before accessing workspace.
+
+### 5. **Single Responsibility per Profile**
+- **Law**: Each Hermes Profile (in `/profiles/` or workspace `.hermes/`) should handle **one core concern** (e.g., IFRS compliance, Feishu meeting scheduling, tax calculation).
+- **Why**: Simplifies skill evolution, prevents "god agent" bloat, enables safe delegation between profiles.
+- **Pattern**: Complex workflows coordinate via message bus (mailbox, queue) or supervisor delegation, not monolithic profile code.
+
+### 6. **Event-Driven Architecture with Durable Replay**
+- **Law**: SSE events published to clients must be:
+  - **Durable**: Persisted to disk/DB before sending (crash-safe)
+  - **Indexed**: Support O(1) replay by `last_event_id` (no linear scans)
+  - **Deduplicated**: Client-side dedup via signature; server-side dedup via active `run_id` suppression
+  - **Ordered**: Monotonic event IDs (not random UUIDs)
+- **Why**: Ensures reliable long-running operations (swarm runs, SSE streams); enables robust client reconnect.
+- **Pattern**: `EventBus` with indexed buffer + session event log + client `Last-Event-ID` header.
+
+---
+
 ## Overview
 
 The Vibe-Trading Agent is a sophisticated AI-powered finance research and backtesting system built on a **ReAct (Reasoning + Acting)** architecture. It supports both single-agent workflows and multi-agent swarm teams for complex financial analysis tasks.
