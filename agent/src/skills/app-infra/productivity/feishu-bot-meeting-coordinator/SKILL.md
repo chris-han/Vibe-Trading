@@ -57,7 +57,7 @@ This skill is for the direct Feishu bot/API path.
 
 ## Runtime Contract: Script Materialization
 
-**IMPORTANT**: This skill follows the Semantier **Deterministic File Operations** and **Per-Task Sandboxing** architecture laws (see [semantier-architecture-laws](../../../../.github/skills/semantier-architecture-laws/SKILL.md)).
+**IMPORTANT**: This skill follows the Semantier **Deterministic File Operations** and **Per-Task Sandboxing** architecture laws (see [semantier-architecture-laws](../../../../../../.github/skills/semantier-architecture-laws/SKILL.md)).
 
 ### What You Don't Do
 - Do NOT reference absolute system paths like `/home/chris/repo/semantier/agent/src/skills/...`
@@ -80,6 +80,8 @@ This ensures:
 ## Execution Surface
 
 ### Loading the Helper
+
+Before attempting contact search or meeting creation, load the helper code with `skill_view(name="feishu-bot-meeting-coordinator", file_path="scripts/feishu_bot_api.py")`.
 
 The wrapper layer automatically injects the helper script into your workspace. **You reference it as a relative path in the task sandbox**, not as a system path.
 
@@ -104,29 +106,35 @@ The materialized script provides:
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   search-chats --query "管理层群" --limit 5
 
+# get-chat-members: Retrieve all members of a contact group
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  get-chat-members --chat-id "oc_abc123"
+
 # search-contacts: Find individual contacts by name or email
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   search-contacts --query "张三" --limit 10
 
-# get-chat-members: Retrieve all members of a contact group
+# start-negotiation: Start a multi-round availability negotiation
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
-  get-chat-members --chat-id "<chat_id>"
+  start-negotiation --title "项目汇报会" \
+    --initiator-open-id "ou_owner" --duration-minutes 30 \
+    --attendee-open-id "ou_a" --attendee-open-id "ou_b" \
+    --candidate-slot "2026-04-28 15:00" --candidate-slot "2026-04-28 15:30"
 
-# propose-meeting-slots: Propose time slots and collect availability
+# submit-response: Record an attendee response for the current round
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
-  propose-meeting-slots --attendees '["<id1>", "<id2>"]' \
-    --title "项目汇报会" --slots '[{"start": "2026-04-28T10:00:00", ...}]'
+  submit-response --state-json '<state-json>' --attendee-open-id "ou_a" \
+    --accepted-slot "2026-04-28 15:00"
+
+# finalize-negotiation: Create meetings after a slot is agreed
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  finalize-negotiation --state-json '<state-json>' --description "项目进度汇报"
 
 # create-meeting: Create calendar event after agreement
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   create-meeting --title "项目汇报会" \
-    --attendees '["<id1>", "<id2>"]' \
-    --start "2026-04-28T10:00:00" --duration-minutes 30
-
-# send-invitations: Send invitation messages to attendees
-python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
-  send-invitations --meeting-id "<meeting_id>" \
-    --attendees '["<id1>", "<id2>"]' --message "会议已创建，请准时参加"
+    --start-time "2026-04-28 15:00" --end-time "2026-04-28 15:30" \
+    --attendee "张三" --attendee "李四" --description "项目进度汇报"
 ```
 
 ## Installed Skill Config
@@ -158,9 +166,12 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 
 # Expected output (JSON):
 # {
-#   "status": "success",
-#   "results": [
-#     {"id": "oc_abc123", "name": "管理层群", "member_count": 5}
+#   "ok": true,
+#   "result": {
+#     "query": "管理层群",
+#     "candidates": [
+#       {"chat_id": "oc_abc123", "name": "管理层群", "score": 1.0}
+#     ]
 #   ]
 # }
 ```
@@ -174,9 +185,9 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 
 # Expected output (JSON):
 # {
-#   "status": "success",
-#   "members": [
-#     {"id": "ou_xyz123", "name": "张三", "email": "zhangsan@example.com"}
+#   "ok": true,
+#   "result": [
+#     {"open_id": "ou_xyz123", "display_name": "张三"}
 #   ]
 # }
 ```
@@ -184,63 +195,68 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 ### Step 3: Propose Meeting Slots
 
 ```bash
-# Propose available time slots for attendees to choose from
+# Start a multi-round negotiation for the candidate time slots
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
-  propose-meeting-slots \
-    --attendees '["ou_xyz123", "ou_abc456"]' \
+  start-negotiation \
     --title "项目汇报会" \
-    --slots '[
-      {"start": "2026-04-28T09:00:00+08:00", "end": "2026-04-28T10:00:00+08:00"},
-      {"start": "2026-04-28T14:00:00+08:00", "end": "2026-04-28T15:00:00+08:00"}
-    ]'
+    --initiator-open-id "ou_owner" \
+    --duration-minutes 30 \
+    --attendee-open-id "ou_xyz123" \
+    --attendee-open-id "ou_abc456" \
+    --candidate-slot "2026-04-28 15:00" \
+    --candidate-slot "2026-04-28 15:30"
 
 # Expected output (JSON):
 # {
-#   "status": "success",
-#   "proposal_id": "prop_123abc",
-#   "message_ids": ["msg_1", "msg_2"],
-#   "pending_responses": 2
+#   "ok": true,
+#   "result": {
+#     "negotiation_id": "prop_123abc",
+#     "status": "negotiating",
+#     "current_round": 1
+#   }
 # }
 ```
 
 ### Step 4: Create Meeting After Agreement
 
 ```bash
-# Create the final calendar event (after all attendees agree)
+# Create the final calendar event directly when the attendee list is already known
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   create-meeting \
     --title "项目汇报会" \
     --description "按照既定时间进行项目进度汇报" \
-    --start "2026-04-28T10:00:00+08:00" \
-    --duration-minutes 30 \
-    --attendees '["ou_xyz123", "ou_abc456"]' \
-    --organizer "semantier"
+    --start-time "2026-04-28 15:00" \
+    --end-time "2026-04-28 15:30" \
+    --attendee "ou_xyz123" \
+    --attendee "ou_abc456" \
+    --initiator-open-id "ou_owner"
 
 # Expected output (JSON):
 # {
-#   "status": "success",
-#   "meeting_id": "event_123xyz",
-#   "calendar_links": [
-#     "https://feishu.example.com/calendar/event/event_123xyz"
-#   ]
+#   "ok": true,
+#   "result": {
+#     "event_id": "event_123xyz",
+#     "join_url": "https://feishu.example.com/calendar/event/event_123xyz"
+#   }
 # }
 ```
 
-### Step 5: Send Invitations
+### Step 5: Finalize Negotiation After Agreement
 
 ```bash
-# Send invitation messages to all attendees
+# Finalize a negotiation state and fan out the meeting to participant calendars
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
-  send-invitations \
-    --meeting-id "event_123xyz" \
-    --attendees '["ou_xyz123", "ou_abc456"]' \
-    --message "会议已创建，请准时参加"
+  finalize-negotiation \
+    --state-json '<state-json>' \
+    --description "会议已创建，请准时参加"
 
 # Expected output (JSON):
 # {
-#   "status": "success",
-#   "sent_count": 2,
-#   "failed": []
+#   "ok": true,
+#   "result": {
+#     "meeting_owner_open_id": "ou_owner",
+#     "meetings": []
+#   }
 # }
 ```
 
@@ -290,6 +306,57 @@ When required meeting fields are missing, emit this schema form (do NOT use mark
   ]
 }
 ```
+
+## Card 2.0 Interaction Mode: Alternatives and Migration
+
+### Compatibility Baseline
+
+- In **custom bot webhook mode**, Card 2.0 is treated as one-way push UI for this skill.
+- Do not emit callback-style submit interactions in custom bot mode.
+- Use one of these alternatives instead:
+  - **Option A (preferred in webhook mode)**: markdown guidance and chat text reply collection.
+  - **Option B**: URL-only button flow (`open_url`) that redirects to an external form page.
+
+### Hard Guardrails for Custom Bot Mode
+
+- Never emit unsupported action container tags for submit flows.
+- If required fields are missing, always render `schema_form` as display guidance plus text instructions to reply in chat.
+- Treat user replies as the source of truth for form submission in webhook mode.
+
+### Migration Checklist: Custom Bot -> App Bot Callback Flow
+
+Use this checklist when you need true in-card submit behavior.
+
+1. Platform setup:
+  - Create or reuse a Feishu **App Bot** (not custom bot).
+  - Enable bot capabilities for receiving and replying to messages.
+  - Enable card callback handling in app configuration.
+2. Permissions and events:
+  - Apply required message and bot interaction permissions.
+  - Subscribe to message/card callback events needed for submit processing.
+3. Backend endpoint:
+  - Add a dedicated callback endpoint for card interactions.
+  - Verify request signatures and reject invalid callbacks.
+  - Enforce idempotency on callback processing using callback/event IDs.
+4. Data contract:
+  - Map card field payloads to the meeting contract (`title`, `time`, `duration`, `attendees`).
+  - Reuse existing server-side validation before any scheduling side effects.
+5. Runtime branching:
+  - Keep a mode switch in backend routing:
+    - `custom_bot`: non-callback flow (markdown/open_url/text reply).
+    - `app_bot`: callback submit flow.
+  - Do not mix callback payload assumptions into custom bot pipeline.
+6. Card rendering:
+  - For `app_bot`, use callback-capable Card 2.0 interaction components.
+  - For `custom_bot`, continue rendering non-callback-safe content only.
+7. Rollout and fallback:
+  - Ship behind a feature flag for selected workspaces.
+  - Keep text-reply fallback active if callback validation fails.
+8. Regression coverage:
+  - Add tests proving custom bot path never emits callback-only elements.
+  - Add tests proving app bot callback payloads are parsed and validated.
+  - Add tests for callback signature failure and idempotency replay.
+
 8. Send final invitation notifications to each resolved attendee after event creation.
 9. Summarize invitees, timezone, and schedule before final confirmation when the user request is ambiguous.
 10. Treat app secrets, user tokens, and webhook secrets as backend-owned secrets. Never ask the user to paste them into chat or store them in skill config.

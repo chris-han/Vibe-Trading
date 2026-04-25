@@ -237,6 +237,32 @@ def test_extract_a2ui_schema_from_text_ignores_invalid_payload():
     assert stripped == text
 
 
+def test_extract_a2ui_schema_from_text_rejects_schema_form_without_fields():
+    text = (
+        "```a2ui\n"
+        '{"version":"1.0","root":{"component":"schema_form","props":{}}}\n'
+        "```"
+    )
+
+    stripped, schema = SessionService._extract_a2ui_schema_from_text(text)
+
+    assert schema is None
+    assert stripped == text
+
+
+def test_extract_a2ui_schema_from_text_rejects_select_field_without_options():
+    text = (
+        "```a2ui\n"
+        '{"version":"1.0","root":{"component":"schema_form","props":{"fields":[{"key":"duration_unit","label":"会议时长单位","type":"select","required":true}]}}}\n'
+        "```"
+    )
+
+    stripped, schema = SessionService._extract_a2ui_schema_from_text(text)
+
+    assert schema is None
+    assert stripped == text
+
+
 def test_feishu_coordination_intent_detects_meeting_request():
     assert session_service_module._is_feishu_coordination_intent("给我和Amy Qiu约个飞书会议") is True
     assert session_service_module._is_feishu_coordination_intent("Schedule a Feishu meeting with Amy Q") is True
@@ -635,10 +661,62 @@ def test_terminal_wrapper_materializes_shared_skill_script_path(monkeypatch, tmp
     assert payload["exit_code"] == 0
 
     rewritten_command = str(captured["command"])
-    expected_rel = ".scripts/app-infra/productivity/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py"
+    expected_rel = ".scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py"
     assert expected_rel in rewritten_command
     assert str(source_script) not in rewritten_command
 
     materialized = task_cwd / expected_rel
+    assert materialized.exists()
+    assert materialized.read_text(encoding="utf-8") == "print('ok')\n"
+
+
+def test_terminal_wrapper_materializes_when_command_already_uses_sandbox_scripts_path(monkeypatch, tmp_path):
+    terminal_module = __import__("tools.terminal_tool", fromlist=["terminal_tool"])
+
+    source_script = (
+        tmp_path
+        / "repo"
+        / "agent"
+        / "src"
+        / "skills"
+        / "app-infra"
+        / "productivity"
+        / "feishu-bot-meeting-coordinator"
+        / "scripts"
+        / "feishu_bot_api.py"
+    )
+    source_script.parent.mkdir(parents=True, exist_ok=True)
+    source_script.write_text("print('ok')\n", encoding="utf-8")
+
+    script_loader_module = __import__(
+        "src.skills.script_loader",
+        fromlist=["materialize_shared_skill_scripts_for_command"],
+    )
+    monkeypatch.setattr(script_loader_module, "__file__", str(tmp_path / "repo" / "agent" / "src" / "skills" / "script_loader.py"))
+
+    task_cwd = tmp_path / "workspace" / "run" / "artifacts"
+    task_cwd.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, object] = {}
+
+    def _fake_terminal(command: str, *args, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return json.dumps({"output": "ok", "exit_code": 0, "error": None}, ensure_ascii=False)
+
+    monkeypatch.setattr(terminal_module, "terminal_tool", _fake_terminal)
+    monkeypatch.setattr(terminal_module, session_service_module._TERMINAL_GUARD_PATCH_ATTR, False, raising=False)
+    monkeypatch.setattr(terminal_module, "_task_env_overrides", {"task-1": {"cwd": str(task_cwd)}}, raising=False)
+
+    session_service_module._install_wrapper_terminal_policy_patch(active_hermes_home=None)
+
+    command = "python3 .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py search-chats --query 管理层群 --limit 5"
+    result = terminal_module.terminal_tool(command, task_id="task-1")
+
+    payload = json.loads(result)
+    assert payload["exit_code"] == 0
+    assert str(captured["command"]).startswith("python3 .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py")
+
+    materialized = task_cwd / ".scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py"
     assert materialized.exists()
     assert materialized.read_text(encoding="utf-8") == "print('ok')\n"

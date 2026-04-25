@@ -4159,13 +4159,15 @@ async def _feishu_patch_card_body(
     )
 
 
-def _feishu_lookup_attempt_reply(svc: Any, session_id: str, attempt_id: str) -> str:
-    """Return the stored assistant message for an attempt when available."""
+def _feishu_lookup_attempt_reply(svc: Any, session_id: str, attempt_id: str) -> tuple[str, Optional[Dict[str, Any]]]:
+    """Return stored assistant message content and ui_schema for an attempt."""
     messages = svc.get_messages(session_id, limit=20)
     for msg in reversed(messages):
         if msg.role == "assistant" and msg.linked_attempt_id == attempt_id:
-            return msg.content or ""
-    return ""
+            metadata = msg.metadata if isinstance(getattr(msg, "metadata", None), dict) else {}
+            ui_schema = metadata.get("ui_schema") if isinstance(metadata, dict) else None
+            return msg.content or "", (ui_schema if isinstance(ui_schema, dict) else None)
+    return "", None
 
 
 def _feishu_snapshot_attempt_state(svc: Any, session_id: str, attempt_id: str) -> tuple[str, str]:
@@ -4423,6 +4425,7 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
     try:
         final_text = streamed_text
         final_error = ""
+        final_ui_schema: Optional[Dict[str, Any]] = None
 
         async def _maybe_push_update() -> None:
             nonlocal last_pushed_body, last_push_at
@@ -4463,23 +4466,28 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                     continue
 
                 if sse_event.event_type == "attempt.completed":
-                    reply = _feishu_lookup_attempt_reply(svc, session_id, attempt_id)
+                    reply, reply_ui_schema = _feishu_lookup_attempt_reply(svc, session_id, attempt_id)
                     final_reply = reply or str((sse_event.data or {}).get("summary") or streamed_text or "")
-                    return final_reply, ""
+                    return final_reply, "", reply_ui_schema
 
                 if sse_event.event_type == "attempt.failed":
                     error_text = str((sse_event.data or {}).get("error") or "Execution failed")
-                    reply = _feishu_lookup_attempt_reply(svc, session_id, attempt_id)
+                    reply, reply_ui_schema = _feishu_lookup_attempt_reply(svc, session_id, attempt_id)
                     final_reply = reply or streamed_text or error_text
-                    return final_reply, error_text
+                    return final_reply, error_text, reply_ui_schema
 
-            return streamed_text, ""
+            return streamed_text, "", None
 
-        final_text, final_error = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
+        final_text, final_error, final_ui_schema = await asyncio.wait_for(_wait_for_completion(), timeout=600.0)
 
         if card_ctx:
             streaming_closed = False
             try:
+                schema_form_elements = (
+                    _FEISHU_VISUALIZATION_ADAPTER.build_a2ui_schema_form_elements(final_ui_schema)
+                    if isinstance(final_ui_schema, dict)
+                    else None
+                )
                 has_charts = _FEISHU_VISUALIZATION_ADAPTER.has_chart_elements(final_text)
                 if has_charts:
                     # Push prose-only text to the streaming element so vchart
@@ -4507,6 +4515,23 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
 
                 # After streaming is closed, replace the card body with proper
                 # chart elements via the IM message update endpoint.
+                if schema_form_elements:
+                    try:
+                        await _feishu_patch_card_body(card_ctx, "semantier", schema_form_elements)
+                        _feishu_logger.info(
+                            "[Feishu WS] Rendered A2UI schema_form as Card2.0 for chat=%s attempt=%s",
+                            chat_id,
+                            attempt_id,
+                        )
+                    except Exception:
+                        _feishu_logger.warning(
+                            "[Feishu WS] A2UI schema_form card patch failed after streaming close for chat=%s attempt=%s",
+                            chat_id,
+                            attempt_id,
+                            exc_info=True,
+                        )
+                        await _feishu_send_card_message(chat_id, "semantier", schema_form_elements)
+                    return
                 if has_charts:
                     final_elements = _FEISHU_VISUALIZATION_ADAPTER.split_card_elements(
                         final_text,
@@ -4538,6 +4563,17 @@ async def _feishu_await_and_reply(svc: Any, session_id: str, chat_id: str, attem
                 )
                 if streaming_closed:
                     return
+
+        if isinstance(final_ui_schema, dict):
+            schema_form_elements = _FEISHU_VISUALIZATION_ADAPTER.build_a2ui_schema_form_elements(final_ui_schema)
+            if schema_form_elements:
+                await _feishu_send_card_message(chat_id, "semantier", schema_form_elements)
+                _feishu_logger.info(
+                    "[Feishu WS] Sent standalone A2UI schema_form card for chat=%s (attempt=%s)",
+                    chat_id,
+                    attempt_id,
+                )
+                return
 
         if final_text:
             await _feishu_send_reply(chat_id, final_text if not final_error else f"{final_text}\n\nError: {final_error}")

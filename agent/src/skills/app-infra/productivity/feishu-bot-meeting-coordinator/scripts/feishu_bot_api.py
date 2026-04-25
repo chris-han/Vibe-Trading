@@ -1028,6 +1028,13 @@ def _build_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Feishu bot meeting helper for the feishu-bot-meeting-coordinator skill")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    chat_search_parser = subparsers.add_parser("search-chats")
+    chat_search_parser.add_argument("--query", required=True)
+    chat_search_parser.add_argument("--limit", type=int, default=10)
+
+    chat_members_parser = subparsers.add_parser("get-chat-members")
+    chat_members_parser.add_argument("--chat-id", required=True)
+
     search_parser = subparsers.add_parser("search-contacts")
     search_parser.add_argument("--query", required=True)
     search_parser.add_argument("--limit", type=int, default=10)
@@ -1071,7 +1078,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_cli()
     args = parser.parse_args(argv)
     try:
-        if args.command == "search-contacts":
+        if args.command == "search-chats":
+            result = search_chats(args.query, limit=args.limit)
+        elif args.command == "get-chat-members":
+            result = get_chat_members(args.chat_id)
+        elif args.command == "search-contacts":
             result = search_contacts(args.query, limit=args.limit)
         elif args.command == "create-meeting":
             result = create_meeting(

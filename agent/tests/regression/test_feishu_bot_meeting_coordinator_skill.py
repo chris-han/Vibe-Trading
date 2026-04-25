@@ -82,6 +82,41 @@ def test_search_contacts_uses_skill_local_ranking(monkeypatch):
     assert result["candidates"][0]["match_reason"] == "exact_display_name"
 
 
+def test_cli_exposes_group_lookup_commands():
+    helper = _load_helper_module()
+
+    parser = helper._build_cli()
+
+    search_args = parser.parse_args(["search-chats", "--query", "管理层群", "--limit", "5"])
+    members_args = parser.parse_args(["get-chat-members", "--chat-id", "oc_abc123"])
+
+    assert search_args.command == "search-chats"
+    assert search_args.query == "管理层群"
+    assert search_args.limit == 5
+    assert members_args.command == "get-chat-members"
+    assert members_args.chat_id == "oc_abc123"
+
+
+def test_main_dispatches_group_lookup_commands(monkeypatch, capsys):
+    helper = _load_helper_module()
+
+    monkeypatch.setattr(helper, "search_chats", lambda query, limit=10: {"query": query, "limit": limit})
+    monkeypatch.setattr(helper, "get_chat_members", lambda chat_id: [{"open_id": "ou_1", "display_name": chat_id}])
+
+    exit_code = helper.main(["search-chats", "--query", "管理层群", "--limit", "5"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert '"ok": true' in output
+    assert '"query": "管理层群"' in output
+
+    exit_code = helper.main(["get-chat-members", "--chat-id", "oc_abc123"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert '"open_id": "ou_1"' in output
+
+
 def test_tenant_access_token_reads_top_level_field(monkeypatch):
     helper = _load_helper_module()
     captured: dict[str, object] = {}

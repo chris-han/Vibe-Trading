@@ -567,3 +567,68 @@ class FeishuVisualizationAdapter(BaseVisualizationAdapter):
 
     def strip_chart_fences(self, text: str) -> str:
         return self._VCHART_FENCE_RE.sub("", text).strip()
+
+    def build_a2ui_schema_form_elements(self, ui_schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """Convert A2UI schema_form payload into Feishu Card 2.0 elements.
+
+        Returns None when payload is not a schema_form shape.
+        """
+        if not isinstance(ui_schema, dict):
+            return None
+
+        root = ui_schema.get("root")
+        if not isinstance(root, dict) or root.get("component") != "schema_form":
+            return None
+
+        props = root.get("props")
+        if not isinstance(props, dict):
+            return None
+
+        fields = props.get("fields")
+        if not isinstance(fields, list) or not fields:
+            return None
+
+        elements: List[Dict[str, Any]] = []
+
+        title = str(props.get("title") or "请补全信息").strip()
+        if title:
+            elements.append({"tag": "markdown", "content": f"### {title}"})
+
+        description = str(props.get("description") or "").strip()
+        if description:
+            elements.append({"tag": "markdown", "content": description})
+
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            label = str(field.get("label") or field.get("key") or "字段").strip()
+            field_type = str(field.get("type") or "text").strip()
+            placeholder = str(field.get("placeholder") or "").strip()
+            required = bool(field.get("required"))
+            help_text = str(field.get("help") or "").strip()
+
+            line = f"- **{label}**"
+            if required:
+                line += "（必填）"
+            line += f"\n  类型：`{field_type}`"
+            if placeholder:
+                line += f"\n  示例：{placeholder}"
+            if help_text:
+                line += f"\n  说明：{help_text}"
+            elements.append({"tag": "markdown", "content": line})
+
+        submit_label = str(props.get("submitLabel") or "提交").strip() or "提交"
+        follow_up = str(props.get("followUp") or "").strip()
+        # Feishu Card 2.0 rejects `tag: action` (error 200861), so keep
+        # submission guidance as markdown for gateway-safe rendering.
+        elements.append(
+            {
+                "tag": "markdown",
+                "content": f"**{submit_label}**：请按以上字段逐项回复，我会继续执行。",
+            }
+        )
+
+        if follow_up:
+            elements.append({"tag": "markdown", "content": follow_up})
+
+        return elements

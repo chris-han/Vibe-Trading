@@ -18,6 +18,36 @@ def test_build_streaming_card_v2_uses_card_json_v2_schema():
     assert payload["body"]["elements"][0]["element_id"] == _FEISHU_ADAPTER.stream_element_id
 
 
+def test_build_a2ui_schema_form_elements_returns_card2_elements_for_feishu():
+    ui_schema = {
+        "version": "1.0",
+        "root": {
+            "component": "schema_form",
+            "props": {
+                "title": "请补充飞书会议信息",
+                "submitLabel": "提交会议信息",
+                "followUp": "提交后继续创建会议",
+                "fields": [
+                    {
+                        "key": "meeting_title",
+                        "label": "会议主题",
+                        "type": "text",
+                        "required": True,
+                        "placeholder": "例如：项目周会",
+                    }
+                ],
+            },
+        },
+    }
+
+    elements = _FEISHU_ADAPTER.build_a2ui_schema_form_elements(ui_schema)
+
+    assert isinstance(elements, list)
+    assert not any(item.get("tag") == "action" for item in elements)
+    assert any(item.get("tag") == "markdown" and "提交会议信息" in item.get("content", "") for item in elements)
+    assert any(item.get("tag") == "markdown" and "会议主题" in item.get("content", "") for item in elements)
+
+
 def test_feishu_await_and_reply_streams_card_and_disables_mode(monkeypatch):
     streamed_updates = []
     streaming_mode_updates = []
@@ -78,6 +108,93 @@ def test_feishu_await_and_reply_streams_card_and_disables_mode(monkeypatch):
     assert streamed_updates
     assert streamed_updates[-1] == "Hello world"
     assert streaming_mode_updates == [{"enabled": False, "summary": "Complete"}]
+    assert fallback_replies == []
+
+
+def test_feishu_await_and_reply_renders_a2ui_schema_form_as_card(monkeypatch):
+    streamed_updates = []
+    streaming_mode_updates = []
+    patched_batches = []
+    fallback_replies = []
+
+    class FakeEvent:
+        def __init__(self, event_type, data):
+            self.event_type = event_type
+            self.data = data
+
+    class FakeEventBus:
+        async def subscribe(self, session_id, last_event_id=None):
+            yield FakeEvent("attempt.completed", {"attempt_id": "attempt-1", "summary": "done"})
+
+    class FakeMessage:
+        role = "assistant"
+        linked_attempt_id = "attempt-1"
+        content = "请填写信息"
+        metadata = {
+            "ui_schema": {
+                "version": "1.0",
+                "root": {
+                    "component": "schema_form",
+                    "props": {
+                        "title": "请补充飞书会议信息",
+                        "submitLabel": "提交",
+                        "fields": [
+                            {
+                                "key": "meeting_title",
+                                "label": "会议主题",
+                                "type": "text",
+                                "required": True,
+                            }
+                        ],
+                    },
+                },
+            }
+        }
+
+    class FakeService:
+        event_bus = FakeEventBus()
+
+        def get_messages(self, session_id, limit=20):
+            return [FakeMessage()]
+
+        def get_events(self, session_id, limit=2000):
+            return []
+
+    async def fake_create_streaming_card_message(chat_id, title, initial_body):
+        return {
+            "card_id": "card_123",
+            "message_id": "om_123",
+            "element_id": _FEISHU_ADAPTER.stream_element_id,
+            "sequence": 1,
+        }
+
+    async def fake_stream_card_text(card_ctx, content):
+        streamed_updates.append(content)
+        card_ctx["sequence"] = int(card_ctx.get("sequence") or 1) + 1
+
+    async def fake_set_card_streaming_mode(card_ctx, *, enabled, summary=None):
+        streaming_mode_updates.append({"enabled": enabled, "summary": summary})
+        card_ctx["sequence"] = int(card_ctx.get("sequence") or 1) + 1
+
+    async def fake_patch_card_body(card_ctx, title, elements, *, template="blue"):
+        patched_batches.append(elements)
+
+    async def fake_send_reply(chat_id, text):
+        fallback_replies.append(text)
+
+    monkeypatch.setattr(api_server, "_feishu_create_streaming_card_message", fake_create_streaming_card_message)
+    monkeypatch.setattr(api_server, "_feishu_stream_card_text", fake_stream_card_text)
+    monkeypatch.setattr(api_server, "_feishu_set_card_streaming_mode", fake_set_card_streaming_mode)
+    monkeypatch.setattr(api_server, "_feishu_patch_card_body", fake_patch_card_body)
+    monkeypatch.setattr(api_server, "_feishu_send_reply", fake_send_reply)
+    monkeypatch.setattr(api_server, "_FEISHU_STREAM_UPDATE_INTERVAL_SECONDS", 0.0)
+
+    asyncio.run(api_server._feishu_await_and_reply(FakeService(), "session-1", "chat-1", "attempt-1"))
+
+    assert streaming_mode_updates == [{"enabled": False, "summary": "Complete"}]
+    assert len(patched_batches) == 1
+    assert not any(item.get("tag") == "action" for item in patched_batches[0])
+    assert any(item.get("tag") == "markdown" and "请按以上字段逐项回复" in item.get("content", "") for item in patched_batches[0])
     assert fallback_replies == []
 
 

@@ -82,6 +82,10 @@ _A2UI_FENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+def _is_non_empty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
 _DEFAULT_ENABLED_TOOLSETS = [
     "terminal",
     "file",
@@ -1123,14 +1127,80 @@ class SessionService:
         if not isinstance(parsed, dict):
             return raw_text, None
 
-        has_root = isinstance(parsed.get("root"), dict)
-        has_nodes = isinstance(parsed.get("nodes"), list)
-        has_blocks = isinstance(parsed.get("blocks"), list)
-        if not (has_root or has_nodes or has_blocks):
+        if not SessionService._is_valid_a2ui_payload(parsed):
             return raw_text, None
 
         stripped = (raw_text[: match.start()] + raw_text[match.end() :]).strip()
         return stripped, parsed
+
+    @staticmethod
+    def _is_valid_a2ui_payload(payload: Dict[str, Any]) -> bool:
+        has_root = isinstance(payload.get("root"), dict)
+        has_nodes = isinstance(payload.get("nodes"), list)
+        has_blocks = isinstance(payload.get("blocks"), list)
+        if not (has_root or has_nodes or has_blocks):
+            return False
+
+        if has_root and not SessionService._is_valid_a2ui_root(payload["root"]):
+            return False
+
+        if has_nodes and any(not isinstance(node, dict) for node in payload["nodes"]):
+            return False
+
+        if has_blocks and any(not isinstance(block, dict) for block in payload["blocks"]):
+            return False
+
+        return True
+
+    @staticmethod
+    def _is_valid_a2ui_root(root: Dict[str, Any]) -> bool:
+        component = root.get("component")
+        if not _is_non_empty_text(component):
+            return False
+
+        props = root.get("props")
+        if props is not None and not isinstance(props, dict):
+            return False
+
+        if str(component).strip() == "schema_form":
+            if not isinstance(props, dict):
+                return False
+            return SessionService._is_valid_schema_form_props(props)
+
+        return True
+
+    @staticmethod
+    def _is_valid_schema_form_props(props: Dict[str, Any]) -> bool:
+        fields = props.get("fields")
+        if not isinstance(fields, list) or not fields:
+            return False
+
+        for field in fields:
+            if not isinstance(field, dict):
+                return False
+
+            for key in ("key", "label", "type"):
+                if not _is_non_empty_text(field.get(key)):
+                    return False
+
+            required = field.get("required")
+            if required is not None and not isinstance(required, bool):
+                return False
+
+            field_type = str(field.get("type")).strip().lower()
+            if field_type == "select":
+                options = field.get("options")
+                if not isinstance(options, list) or not options:
+                    return False
+                for option in options:
+                    if not isinstance(option, dict):
+                        return False
+                    if not _is_non_empty_text(option.get("label")):
+                        return False
+                    if not _is_non_empty_text(option.get("value")):
+                        return False
+
+        return True
 
     async def _run_attempt(self, session: Session, attempt: Attempt) -> None:
         """Execute an Attempt in the background."""
