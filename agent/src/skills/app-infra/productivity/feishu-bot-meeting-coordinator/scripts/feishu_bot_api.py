@@ -452,15 +452,27 @@ def search_chats(query: str, *, limit: int = 10, session: requests.Session | Non
     return {"query": normalized_query, "candidates": matches[:limit]}
 
 
-def get_chat_members(chat_id: str, *, session: requests.Session | None = None) -> list[dict[str, Any]]:
+def get_chat_members(
+    chat_id: str,
+    *,
+    member_id_type: str = "open_id",
+    session: requests.Session | None = None,
+) -> list[dict[str, Any]]:
     normalized_chat_id = chat_id.strip()
     if not normalized_chat_id:
         raise FeishuSkillError("chat_id is required")
 
+    normalized_member_id_type = str(member_id_type or "open_id").strip().lower()
+    if normalized_member_id_type not in {"open_id", "union_id", "user_id"}:
+        raise FeishuSkillError(
+            "member_id_type must be one of: open_id, union_id, user_id",
+            payload={"member_id_type": member_id_type},
+        )
+
     members: list[dict[str, Any]] = []
     page_token: str | None = None
     for _ in range(5):
-        params: dict[str, Any] = {"member_id_type": "open_id", "page_size": 50}
+        params: dict[str, Any] = {"member_id_type": normalized_member_id_type, "page_size": 50}
         if page_token:
             params["page_token"] = page_token
         data = _openapi_request(
@@ -1041,6 +1053,11 @@ def _build_cli() -> argparse.ArgumentParser:
 
     chat_members_parser = subparsers.add_parser("get-chat-members")
     chat_members_parser.add_argument("--chat-id", required=True)
+    chat_members_parser.add_argument(
+        "--member-id-type",
+        choices=["open_id", "union_id", "user_id"],
+        default="open_id",
+    )
 
     search_parser = subparsers.add_parser("search-contacts")
     search_parser.add_argument("--query", required=True)
@@ -1088,7 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "search-chats":
             result = search_chats(args.query, limit=args.limit)
         elif args.command == "get-chat-members":
-            result = get_chat_members(args.chat_id)
+            result = get_chat_members(args.chat_id, member_id_type=args.member_id_type)
         elif args.command == "search-contacts":
             result = search_contacts(args.query, limit=args.limit)
         elif args.command == "create-meeting":
@@ -1132,6 +1149,22 @@ def main(argv: list[str] | None = None) -> int:
             )
     except FeishuSkillError as exc:
         print(json.dumps({"ok": False, "error": str(exc), "payload": exc.payload}, ensure_ascii=False, indent=2))
+        return 1
+    except requests.RequestException as exc:
+        response_body = ""
+        if getattr(exc, "response", None) is not None:
+            response_body = str(getattr(exc.response, "text", "") or "").strip()
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": f"Feishu HTTP request failed: {exc}",
+                    "payload": {"response_body": response_body or None},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 1
 
     print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, indent=2))

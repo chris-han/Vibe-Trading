@@ -89,6 +89,81 @@ def test_run_with_agent_uses_workspace_hermes_home(tmp_path, monkeypatch):
     assert 'env' not in register_calls[-1]
 
 
+def test_run_with_agent_injects_structured_output_overrides_for_feishu(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    hermes_home = tmp_path / "workspace" / ".hermes"
+    hermes_home.mkdir(parents=True)
+
+    captured_agent_kwargs: dict[str, object] = {}
+
+    fake_run_agent = types.ModuleType("run_agent")
+
+    class FakeAIAgent:
+        def __init__(self, **kwargs):
+            captured_agent_kwargs.update(kwargs)
+
+        def run_conversation(self, **kwargs):
+            return {"final_response": '{"content":"ok","ui_schema":null}'}
+
+    fake_run_agent.AIAgent = FakeAIAgent
+    monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
+
+    fake_state_module = types.ModuleType("src.core.state")
+
+    class FakeRunStateStore:
+        def create_run_dir(self, runs_dir):
+            run_dir = runs_dir / "run-1"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
+
+        def save_request(self, run_dir, prompt, metadata):
+            return None
+
+        def mark_success(self, run_dir):
+            return None
+
+        def mark_failure(self, run_dir, reason):
+            return None
+
+    fake_state_module.RunStateStore = FakeRunStateStore
+    monkeypatch.setitem(sys.modules, "src.core.state", fake_state_module)
+
+    monkeypatch.setattr("src.session.service.prepare_hermes_project_context", lambda chdir=False: repo_root)
+    monkeypatch.setattr("src.session.service.ensure_runtime_env", lambda: None)
+    monkeypatch.setattr(
+        "src.session.service.get_hermes_agent_kwargs",
+        lambda: {"api_mode": "chat_completions", "request_overrides": {"service_tier": "flex"}},
+    )
+    monkeypatch.setattr("src.session.service.build_session_runtime_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.session.service.is_backtest_prompt", lambda prompt: False)
+    monkeypatch.delenv("TERMINAL_CWD", raising=False)
+
+    monkeypatch.setattr("tools.terminal_tool.register_task_env_overrides", lambda _task_id, overrides: None)
+    monkeypatch.setattr("tools.terminal_tool.clear_task_env_overrides", lambda _task_id: None)
+
+    store = SessionStore(tmp_path / "sessions")
+    event_bus = EventBus()
+    service = SessionService(
+        store=store,
+        event_bus=event_bus,
+        runs_dir=tmp_path / "runs",
+        hermes_home=hermes_home,
+    )
+    session = service.create_session(config={"sandbox_role": "regular_user", "channel": "feishu"})
+    attempt = Attempt(session_id=session.session_id, prompt="安排飞书会议")
+
+    result = asyncio.run(service._run_with_agent(attempt, messages=[]))
+
+    assert result["status"] == "success"
+    assert result["content"] == "ok"
+    request_overrides = captured_agent_kwargs.get("request_overrides")
+    assert isinstance(request_overrides, dict)
+    assert request_overrides.get("service_tier") == "flex"
+    response_format = request_overrides.get("response_format")
+    assert isinstance(response_format, dict)
+    assert response_format.get("type") == "json_schema"
+
+
 
 def test_run_with_agent_uses_admin_sandbox_root(tmp_path, monkeypatch):
     repo_root = tmp_path / 'repo'
@@ -261,6 +336,77 @@ def test_extract_a2ui_schema_from_text_rejects_select_field_without_options():
 
     assert schema is None
     assert stripped == text
+
+
+def test_extract_structured_response_from_text_returns_content_and_ui_schema():
+    text = json.dumps(
+        {
+            "content": "请确认会议参数后继续。",
+            "ui_schema": {
+                "version": "1.0",
+                "root": {
+                    "component": "schema_form",
+                    "props": {
+                        "fields": [
+                            {
+                                "key": "meeting_title",
+                                "label": "会议主题",
+                                "type": "text",
+                                "required": True,
+                            }
+                        ]
+                    },
+                },
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    content, ui_schema = SessionService._extract_structured_response_from_text(text)
+
+    assert content == "请确认会议参数后继续。"
+    assert isinstance(ui_schema, dict)
+    assert ui_schema["root"]["component"] == "schema_form"
+
+
+def test_extract_structured_response_from_text_ignores_invalid_ui_schema():
+    text = json.dumps(
+        {
+            "content": "仅展示文本",
+            "ui_schema": {"root": {"component": "schema_form", "props": {}}},
+        },
+        ensure_ascii=False,
+    )
+
+    content, ui_schema = SessionService._extract_structured_response_from_text(text)
+
+    assert content == "仅展示文本"
+    assert ui_schema is None
+
+
+def test_build_structured_output_request_overrides_for_feishu_chat_completions():
+    overrides = SessionService._build_structured_output_request_overrides(
+        channel="feishu",
+        api_mode="chat_completions",
+        existing_overrides=None,
+    )
+
+    assert isinstance(overrides, dict)
+    assert overrides["response_format"]["type"] == "json_schema"
+    assert overrides["response_format"]["json_schema"]["name"] == "semantier_a2ui_response"
+
+
+def test_build_structured_output_request_overrides_skips_non_feishu_or_non_chat_mode():
+    assert SessionService._build_structured_output_request_overrides(
+        channel="web",
+        api_mode="chat_completions",
+        existing_overrides=None,
+    ) is None
+    assert SessionService._build_structured_output_request_overrides(
+        channel="feishu",
+        api_mode="codex_responses",
+        existing_overrides=None,
+    ) is None
 
 
 def test_feishu_coordination_intent_detects_meeting_request():

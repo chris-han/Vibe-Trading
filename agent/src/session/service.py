@@ -86,6 +86,24 @@ _A2UI_FENCE_RE = re.compile(
     r"```a2ui\s*(\{[\s\S]*?\})\s*```",
     re.IGNORECASE,
 )
+_A2UI_AGENT_RESPONSE_SCHEMA: Dict[str, Any] = {
+    "name": "semantier_a2ui_response",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "content": {"type": "string"},
+            "ui_schema": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "object"},
+                ]
+            },
+        },
+        "required": ["content", "ui_schema"],
+    },
+}
 _FEISHU_MEETING_CREATE_CMD_RE = re.compile(
     r"\bfeishu_bot_api\.py\b.*\b(create-meeting|finalize-negotiation)\b",
     re.IGNORECASE,
@@ -1258,6 +1276,61 @@ class SessionService:
         return stripped, parsed
 
     @staticmethod
+    def _extract_structured_response_from_text(text: str) -> tuple[str, Optional[Dict[str, Any]]]:
+        """Extract schema-enveloped content from model response when available.
+
+        Expected envelope:
+        {"content": "...", "ui_schema": {...}|null}
+        """
+        raw_text = str(text or "").strip()
+        if not raw_text:
+            return "", None
+
+        try:
+            payload = json.loads(raw_text)
+        except Exception:
+            return raw_text, None
+
+        if not isinstance(payload, dict):
+            return raw_text, None
+
+        content = payload.get("content")
+        if not isinstance(content, str):
+            return raw_text, None
+
+        ui_schema = payload.get("ui_schema")
+        parsed_schema: Optional[Dict[str, Any]] = None
+        if isinstance(ui_schema, dict) and SessionService._is_valid_a2ui_payload(ui_schema):
+            parsed_schema = ui_schema
+
+        return content.strip(), parsed_schema
+
+    @staticmethod
+    def _build_structured_output_request_overrides(
+        *,
+        channel: str,
+        api_mode: str,
+        existing_overrides: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Build wrapper-owned request overrides for schema-first final responses."""
+        normalized_channel = str(channel or "").strip().lower()
+        normalized_mode = str(api_mode or "").strip().lower()
+        if normalized_channel != "feishu":
+            return None
+        if normalized_mode != "chat_completions":
+            return None
+
+        overrides = dict(existing_overrides or {})
+        if "response_format" in overrides:
+            return overrides
+
+        overrides["response_format"] = {
+            "type": "json_schema",
+            "json_schema": _A2UI_AGENT_RESPONSE_SCHEMA,
+        }
+        return overrides
+
+    @staticmethod
     def _is_valid_a2ui_payload(payload: Dict[str, Any]) -> bool:
         has_root = isinstance(payload.get("root"), dict)
         has_nodes = isinstance(payload.get("nodes"), list)
@@ -1665,9 +1738,18 @@ class SessionService:
         active_session = self.store.get_session(sid) or Session()
         sandbox_role = self._resolve_sandbox_role(active_session)
         organizer_approval_required, organizer_approved = self._resolve_feishu_organizer_approval_flags(active_session)
+        session_channel = str(active_session.config.get("channel") or "") if isinstance(active_session.config, dict) else ""
 
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
+        structured_overrides = self._build_structured_output_request_overrides(
+            channel=session_channel,
+            api_mode=str(agent_kwargs.get("api_mode") or ""),
+            existing_overrides=agent_kwargs.get("request_overrides") if isinstance(agent_kwargs, dict) else None,
+        )
+        if structured_overrides is not None:
+            agent_kwargs = dict(agent_kwargs)
+            agent_kwargs["request_overrides"] = structured_overrides
 
         if bool(agent_kwargs.get("save_trajectories")):
             from agent.trajectory import save_trajectory as _save_trajectory_fn
@@ -1799,14 +1881,15 @@ class SessionService:
                     ),
                 )
 
-            def _normalize_final_text(raw_response: Dict[str, Any]) -> tuple[str, bool]:
-                resolved_text = (raw_response.get("final_response") or "").strip()
+            def _normalize_final_text(raw_response: Dict[str, Any]) -> tuple[str, bool, Optional[Dict[str, Any]]]:
+                raw_text = (raw_response.get("final_response") or "").strip()
+                resolved_text, resolved_ui_schema = self._extract_structured_response_from_text(raw_text)
                 if not resolved_text and latest_useful_tool_output:
                     logger.info(
                         "[%s] using tool-result fallback for empty final response",
                         sid[:8],
                     )
-                    return latest_useful_tool_output.strip(), False
+                    return latest_useful_tool_output.strip(), False, resolved_ui_schema
 
                 is_incomplete = self._looks_incomplete_final_response(resolved_text)
                 if is_incomplete and latest_useful_tool_output and saw_successful_file_mutation and not is_backtest_task:
@@ -1815,12 +1898,12 @@ class SessionService:
                         sid[:8],
                         resolved_text[:200],
                     )
-                    return latest_useful_tool_output.strip(), False
+                    return latest_useful_tool_output.strip(), False, resolved_ui_schema
 
-                return resolved_text, is_incomplete
+                return resolved_text, is_incomplete, resolved_ui_schema
 
             raw = await _run_turn(attempt.prompt, history)
-            final_text, incomplete_final_text = _normalize_final_text(raw)
+            final_text, incomplete_final_text, ui_schema = _normalize_final_text(raw)
             incomplete_response_retry = False
 
             if incomplete_final_text and not is_backtest_task:
@@ -1840,7 +1923,7 @@ class SessionService:
                     {"role": "user", "content": _INCOMPLETE_RESPONSE_RETRY_PROMPT},
                 ]
                 raw = await _run_turn(_INCOMPLETE_RESPONSE_RETRY_PROMPT, retry_history)
-                final_text, incomplete_final_text = _normalize_final_text(raw)
+                final_text, incomplete_final_text, ui_schema = _normalize_final_text(raw)
 
             if incomplete_final_text:
                 incomplete_final_response = True
@@ -1857,7 +1940,8 @@ class SessionService:
                     "run_id": run_dir.name,
                 }
             else:
-                final_text, ui_schema = self._extract_a2ui_schema_from_text(final_text)
+                if not ui_schema:
+                    final_text, ui_schema = self._extract_a2ui_schema_from_text(final_text)
                 # Persist assistant markdown for every successful response so the
                 # run directory always has a user-visible report artifact.
                 if final_text:

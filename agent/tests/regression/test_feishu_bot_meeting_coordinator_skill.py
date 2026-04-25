@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import requests
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILL_DIR = (
@@ -123,20 +125,27 @@ def test_cli_exposes_group_lookup_commands():
     parser = helper._build_cli()
 
     search_args = parser.parse_args(["search-chats", "--query", "管理层群", "--limit", "5"])
-    members_args = parser.parse_args(["get-chat-members", "--chat-id", "oc_abc123"])
+    members_args = parser.parse_args(
+        ["get-chat-members", "--chat-id", "oc_abc123", "--member-id-type", "union_id"]
+    )
 
     assert search_args.command == "search-chats"
     assert search_args.query == "管理层群"
     assert search_args.limit == 5
     assert members_args.command == "get-chat-members"
     assert members_args.chat_id == "oc_abc123"
+    assert members_args.member_id_type == "union_id"
 
 
 def test_main_dispatches_group_lookup_commands(monkeypatch, capsys):
     helper = _load_helper_module()
 
     monkeypatch.setattr(helper, "search_chats", lambda query, limit=10: {"query": query, "limit": limit})
-    monkeypatch.setattr(helper, "get_chat_members", lambda chat_id: [{"open_id": "ou_1", "display_name": chat_id}])
+
+    def fake_get_chat_members(chat_id, member_id_type="open_id"):
+        return [{"open_id": "ou_1", "display_name": f"{chat_id}:{member_id_type}"}]
+
+    monkeypatch.setattr(helper, "get_chat_members", fake_get_chat_members)
 
     exit_code = helper.main(["search-chats", "--query", "管理层群", "--limit", "5"])
     output = capsys.readouterr().out
@@ -145,11 +154,32 @@ def test_main_dispatches_group_lookup_commands(monkeypatch, capsys):
     assert '"ok": true' in output
     assert '"query": "管理层群"' in output
 
-    exit_code = helper.main(["get-chat-members", "--chat-id", "oc_abc123"])
+    exit_code = helper.main(["get-chat-members", "--chat-id", "oc_abc123", "--member-id-type", "union_id"])
     output = capsys.readouterr().out
 
     assert exit_code == 0
     assert '"open_id": "ou_1"' in output
+    assert '"display_name": "oc_abc123:union_id"' in output
+
+
+def test_main_returns_structured_error_for_request_exception(monkeypatch, capsys):
+    helper = _load_helper_module()
+
+    class _Response:
+        text = '{"code": 99991663, "msg": "invalid request"}'
+
+    def raise_http_error(*args, **kwargs):
+        raise requests.HTTPError("400 Client Error", response=_Response())
+
+    monkeypatch.setattr(helper, "get_chat_members", raise_http_error)
+
+    exit_code = helper.main(["get-chat-members", "--chat-id", "oc_bad"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert '"ok": false' in output
+    assert '"error": "Feishu HTTP request failed: 400 Client Error"' in output
+    assert '"response_body": "{\\"code\\": 99991663, \\"msg\\": \\"invalid request\\"}"' in output
 
 
 def test_tenant_access_token_reads_top_level_field(monkeypatch):
