@@ -4,7 +4,7 @@ description: >
   Coordinate Feishu bot-assisted contact search and meeting scheduling for
   workspace users. Use this skill when the Semantier backend is configured to
   run multi-round attendee availability negotiation, then create the final
-  calendar events on participant calendars with initiator ownership semantics,
+  calendar events on the requester's calendar with attendee invitations,
   and deliver invitations.
 version: 1.0.0
 author: Semantier
@@ -50,7 +50,7 @@ Use this skill to coordinate a Feishu bot that can:
 
 - search the bot's visible contact list
 - run multi-round availability negotiation with each attendee
-- create calendar meetings on each participant calendar after agreement
+- create calendar meetings via the bot's calendar after agreement (with requester as organizer identity where supported)
 - invite user-selected contacts to the meeting
 
 This skill is for the direct Feishu bot/API path.
@@ -61,7 +61,7 @@ This skill is for the direct Feishu bot/API path.
 
 ### What You Don't Do
 - Do NOT reference absolute system paths like `/home/chris/repo/semantier/agent/src/skills/...`
-- Do NOT use `skill_view(...)` to manually load script code into context
+- Do NOT use `skill_view(...)` to extract and inline script source code into terminal commands
 - Do NOT use hardcoded paths in terminal commands
 
 ### What the Wrapper Layer Does (Automatically)
@@ -117,7 +117,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 # start-negotiation: Start a multi-round availability negotiation
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   start-negotiation --title "项目汇报会" \
-    --initiator-open-id "ou_initiator_001" --duration-minutes 30 \
+    --requester-open-id "ou_requester_001" --duration-minutes 30 \
     --attendee-open-id "ou_a" --attendee-open-id "ou_b" \
     --candidate-slot "2026-04-28 15:00" --candidate-slot "2026-04-28 15:30"
 
@@ -147,20 +147,54 @@ When this skill is installed into a workspace, use the configured values as foll
 
 ## Operating Rules
 
-1. Use the Feishu bot identity `semantier` as the organizer identity for contact search, meeting creation, and meeting summaries unless an explicit workspace config override is provided.
-1a. If the user explicitly designates an organizer (for example: `组织者是 X` or `organizer is X`), you MAY use that designated organizer instead of the default session owner.
-1b. If `organizer` and `initiator` are not the same person, you MUST obtain explicit approval from the designated organizer before running `create-meeting` or `finalize-negotiation`.
+1. **The requester (Feishu message sender) is always the default meeting owner.** For Feishu channel sessions, the runtime automatically injects `FEISHU_REQUESTER_OPEN_ID=<sender_open_id>` into the command environment when invoking `feishu_bot_api.py` via the terminal tool. For non-Feishu channels (for example web), `FEISHU_REQUESTER_OPEN_ID` is NOT auto-injected. In that case you MUST determine the requester's identity (for example by asking the user or searching contacts) and pass `--requester-open-id` explicitly. If you use the Python API directly (importing functions from the script), you MUST pass `requester_open_id` explicitly in all cases. Never default to the `semantier` bot identity as meeting owner.
+1a. **Calendar ownership:** The script first attempts to create the event on the requester's primary calendar. If Feishu returns `191002` (bot lacks write access), it falls back to the bot's own calendar. Attendees still receive proper invitations via the separate `calendar_event_attendee.create` API.
+1b. **Organizer display:** On the bot calendar, Feishu ignores `event_organizer` and always shows the bot as the organizer. The requester is implicitly added as an attendee so the event appears on their calendar. If the user complains about the organizer showing as "semantier", explain that this is a Feishu platform limitation when using the bot calendar fallback.
+1a. If the user explicitly designates a different organizer (for example: `组织者是 X` or `organizer is X`), you MAY use that designated organizer instead of the requester, but you MUST obtain explicit approval from that organizer first.
+1b. If `organizer` and `requester` are not the same person, you MUST obtain explicit approval from the designated organizer before running `create-meeting` or `finalize-negotiation`.
 1c. Approval must be explicit and attributable to the designated organizer (clear yes/approve intent). If approval is missing or ambiguous, do not create events.
 2. **MANDATORY**: When any required meeting field is missing, you MUST emit the `a2ui` `schema_form` block defined in the **Missing Input A2UI Contract** section below. A free-form markdown bullet list asking for the same fields is NEVER acceptable — even when reading the skill for the first time.
 2a. When the agent is not certain about any required meeting field, it must ask the user to clarify via that form. Do not silently assume a default duration, attendee list, or other required value.
-2b. Before creating an event, if any parameter is inferred/defaulted (for example duration, timezone, description, or selected organizer/initiator), you MUST show a pre-create review `schema_form` with those default values and ask whether to edit or approve.
+2b. Before creating an event, if any parameter is inferred/defaulted (for example duration, timezone, description, or selected organizer/requester), you MUST show a pre-create review `schema_form` with those default values and ask whether to edit or approve.
+2c. Do not persist confirmation or review forms through file tools. Render the `a2ui` `schema_form` directly in the assistant response and avoid temporary files (for example `/tmp/*.md`) or any absolute host path.
 3. Resolve attendees through the materialized `feishu_bot_api.py` script rather than guessing account identifiers.
 4. Confirm ambiguous contact matches before creating the meeting.
 5. Run attendee negotiation rounds until all attendees agree on one slot or rounds are exhausted.
-6. After agreement, create meeting items on each participant calendar using the same agreed slot and attendee list.
-7. Treat the request initiator as the meeting owner identity in summaries and final outputs.
-7a. If organizer override is used, include both identities explicitly in confirmations: organizer identity and initiator identity.
+6. After agreement, create the meeting. The script attempts the requester's calendar first, then falls back to the bot calendar. Attendees are added via the dedicated `calendar_event_attendee.create` API (Feishu silently ignores `attendees` in the create-event body). The event is configured with `attendee_ability="can_see_others"` so participants can see each other's names.
+7. Treat the requester as the meeting owner identity in summaries and final outputs.
+7a. If organizer override is used, include both identities explicitly in confirmations: organizer identity and requester identity.
 7b. Never execute create-event calls when organizer approval is still pending.
+8. Send final invitation notifications to each resolved attendee after event creation.
+9. Summarize invitees, timezone, and schedule before final confirmation when the user request is ambiguous.
+10. Treat app secrets, user tokens, and webhook secrets as backend-owned secrets. Never ask the user to paste them into chat or store them in skill config.
+11. When the attendee expression contains a group phrase (for example `管理层群`, `管理层群里的所有人`), pass the **exact user phrase** directly to `create-meeting` as an attendee. Do NOT substitute it with the resolved chat name. The script automatically resolves group members via Feishu chat/member APIs. You do NOT need to manually run `search-chats` and `get-chat-members` before `create-meeting` unless the user explicitly asks to preview the member list.
+
+## Completion Guardrails
+
+- **Getting group members is NEVER the final step.** If the user's request was to schedule a meeting, after resolving attendees you MUST proceed to `create-meeting` or `start-negotiation`. Never return a member table as the final answer.
+- **Prefer the direct creation path.** Do not break `create-meeting` into manual `search-chats` → `get-chat-members` steps unless the user explicitly asks to see the member list first.
+- **Always use exact IDs from search results.** When you do use `get-chat-members`, pass the `chat_id` exactly as returned by `search-chats`. Never invent, guess, or reuse chat_ids from examples or memory.
+
+## Direct Meeting Creation Path (Recommended)
+
+When the user provides enough information (title, time, attendees including group names), use the direct path:
+
+```bash
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  create-meeting \
+    --title "项目汇报会" \
+    --start-time "2026-04-25 16:00" \
+    --end-time "2026-04-25 16:30" \
+    --attendee "管理层群里的所有人" \
+    --attendee "chris han"
+```
+
+The `create-meeting` command automatically resolves:
+- Group phrases like `管理层群` into all group members
+- Individual names into contacts via search
+- Emails into user IDs
+
+You do NOT need to manually run `search-chats` and `get-chat-members` before `create-meeting` unless the user explicitly asks to preview the member list first.
 
 ## Implementation Guidelines: Using the Materialized Script
 
@@ -209,7 +243,6 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   start-negotiation \
     --title "项目汇报会" \
-    --initiator-open-id "ou_initiator_001" \
     --duration-minutes 30 \
     --attendee-open-id "ou_attendee_001" \
     --attendee-open-id "ou_attendee_002" \
@@ -238,8 +271,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
     --start-time "2026-04-28 15:00" \
     --end-time "2026-04-28 15:30" \
     --attendee "ou_attendee_001" \
-    --attendee "ou_attendee_002" \
-    --initiator-open-id "ou_initiator_001"
+    --attendee "ou_attendee_002"
 
 # Expected output (JSON):
 # {
@@ -254,7 +286,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 ### Step 5: Finalize Negotiation After Agreement
 
 ```bash
-# Finalize a negotiation state and fan out the meeting to participant calendars
+# Finalize a negotiation state and create the meeting on the requester's calendar
 python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
   finalize-negotiation \
     --state-json '<state-json>' \
@@ -264,7 +296,7 @@ python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
 # {
 #   "ok": true,
 #   "result": {
-#     "meeting_owner_open_id": "ou_initiator_001",
+#     "meeting_owner_open_id": "ou_requester_001",
 #     "meetings": []
 #   }
 # }
@@ -367,16 +399,11 @@ Use this checklist when you need true in-card submit behavior.
   - Add tests proving app bot callback payloads are parsed and validated.
   - Add tests for callback signature failure and idempotency replay.
 
-8. Send final invitation notifications to each resolved attendee after event creation.
-9. Summarize invitees, timezone, and schedule before final confirmation when the user request is ambiguous.
-10. Treat app secrets, user tokens, and webhook secrets as backend-owned secrets. Never ask the user to paste them into chat or store them in skill config.
-11. If the attendee expression contains a group phrase (for example `管理层群`, `管理层群里的所有人`), you MUST resolve group members via Feishu chat/member APIs before asking the user for manual names.
-
 ## Helper Entry Points
 
 - Contact search CLI: `python scripts/feishu_bot_api.py search-contacts --query "Amy Q" --limit 5`
 - Meeting creation CLI: `python scripts/feishu_bot_api.py create-meeting --title "项目同步" --start-time "2026-04-24 15:40" --end-time "2026-04-24 16:10" --attendee "Chris Han" --attendee "Amy Q"`
-- Start negotiation CLI: `python scripts/feishu_bot_api.py start-negotiation --title "项目同步" --initiator-open-id "ou_xxx" --duration-minutes 30 --attendee-open-id "ou_a" --attendee-open-id "ou_b" --candidate-slot "2026-04-24 15:40" --candidate-slot "2026-04-24 16:40"`
+- Start negotiation CLI: `python scripts/feishu_bot_api.py start-negotiation --title "项目同步" --requester-open-id "ou_xxx" --duration-minutes 30 --attendee-open-id "ou_a" --attendee-open-id "ou_b" --candidate-slot "2026-04-24 15:40" --candidate-slot "2026-04-24 16:40"`
 - Submit response CLI: `python scripts/feishu_bot_api.py submit-response --state-json '{...}' --attendee-open-id "ou_a" --accepted-slot "2026-04-24 15:40"`
 - Finalize CLI: `python scripts/feishu_bot_api.py finalize-negotiation --state-json '{...}' --description "讨论项目进展"`
 - Python API: import `search_contacts(...)`, `start_negotiation(...)`, `submit_attendee_response(...)`, `finalize_negotiation_and_create_meeting(...)`, and `create_meeting(...)` from `scripts/feishu_bot_api.py`.
@@ -388,7 +415,9 @@ Use this checklist when you need true in-card submit behavior.
 
 When the user wants to schedule a meeting but required fields are missing, emit exactly one fenced `a2ui` JSON block using `schema_form`, then add one short plain-language sentence below it. Do not precede it with a markdown list of questions.
 
-Use this schema shape exactly for meeting scheduling:
+Use this schema shape exactly for meeting scheduling. When a value is explicitly stated or clearly inferred from the user's message, set it as `default` on that field so the user can confirm or edit it. Use `placeholder` only when the field is truly unknown.
+
+For example, if the user says "给我和管理层群里的所有人定个项目汇报会，今天下午6pm", emit a form where the inferred fields carry `default` and only truly unknown fields use `placeholder`:
 
 ```a2ui
 {
@@ -396,7 +425,7 @@ Use this schema shape exactly for meeting scheduling:
   "root": {
     "component": "schema_form",
     "props": {
-      "title": "请补充飞书会议信息",
+      "title": "请确认或编辑会议信息",
       "submitLabel": "提交会议信息",
       "followUp": "请根据以上会议信息继续搜索联系人并创建飞书会议。",
       "fields": [
@@ -405,6 +434,7 @@ Use this schema shape exactly for meeting scheduling:
           "label": "会议主题",
           "type": "text",
           "required": true,
+          "default": "项目汇报会",
           "placeholder": "例如：项目周会"
         },
         {
@@ -412,6 +442,7 @@ Use this schema shape exactly for meeting scheduling:
           "label": "会议时间",
           "type": "text",
           "required": true,
+          "default": "今天下午 6:00",
           "placeholder": "例如：今天下午 3:40 或 2026-04-24 15:40"
         },
         {
@@ -437,6 +468,7 @@ Use this schema shape exactly for meeting scheduling:
           "label": "参会人员",
           "type": "text",
           "required": true,
+          "default": "管理层群里的所有人",
           "placeholder": "例如：ou_attendee_001, ou_attendee_002"
         },
         {
@@ -456,9 +488,10 @@ Rules for this schema:
 
 - Never include meta-instruction labels such as `根据技能说明`, `我需要了解以下信息`, or `我来帮您安排会议` as form fields.
 - Never merge `会议时长` into a single hardcoded hour assumption. Always collect `duration_value` and `duration_unit` separately.
-- Never prefill or preselect a required field merely to keep the flow moving. If `duration_value`, `duration_unit`, attendees, or another required field is uncertain, leave it for the user to clarify in the form.
+- Do not silently assume a default duration. Never prefill or preselect a required field with an uncertain guess merely to keep the flow moving. If `duration_value`, `duration_unit`, or another required field is truly unknown, use `placeholder` and leave it for the user to clarify.
+- When a value is explicitly stated or clearly inferred from the user's message, you MUST set it as the `default` for that field so the user can confirm or edit it. This applies to `meeting_title`, `meeting_time`, `attendees`, and any other field where the user's intent is clear.
 - `meeting_description` is optional and must remain `required: false`.
-- If the user already supplied some fields, keep the same schema keys and only ask for the missing ones.
+- If the user already supplied some fields, keep the same schema keys and prefill them with `default`. Only fields that are truly missing should rely on `placeholder`.
 - If the attendee names might be ambiguous, still collect them in `attendees` first; resolve them through backend contact search after submit.
 
 ## Pre-Create Review and Approval A2UI Contract
@@ -524,11 +557,11 @@ Use this `a2ui` block shape:
           "default": "<resolved_organizer>"
         },
         {
-          "key": "initiator_identity",
+          "key": "requester_identity",
           "label": "发起人",
           "type": "text",
           "required": true,
-          "default": "<resolved_initiator>"
+          "default": "<resolved_requester>"
         },
         {
           "key": "organizer_approval",
@@ -556,9 +589,9 @@ Use this `a2ui` block shape:
 Rules for review/approval form:
 
 - This review form is required before create-event when inferred/defaulted values exist.
-- If organizer and initiator differ, `organizer_approval=approve` is mandatory before calling any create-event command.
+- If organizer and requester differ, `organizer_approval=approve` is mandatory before calling any create-event command.
 - If user chooses `edit`, revise fields and re-confirm; do not create event in the same step.
-- Keep audit clarity in final response: include organizer, initiator, and whether organizer approval was obtained.
+- Keep audit clarity in final response: include organizer, requester, and whether organizer approval was obtained.
 
 ## Response Shape
 
@@ -567,7 +600,7 @@ For contact search results, prefer compact tables with columns for display name,
 For meeting creation, return:
 
 - organizer identity
-- initiator identity
+- requester identity
 - meeting title
 - start and end time with timezone
 - invited contacts

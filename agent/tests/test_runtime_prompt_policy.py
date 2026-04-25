@@ -27,6 +27,7 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
         "Use relative paths for terminal work.\n"
         "Use the Uploads directory alias only with file-style tools, not terminal commands.\n"
         "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
+        "For file-style tools, keep paths under the active HOME/workspace scope (prefer relative paths) and never use absolute host temp paths like /tmp/...\n"
         "Do not rely on host absolute paths.\n"
         "Session: session-abc\n"
     )
@@ -48,6 +49,8 @@ def test_build_session_runtime_prompt_includes_shared_sections(monkeypatch):
     assert "The terminal already starts inside the run artifacts directory" in prompt
     assert "Treat /workspace and /workspace/run as display aliases for file-style tools" in prompt
     assert "Do NOT cd to /workspace or /workspace/run in terminal commands" in prompt
+    assert "keep paths under the active HOME/workspace scope" in prompt
+    assert "never use absolute host temp paths like /tmp/..." in prompt
     assert "use the Hermes web_search tool first" in prompt
     assert "use read_url to fetch the full page content" in prompt
     assert f"Uploaded document types accepted by this runtime: {format_supported_upload_extensions()}." in prompt

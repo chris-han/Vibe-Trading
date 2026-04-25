@@ -313,6 +313,10 @@
       1777026376106241875,
       4533
     ],
+    "productivity/feishu-meeting-troubleshooting/SKILL.md": [
+      1777101427016138072,
+      4212
+    ],
     "builtin/productivity/ocr-and-documents/DESCRIPTION.md": [
       1775727056367275891,
       147
@@ -1342,6 +1346,19 @@
       "category": "productivity",
       "frontmatter_name": "feishu-api-contact-search",
       "description": "Direct Feishu Open API contact search pattern — list user...",
+      "platforms": [],
+      "conditions": {
+        "fallback_for_toolsets": [],
+        "requires_toolsets": [],
+        "fallback_for_tools": [],
+        "requires_tools": []
+      }
+    },
+    {
+      "skill_name": "feishu-meeting-troubleshooting",
+      "category": "productivity",
+      "frontmatter_name": "feishu-meeting-troubleshooting",
+      "description": "Troubleshooting guide for Feishu bot meeting creation fai...",
       "platforms": [],
       "conditions": {
         "fallback_for_toolsets": [],

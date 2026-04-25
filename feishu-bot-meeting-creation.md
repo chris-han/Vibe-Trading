@@ -175,11 +175,30 @@ lark-cli auth status
 
 **DO** create events on the organizer's (user's) calendar.
 
-### 5.2 Create Event on User Calendar
+### 5.1.1 Semantier Enforcement Rule (Requester Calendar)
+
+For semantier script-based meeting creation, the bot **must** know who the requester is:
+
+1. **Feishu channel sessions**: `FEISHU_REQUESTER_OPEN_ID` is auto-injected by the runtime from `feishu_sender_open_id`.
+2. **Web/non-Feishu channels**: The agent must pass `--requester-open-id` explicitly.
+
+**Calendar selection logic** (implemented in `feishu_bot_api.py`):
+1. Look up the requester's primary calendar via `primarys` API (batch version of `primary`).
+2. Try creating the event on the requester's calendar.
+3. If Feishu returns `191002 — no calendar access_role` (bot lacks write permission), **fall back to the bot's calendar**.
+4. **Critical**: Set the requester as `event_organizer` so their identity appears as the organizer.
+5. **Critical**: Add attendees via the **separate** `calendar_event_attendee.create` API (see §5.4). Feishu silently ignores `attendees` in the create-event body.
+
+> **Note:** With tenant access tokens, bots typically cannot write to user calendars. The fallback to bot calendar is expected behavior. Attendees still receive proper calendar invitations as long as step 5 is followed.
+
+### 5.2 Two-Step Event Creation (Bot Token)
+
+When using a **tenant access token** (bot token), you cannot write directly to user calendars. The correct pattern is a **two-step creation**:
+
+**Step 1 — Create the event skeleton** (on bot calendar or user calendar if admin permissions exist):
 
 ```bash
-# Use --as user to create on chris han's calendar
-lark-cli api POST /open-apis/calendar/v4/calendars/primary/events --as user \
+lark-cli api POST /open-apis/calendar/v4/calendars/:calendar_id/events --as bot \
   --data '{
     "summary": "管理层会议",
     "description": "会议描述",
@@ -191,38 +210,65 @@ lark-cli api POST /open-apis/calendar/v4/calendars/primary/events --as user \
       "timestamp": "1777100400",
       "timezone": "Asia/Shanghai"
     },
-    "attendees": [
-      {"type": "user", "user_id": "ou_f2d55dbeddbcd43519c6efdf6d874712"},
-      {"type": "user", "user_id": "ou_11d6838db5867f5784c9853296d7f6a1"}
-    ],
-    "vc_setting": {
-      "vc_status": "no_vc"
-    }
+    "vchat": {
+      "vc_type": "vc"
+    },
+    "attendee_ability": "can_see_others",
+    "visibility": "default"
   }'
 ```
 
-**Response:**
+> **Note:** `event_organizer` in the create body is **silently ignored** when creating on a bot calendar. The organizer will always display as the bot. To show a human organizer, create the event on that user's calendar using their `user_access_token`.
+
+**Step 2 — Add attendees via dedicated API** (this is what actually sends invitations):
+
+```bash
+lark-cli api POST /open-apis/calendar/v4/calendars/:calendar_id/events/:event_id/attendees --as bot \
+  --data '{
+    "attendees": [
+      {"type": "user", "user_id": "ou_f2d55dbeddbcd43519c6efdf6d874712", "is_optional": false},
+      {"type": "user", "user_id": "ou_11d6838db5867f5784c9853296d7f6a1", "is_optional": false}
+    ],
+    "need_notification": true
+  }'
+```
+
+> **⚠️ CRITICAL:** Feishu **silently ignores** the `attendees` field in the create-event body. You **must** use the separate `POST .../attendees` endpoint. Without this step, attendees will NOT receive invitations and the event will not appear on their calendars.
+
+**Response (Step 1):**
 ```json
 {
   "event": {
+    "event_id": "eb51d84f-db78-4fd1-a53d-d7d5b2be0fe6_0",
     "event_organizer": {
       "display_name": "chris han",
       "user_id": "ou_f2d55dbeddbcd43519c6efdf6d874712"
     },
-    "organizer_calendar_id": "feishu.cn_TeDSkx2EQ7kdVSEqMeSQFf@group.calendar.feishu.cn",
-    "app_link": "https://applink.feishu.cn/client/calendar/event/detail?..."
+    "organizer_calendar_id": "feishu.cn_QdqxSNzQJJkSvAKpc9Vp9e@group.calendar.feishu.cn"
   }
 }
 ```
 
-### 5.3 Anti-Pattern: Bot Calendar
+### 5.3 Bot Calendar Fallback
+
+If the bot lacks write access to the requester's calendar (error `191002`), the event is created on the **bot's calendar** as a fallback. This is safe **as long as attendees are added via the separate attendee API** (§5.2 Step 2). Attendees will still receive calendar invitations from the "日历助手" (Calendar Assistant).
+
+**Known limitations of bot calendar:**
+| Limitation | Why | Workaround |
+|---|---|---|
+| Organizer always shows as bot | Feishu ignores `event_organizer` on bot calendars | Accept bot identity, or use user calendar |
+| `is_organizer` on attendees is ignored | Platform enforces calendar owner as organizer | N/A for bot calendar |
+
+What does **not** work:
+- Putting `attendees` inside the create-event body and expecting Feishu to send invites.
+- Creating on bot calendar without the follow-up attendee API call.
+- Setting `event_organizer` to fake a human organizer on bot calendar.
 
 ```bash
-# DON'T do this for personal calendar visibility
-POST /calendars/primary/events --as bot
+# DON'T do this — attendees in body are silently ignored
+POST /calendars/:calendar_id/events --as bot \
+  --data '{..., "attendees": [...]}'   ← IGNORED by Feishu
 ```
-
-This creates the event on the bot's calendar. Attendees will get "You are not in the event or event expired" when clicking the link.
 
 ---
 
@@ -273,9 +319,35 @@ You cannot add organization-wide (`domain`) ACLs to bot calendars.
 Feishu treats bot calendars as **application resources**, not **personal calendars**. The intended pattern is:
 
 1. Bot **assists** in scheduling
-2. Events are created on **user calendars**
-3. Bot can **read** user calendars if authorized
+2. Events are ideally created on **user calendars** (requires user token or admin privileges)
+3. With bot tokens, create on **bot calendar** + add attendees via separate API
 4. Bot calendars are for bot-internal scheduling only
+
+### 6.5 Getting User Primary Calendar IDs
+
+Use the **`primarys`** (plural) API to look up multiple users' primary calendars at once. The singular `primary` API only returns the token holder's calendar (i.e., the bot's calendar).
+
+```bash
+lark-cli api POST /open-apis/calendar/v4/calendars/primarys --as bot \
+  --data '{
+    "user_ids": ["ou_f2d55dbeddbcd43519c6efdf6d874712"]
+  }' \
+  --params '{"user_id_type":"open_id"}'
+```
+
+**Response:**
+```json
+{
+  "calendars": [
+    {
+      "user_id": "ou_f2d55dbeddbcd43519c6efdf6d874712",
+      "calendar": {
+        "calendar_id": "feishu.cn_TeDSkx2EQ7kdVSEqMeSQFf@group.calendar.feishu.cn"
+      }
+    }
+  ]
+}
+```
 
 ---
 
@@ -429,12 +501,63 @@ The `meeting-coordinator` group was **external** (cross-tenant):
 
 **Symptom:** Clicking calendar App Link shows this error.
 
-**Cause:** Event created on bot calendar instead of user calendar.
+**Cause:** Event created on bot calendar **without adding attendees via the separate attendee API**.
 
 **Fix:**
 1. Delete bot calendar event
-2. Recreate on user's calendar using `--as user`
-3. Send updated link to attendees
+2. Recreate event (on bot or user calendar)
+3. **Call `POST .../attendees` separately** with `need_notification: true`
+4. Send updated link to attendees
+
+---
+
+### Issue 6: Attendees Not Receiving Calendar Invitations
+
+**Symptom:** Event created successfully, but no one sees it on their calendar.
+
+**Cause:** Feishu **silently ignores** the `attendees` array inside the create-event request body. The event is created with zero attendees.
+
+**Verification:**
+```bash
+lark-cli api GET /open-apis/calendar/v4/calendars/:calendar_id/events/:event_id/attendees --as bot
+# Returns {"items": []} even though attendees were in the create body
+```
+
+**Fix:** Always add attendees in a **separate API call**:
+
+```bash
+# Step 1: Create event WITHOUT attendees in body
+lark-cli api POST /open-apis/calendar/v4/calendars/:calendar_id/events --as bot \
+  --data '{"summary": "Meeting", ...}'  # NO attendees field
+
+# Step 2: Add attendees separately
+lark-cli api POST /open-apis/calendar/v4/calendars/:calendar_id/events/:event_id/attendees --as bot \
+  --data '{
+    "attendees": [{"type": "user", "user_id": "ou_xxx"}],
+    "need_notification": true
+  }'
+```
+
+---
+
+### Issue 7: `191002 — no calendar access_role`
+
+**Symptom:**
+```json
+{ "code": 191002, "msg": "no calendar access_role" }
+```
+
+**Cause:** Bot tenant token does not have write permission to the target user's calendar.
+
+**Fix:**
+1. Fall back to creating the event on the **bot's primary calendar**.
+2. Set the requester as `event_organizer` so their identity is preserved.
+3. Add attendees via the separate attendee API (`POST .../attendees`).
+4. Attendees will still receive invitations even though the event lives on the bot calendar.
+
+To write directly to user calendars, you need either:
+- A **user access token** (OAuth) from that user
+- **Admin-level calendar permissions** granted to the app
 
 ---
 
@@ -483,6 +606,14 @@ lark-cli contact +search-user --query "Name"
 # Create meeting on user calendar
 lark-cli api POST /open-apis/calendar/v4/calendars/primary/events --as user \
   --data '{"summary":"Meeting","attendees":[{"type":"user","user_id":"ou_xxx"}]}'
+
+# Semantier helper script (must provide requester)
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py create-meeting \
+  --title "Meeting" \
+  --start-time "2026-04-28 15:00" \
+  --end-time "2026-04-28 15:30" \
+  --attendee "ou_attendee_001" \
+  --requester-open-id "ou_requester"
 
 # Send group announcement
 lark-cli im +messages-send --as bot --chat-id "oc_xxx" \
@@ -1187,7 +1318,7 @@ lark-cli im +messages-send --as bot \
 
 | Goal | Right Way | Wrong Way |
 |------|-----------|-----------|
-| Create visible meeting | User calendar (`--as user`) | Bot calendar (`--as bot`) |
+| Create visible meeting | Bot calendar + separate attendee API + `need_notification` | Put `attendees` in create-event body (silently ignored) |
 | Search users | User token + `contact:user:search` | Bot token |
 | Invite all members | Expand Contact Data Scope to "All members" | Only add API scopes |
 | Access group members | Internal groups | External/cross-tenant groups |
@@ -1195,3 +1326,6 @@ lark-cli im +messages-send --as bot \
 | Recurring meetings | RRULE on user calendar | Bot calendar (no sync) |
 | RSVP tracking | Interactive card + webhook | Text-only message |
 | Time negotiation | Slot voting or free-text + agent logic | Fixed time with no feedback |
+| Set organizer identity | `event_organizer` field in create body | Let it default to bot identity |
+| Participant list visibility | `attendee_ability: "can_see_others"` | Default hidden |
+| Get user calendar ID | `primarys` API with `user_ids` | `primary` API (returns bot's calendar) |

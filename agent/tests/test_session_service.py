@@ -790,6 +790,23 @@ def test_incomplete_response_detection_catches_chinese_progress_sentence_after_c
     assert SessionService._looks_incomplete_final_response(text) is True
 
 
+def test_incomplete_response_detection_catches_multiline_chinese_planning_tail():
+    text = (
+        "已获取群成员。现在我需要：\n"
+        "1. 确定会议时间\n"
+        "2. 确定会议时长\n"
+        "3. 确定发起人\n\n"
+        "会议信息：\n"
+        "- 主题：项目汇报会\n"
+        "- 时间：2026-04-25 16:00\n"
+        "- 时长：30 分钟\n"
+        "- 发起人：chris han\n\n"
+        "让我先确认时间格式，然后创建会议。"
+    )
+
+    assert SessionService._looks_incomplete_final_response(text) is True
+
+
 def test_terminal_wrapper_forces_background_pty_for_interactive_login(monkeypatch):
     terminal_module = __import__("tools.terminal_tool", fromlist=["terminal_tool"])
     process_module = __import__("tools.process_registry", fromlist=["process_registry"])

@@ -184,6 +184,7 @@ def build_session_runtime_prompt(
         "Use relative paths for terminal work.\n"
         "Use the Uploads directory alias only with file-style tools, not terminal commands.\n"
         "Use /workspace and /workspace/run only as virtual display aliases for file-style tools, not terminal cwd targets.\n"
+        "For file-style tools, keep paths under the active HOME/workspace scope (prefer relative paths) and never use absolute host temp paths like /tmp/...\n"
         "Do not rely on host absolute paths.\n"
         f"Session: {session_id}\n"
         f"{role_install_rules}"

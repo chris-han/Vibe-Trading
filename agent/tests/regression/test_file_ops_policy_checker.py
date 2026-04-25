@@ -17,6 +17,7 @@ SPEC.loader.exec_module(MODULE)
 def test_target_file_selection_matches_policy_scope():
     assert MODULE.is_target_file(".github/skills/deterministic-file-ops-policy/SKILL.md")
     assert MODULE.is_target_file(".github/skills/runtime-code-sanitizer/SKILL.md")
+    assert MODULE.is_target_file("agent/src/skills/app-infra/productivity/feishu-bot-meeting-coordinator/SKILL.md")
     assert MODULE.is_target_file("agent/src/runtime_prompt_policy.py")
     assert MODULE.is_target_file("agent/api_server.py")
     assert MODULE.is_target_file("agent/src/skills/script_loader.py")
@@ -25,6 +26,7 @@ def test_target_file_selection_matches_policy_scope():
 
 def test_backend_target_classification_is_separate_from_skill_text_targets():
     assert MODULE.is_skill_text_target(".github/skills/runtime-code-sanitizer/SKILL.md")
+    assert MODULE.is_skill_text_target("agent/src/skills/app-infra/productivity/feishu-bot-meeting-coordinator/SKILL.md")
     assert not MODULE.is_skill_text_target("agent/src/runtime_prompt_policy.py")
     assert MODULE.is_backend_target("agent/src/runtime_prompt_policy.py")
     assert not MODULE.is_backend_target(".github/skills/runtime-code-sanitizer/SKILL.md")
@@ -49,6 +51,11 @@ def test_scan_content_flags_file_layout_contracts():
     violations = MODULE.scan_content("- Create config.json and code/signal_engine.py before running the backtest.\n")
     ids = {v.rule_id for v in violations}
     assert "prompt_config_file_layout" in ids
+
+
+def test_scan_content_flags_absolute_temp_paths():
+    violations = MODULE.scan_content("- Save the review card to /tmp/meeting_confirm.md before replying.\n")
+    assert any(v.rule_id == "prompt_absolute_temp_path" for v in violations)
 
 
 def test_scan_content_ignores_negative_policy_text():

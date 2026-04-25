@@ -496,6 +496,17 @@ def _install_wrapper_terminal_policy_patch(active_hermes_home: Optional[Path]) -
                 ", ".join(materialized_paths),
             )
 
+        # Inject FEISHU_REQUESTER_OPEN_ID from task overrides into the command env
+        # so that the Feishu meeting skill can determine the meeting owner.
+        try:
+            overrides_map = getattr(terminal_tool_module, "_task_env_overrides", {})
+            task_overrides = overrides_map.get(task_id, {}) if isinstance(overrides_map, dict) and task_id else {}
+        except Exception:
+            task_overrides = {}
+        sender_open_id = str(task_overrides.get("FEISHU_REQUESTER_OPEN_ID") or "").strip()
+        if sender_open_id and "feishu_bot_api.py" in rewritten_command:
+            rewritten_command = f"export FEISHU_REQUESTER_OPEN_ID={sender_open_id}; {rewritten_command}"
+
         return original_terminal_tool(rewritten_command, *args, **kwargs)
 
     terminal_tool_module.terminal_tool = _guarded_terminal_tool
@@ -1240,12 +1251,18 @@ class SessionService:
             return True
         if any(pattern.search(normalized) for pattern in _INCOMPLETE_RESPONSE_PATTERNS):
             return True
-        if len(normalized) > 240 or "\n" in normalized:
-            return False
         trailing_segment = re.split(r"(?<=[.!?。！？])\s+", normalized)[-1].strip()
+
+        # For long or multiline reports, only evaluate the final sentence to
+        # avoid false positives from earlier planning notes while still catching
+        # unfinished "let me..." endings.
+        candidates = [trailing_segment]
+        if len(normalized) <= 240 and "\n" not in normalized:
+            candidates.insert(0, normalized)
+
         return any(
             pattern.search(candidate)
-            for candidate in (normalized, trailing_segment)
+            for candidate in candidates
             for pattern in _INCOMPLETE_CONTINUATION_PATTERNS
         )
 
@@ -1739,6 +1756,8 @@ class SessionService:
         sandbox_role = self._resolve_sandbox_role(active_session)
         organizer_approval_required, organizer_approved = self._resolve_feishu_organizer_approval_flags(active_session)
         session_channel = str(active_session.config.get("channel") or "") if isinstance(active_session.config, dict) else ""
+        _cfg = active_session.config if isinstance(active_session.config, dict) else {}
+        feishu_sender_open_id = str(_cfg.get("feishu_sender_open_id") or "").strip()
 
         ensure_runtime_env()
         agent_kwargs = get_hermes_agent_kwargs()
@@ -1848,6 +1867,7 @@ class SessionService:
                     "display_safe_write_root": "/workspace/admin",
                     "feishu_organizer_approval_required": organizer_approval_required,
                     "feishu_organizer_approved": organizer_approved,
+                    "FEISHU_REQUESTER_OPEN_ID": feishu_sender_open_id,
                 })
             else:
                 register_task_env_overrides(sid, {
@@ -1859,6 +1879,7 @@ class SessionService:
                     "display_safe_write_root": "/workspace/run",
                     "feishu_organizer_approval_required": organizer_approval_required,
                     "feishu_organizer_approved": organizer_approved,
+                    "FEISHU_REQUESTER_OPEN_ID": feishu_sender_open_id,
                 })
             _hermes_overrides_set = True
         except Exception:

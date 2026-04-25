@@ -25,7 +25,7 @@ USAGE:
     python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py <command> [args]
 
     # Example:
-    python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \\
+    python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
       search-chats --query "管理层群"
 
 CREDENTIAL LOADING:
@@ -46,12 +46,41 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import requests
+from lark_oapi import Client, LogLevel
+from lark_oapi.api.calendar.v4 import (
+    CalendarEventAttendeeBuilder,
+    CalendarEventBuilder,
+    CreateCalendarEventAttendeeRequestBodyBuilder,
+    CreateCalendarEventAttendeeRequestBuilder,
+    CreateCalendarEventRequestBuilder,
+    EventLocationBuilder,
+    EventOrganizerBuilder,
+    PrimaryCalendarRequestBuilder,
+    PrimarysCalendarRequestBuilder,
+    PrimarysCalendarRequestBodyBuilder,
+    TimeInfoBuilder,
+    VchatBuilder,
+)
+from lark_oapi.api.contact.v3 import (
+    BatchGetIdUserRequestBodyBuilder,
+    BatchGetIdUserRequestBuilder,
+    FindByDepartmentUserRequestBuilder,
+)
+from lark_oapi.api.im.v1 import (
+    CreateMessageRequestBodyBuilder,
+    CreateMessageRequestBuilder,
+    GetChatMembersRequestBuilder,
+    ListChatRequestBuilder,
+)
+from lark_oapi.core.exception import ObtainAccessTokenException
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_ORGANIZER_IDENTITY = "semantier"
 DEFAULT_CONTACT_SCOPE = "contacts-added-to-bot"
 DEFAULT_NEGOTIATION_ROUNDS = 3
+
+
+_client_instance: Client | None = None
 
 
 def _load_env_file(path: Path) -> None:
@@ -85,14 +114,14 @@ def _bootstrap_env() -> None:
     # Finds the agent folder by traversing up from this script's location,
     # working regardless of where the agent installation resides.
     script_path = Path(__file__).resolve()
-    
+
     # Discover agent home by traversing up from this script's location
     agent_env_path: Path | None = None
     for parent in [script_path, *script_path.parents]:
         if parent.name == "agent" and parent.is_dir():
             agent_env_path = parent / ".env"
             break
-    
+
     # Load credentials from the agent home .env file
     if agent_env_path and agent_env_path.is_file():
         _load_env_file(agent_env_path)
@@ -131,7 +160,7 @@ class AttendeeNegotiationState:
 class MeetingNegotiationState:
     negotiation_id: str
     title: str
-    initiator_open_id: str
+    requester_open_id: str
     timezone: str
     duration_minutes: int
     max_rounds: int
@@ -145,7 +174,7 @@ class MeetingNegotiationState:
         return {
             "negotiation_id": self.negotiation_id,
             "title": self.title,
-            "initiator_open_id": self.initiator_open_id,
+            "requester_open_id": self.requester_open_id,
             "timezone": self.timezone,
             "duration_minutes": self.duration_minutes,
             "max_rounds": self.max_rounds,
@@ -183,7 +212,7 @@ def _deserialize_negotiation_state(state_payload: dict[str, Any]) -> MeetingNego
     return MeetingNegotiationState(
         negotiation_id=str(state_payload.get("negotiation_id") or uuid.uuid4().hex),
         title=str(state_payload.get("title") or ""),
-        initiator_open_id=str(state_payload.get("initiator_open_id") or "").strip(),
+        requester_open_id=str(state_payload.get("requester_open_id") or state_payload.get("initiator_open_id") or "").strip(),
         timezone=str(state_payload.get("timezone") or DEFAULT_TIMEZONE),
         duration_minutes=int(state_payload.get("duration_minutes") or 30),
         max_rounds=max(int(state_payload.get("max_rounds") or DEFAULT_NEGOTIATION_ROUNDS), 1),
@@ -207,116 +236,63 @@ def _env(name: str) -> str:
     return value
 
 
-def _base_url() -> str:
-    domain = (os.getenv("FEISHU_DOMAIN") or "feishu").strip().lower()
-    return "https://open.larksuite.com" if domain == "lark" else "https://open.feishu.cn"
-
-
-def _http_json(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str],
-    body: dict[str, Any] | None = None,
-    params: dict[str, Any] | None = None,
-    session: requests.Session | None = None,
-    return_data: bool = True,
-) -> dict[str, Any]:
-    client = session or requests.Session()
-    response = client.request(method, url, headers=headers, json=body, params=params, timeout=20)
-    response.raise_for_status()
-    payload = response.json() if response.text else {}
-    if not isinstance(payload, dict):
-        raise FeishuSkillError(f"Feishu API returned a non-object payload for {url}")
-    if int(payload.get("code") or 0) != 0:
-        raise FeishuSkillError(
-            payload.get("msg") or f"Feishu API error for {url}",
-            payload=payload,
+def _get_client() -> Client:
+    """Return a cached lark-oapi Client built from environment credentials."""
+    global _client_instance
+    if _client_instance is None:
+        app_id = _env("FEISHU_APP_ID")
+        app_secret = _env("FEISHU_APP_SECRET")
+        domain = (os.getenv("FEISHU_DOMAIN") or "feishu").strip().lower()
+        base_url = "https://open.larksuite.com" if domain == "lark" else "https://open.feishu.cn"
+        _client_instance = (
+            Client.builder()
+            .app_id(app_id)
+            .app_secret(app_secret)
+            .domain(base_url)
+            .log_level(LogLevel.ERROR)
+            .build()
         )
-    if not return_data:
-        return payload
-    data = payload.get("data")
-    return data if isinstance(data, dict) else {}
+    return _client_instance
 
 
-def _tenant_access_token(session: requests.Session | None = None) -> str:
-    app_id = _env("FEISHU_APP_ID")
-    app_secret = _env("FEISHU_APP_SECRET")
-    data = _http_json(
-        "POST",
-        f"{_base_url()}/open-apis/auth/v3/tenant_access_token/internal",
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        body={"app_id": app_id, "app_secret": app_secret},
-        session=session,
-        return_data=False,
-    )
-    token = str(data.get("tenant_access_token") or "").strip()
-    if not token:
-        raise FeishuSkillError("Feishu tenant token response did not include tenant_access_token", payload=data)
-    return token
-
-
-def _openapi_request(method: str, path: str, *, params: dict[str, Any] | None = None, body: dict[str, Any] | None = None, session: requests.Session | None = None) -> dict[str, Any]:
-    token = _tenant_access_token(session=session)
-    return _http_json(
-        method,
-        f"{_base_url()}{path}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-        body=body,
-        params=params,
-        session=session,
+def _unwrap(resp: Any) -> Any:
+    """Unwrap a typed SDK response, raising FeishuSkillError on API failure."""
+    if resp.success():
+        return resp.data
+    raise FeishuSkillError(
+        resp.msg or f"Feishu API error (code: {resp.code})",
+        payload={"code": resp.code, "msg": resp.msg},
     )
 
 
-def _openapi_request_with_token(
-    method: str,
-    path: str,
-    *,
-    access_token: str,
-    params: dict[str, Any] | None = None,
-    body: dict[str, Any] | None = None,
-    session: requests.Session | None = None,
-) -> dict[str, Any]:
-    token = access_token.strip()
-    if not token:
-        raise FeishuSkillError("Missing user access token for user-scoped Feishu API")
-    return _http_json(
-        method,
-        f"{_base_url()}{path}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-        body=body,
-        params=params,
-        session=session,
-    )
+def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """Safely read an attribute from a dict or an SDK model object."""
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
 
 
-def _normalize_department_names(user: dict[str, Any]) -> list[str]:
+def _normalize_department_names(user: Any) -> list[str]:
     names: list[str] = []
-    for item in user.get("department_path") or []:
-        if not isinstance(item, dict):
+    for item in _get_attr(user, "department_path") or []:
+        if item is None:
             continue
-        name = str(item.get("name") or "").strip()
+        name = str(_get_attr(item, "name") or _get_attr(item, "department_name") or "").strip()
         if name:
             names.append(name)
     return names
 
 
-def _score_candidate(query: str, user: dict[str, Any]) -> tuple[float, str]:
+def _score_candidate(query: str, user: Any) -> tuple[float, str]:
     normalized_query = query.strip().casefold()
     if not normalized_query:
         return 0.0, "empty_query"
 
     fields = [
-        ("display_name", str(user.get("name") or "").strip()),
-        ("english_name", str(user.get("en_name") or "").strip()),
-        ("email", str(user.get("email") or user.get("enterprise_email") or "").strip()),
-        ("open_id", str(user.get("open_id") or "").strip()),
+        ("display_name", str(_get_attr(user, "name") or "").strip()),
+        ("english_name", str(_get_attr(user, "en_name") or "").strip()),
+        ("email", str(_get_attr(user, "email") or _get_attr(user, "enterprise_email") or "").strip()),
+        ("open_id", str(_get_attr(user, "open_id") or "").strip()),
     ]
     for field_name, value in fields:
         if value and value.casefold() == normalized_query:
@@ -327,50 +303,50 @@ def _score_candidate(query: str, user: dict[str, Any]) -> tuple[float, str]:
     return 0.0, "no_match"
 
 
-def _normalize_contact_candidate(query: str, user: dict[str, Any]) -> dict[str, Any] | None:
+def _normalize_contact_candidate(query: str, user: Any) -> dict[str, Any] | None:
     score, match_reason = _score_candidate(query, user)
-    open_id = str(user.get("open_id") or "").strip()
+    open_id = str(_get_attr(user, "open_id") or "").strip()
     if score <= 0.0 or not open_id:
         return None
-    avatar = user.get("avatar") if isinstance(user.get("avatar"), dict) else {}
-    avatar_url = str(avatar.get("avatar_72") or avatar.get("avatar_240") or "").strip() or None
+    avatar = _get_attr(user, "avatar")
+    avatar_url = None
+    if avatar is not None:
+        avatar_url = str(_get_attr(avatar, "avatar_72") or _get_attr(avatar, "avatar_240") or "").strip() or None
     return {
-        "display_name": str(user.get("name") or user.get("en_name") or open_id),
+        "display_name": str(_get_attr(user, "name") or _get_attr(user, "en_name") or open_id),
         "open_id": open_id,
-        "union_id": str(user.get("union_id") or "").strip() or None,
+        "union_id": str(_get_attr(user, "union_id") or "").strip() or None,
         "avatar_url": avatar_url,
-        "email": str(user.get("email") or user.get("enterprise_email") or "").strip() or None,
+        "email": str(_get_attr(user, "email") or _get_attr(user, "enterprise_email") or "").strip() or None,
         "department_names": _normalize_department_names(user),
         "match_reason": match_reason,
         "score": score,
     }
 
 
-def search_contacts(query: str, *, limit: int = 10, session: requests.Session | None = None) -> dict[str, Any]:
+def search_contacts(query: str, *, limit: int = 10) -> dict[str, Any]:
     normalized_query = query.strip()
     if not normalized_query:
         raise FeishuSkillError("query is required")
 
     seen: dict[str, dict[str, Any]] = {}
     page_token: str | None = None
+    client = _get_client()
     for _ in range(5):
-        params: dict[str, Any] = {
-            "department_id": "0",
-            "department_id_type": "department_id",
-            "user_id_type": "open_id",
-            "page_size": 50,
-        }
-        if page_token:
-            params["page_token"] = page_token
-        data = _openapi_request(
-            "GET",
-            "/open-apis/contact/v3/users/find_by_department",
-            params=params,
-            session=session,
+        builder = (
+            FindByDepartmentUserRequestBuilder()
+            .department_id("0")
+            .department_id_type("department_id")
+            .user_id_type("open_id")
+            .page_size(50)
         )
-        items = data.get("items") or data.get("user_list") or []
+        if page_token:
+            builder = builder.page_token(page_token)
+        req = builder.build()
+        data = _unwrap(client.contact.v3.user.find_by_department(req))
+        items = data.items or []
         for item in items:
-            if not isinstance(item, dict):
+            if not item:
                 continue
             candidate = _normalize_contact_candidate(normalized_query, item)
             if candidate is None:
@@ -380,9 +356,9 @@ def search_contacts(query: str, *, limit: int = 10, session: requests.Session | 
                 break
         if len(seen) >= limit:
             break
-        if not data.get("has_more"):
+        if not data.has_more:
             break
-        page_token = str(data.get("page_token") or "").strip() or None
+        page_token = str(data.page_token or "").strip() or None
         if not page_token:
             break
 
@@ -395,9 +371,9 @@ def search_contacts(query: str, *, limit: int = 10, session: requests.Session | 
     }
 
 
-def _score_chat_candidate(query: str, chat: dict[str, Any]) -> tuple[float, str]:
+def _score_chat_candidate(query: str, chat: Any) -> tuple[float, str]:
     normalized_query = query.strip().casefold()
-    name = str(chat.get("name") or "").strip()
+    name = str(_get_attr(chat, "name") or "").strip()
     if not normalized_query or not name:
         return 0.0, "empty_query_or_name"
     normalized_name = name.casefold()
@@ -412,39 +388,41 @@ def _score_chat_candidate(query: str, chat: dict[str, Any]) -> tuple[float, str]
     return 0.0, "no_match"
 
 
-def search_chats(query: str, *, limit: int = 10, session: requests.Session | None = None) -> dict[str, Any]:
+def search_chats(query: str, *, limit: int = 10) -> dict[str, Any]:
     normalized_query = query.strip()
     if not normalized_query:
         raise FeishuSkillError("query is required")
 
     matches: list[dict[str, Any]] = []
     page_token: str | None = None
+    client = _get_client()
     for _ in range(5):
-        params: dict[str, Any] = {"page_size": 50}
+        builder = ListChatRequestBuilder().page_size(50)
         if page_token:
-            params["page_token"] = page_token
-        data = _openapi_request("GET", "/open-apis/im/v1/chats", params=params, session=session)
-        for item in data.get("items") or []:
-            if not isinstance(item, dict):
+            builder = builder.page_token(page_token)
+        req = builder.build()
+        data = _unwrap(client.im.v1.chat.list(req))
+        for item in data.items or []:
+            if not item:
                 continue
             score, reason = _score_chat_candidate(normalized_query, item)
             if score <= 0.0:
                 continue
-            chat_id = str(item.get("chat_id") or "").strip()
+            chat_id = str(_get_attr(item, "chat_id") or "").strip()
             if not chat_id:
                 continue
             matches.append(
                 {
                     "chat_id": chat_id,
-                    "name": str(item.get("name") or chat_id),
-                    "description": str(item.get("description") or "").strip() or None,
+                    "name": str(_get_attr(item, "name") or chat_id),
+                    "description": str(_get_attr(item, "description") or "").strip() or None,
                     "score": score,
                     "match_reason": reason,
                 }
             )
-        if not data.get("has_more"):
+        if not data.has_more:
             break
-        page_token = str(data.get("page_token") or "").strip() or None
+        page_token = str(data.page_token or "").strip() or None
         if not page_token:
             break
 
@@ -456,7 +434,6 @@ def get_chat_members(
     chat_id: str,
     *,
     member_id_type: str = "open_id",
-    session: requests.Session | None = None,
 ) -> list[dict[str, Any]]:
     normalized_chat_id = chat_id.strip()
     if not normalized_chat_id:
@@ -471,38 +448,35 @@ def get_chat_members(
 
     members: list[dict[str, Any]] = []
     page_token: str | None = None
+    client = _get_client()
     for _ in range(5):
-        params: dict[str, Any] = {"member_id_type": normalized_member_id_type, "page_size": 50}
+        builder = GetChatMembersRequestBuilder().chat_id(normalized_chat_id).member_id_type(normalized_member_id_type).page_size(50)
         if page_token:
-            params["page_token"] = page_token
-        data = _openapi_request(
-            "GET",
-            f"/open-apis/im/v1/chats/{normalized_chat_id}/members",
-            params=params,
-            session=session,
-        )
-        for item in data.get("items") or []:
-            if not isinstance(item, dict):
+            builder = builder.page_token(page_token)
+        req = builder.build()
+        data = _unwrap(client.im.v1.chat_members.get(req))
+        for item in data.items or []:
+            if not item:
                 continue
-            open_id = str(item.get("member_id") or item.get("open_id") or "").strip()
+            open_id = str(_get_attr(item, "member_id") or _get_attr(item, "open_id") or "").strip()
             if not open_id:
                 continue
             members.append(
                 {
                     "open_id": open_id,
-                    "display_name": str(item.get("name") or open_id),
+                    "display_name": str(_get_attr(item, "name") or open_id),
                 }
             )
-        if not data.get("has_more"):
+        if not data.has_more:
             break
-        page_token = str(data.get("page_token") or "").strip() or None
+        page_token = str(data.page_token or "").strip() or None
         if not page_token:
             break
     return members
 
 
-def _resolve_group_phrase_attendees(group_phrase: str, *, session: requests.Session | None = None) -> tuple[list[dict[str, Any]], list[str]]:
-    chats = search_chats(group_phrase, limit=5, session=session).get("candidates") or []
+def _resolve_group_phrase_attendees(group_phrase: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    chats = search_chats(group_phrase, limit=5).get("candidates") or []
     if not chats:
         raise FeishuSkillError("No matching group/chat found", payload={"group_phrase": group_phrase})
     top_chat = chats[0]
@@ -512,7 +486,7 @@ def _resolve_group_phrase_attendees(group_phrase: str, *, session: requests.Sess
             payload={"group_phrase": group_phrase, "candidates": chats[:3]},
         )
 
-    members = get_chat_members(str(top_chat.get("chat_id") or ""), session=session)
+    members = get_chat_members(str(top_chat.get("chat_id") or ""))
     if not members:
         raise FeishuSkillError("Matched group/chat has no resolvable members", payload={"chat": top_chat})
 
@@ -532,26 +506,23 @@ def _resolve_group_phrase_attendees(group_phrase: str, *, session: requests.Sess
     return attendee_results, resolved_attendees
 
 
-def _resolve_email_attendee(email: str, *, session: requests.Session | None = None) -> dict[str, Any] | None:
-    data = _openapi_request(
-        "POST",
-        "/open-apis/contact/v3/users/batch_get_id",
-        params={"user_id_type": "open_id"},
-        body={"emails": [email], "include_resigned": False},
-        session=session,
-    )
-    user_list = data.get("user_list") or []
-    if not user_list or not isinstance(user_list[0], dict):
+def _resolve_email_attendee(email: str) -> dict[str, Any] | None:
+    client = _get_client()
+    body = BatchGetIdUserRequestBodyBuilder().emails([email]).include_resigned(False).build()
+    req = BatchGetIdUserRequestBuilder().user_id_type("open_id").request_body(body).build()
+    data = _unwrap(client.contact.v3.user.batch_get_id(req))
+    user_list = data.user_list or []
+    if not user_list:
         return None
     user = user_list[0]
-    open_id = str(user.get("open_id") or "").strip()
+    open_id = str(_get_attr(user, "user_id") or "").strip()
     if not open_id:
         return None
     return {
-        "display_name": str(user.get("name") or user.get("email") or open_id),
+        "display_name": str(_get_attr(user, "name") or _get_attr(user, "email") or open_id),
         "open_id": open_id,
-        "union_id": str(user.get("union_id") or "").strip() or None,
-        "email": str(user.get("email") or email).strip() or None,
+        "union_id": str(_get_attr(user, "union_id") or "").strip() or None,
+        "email": str(_get_attr(user, "email") or email).strip() or None,
         "department_names": [],
         "match_reason": "exact_email",
         "score": 1.0,
@@ -592,53 +563,65 @@ def _build_time_info(dt: datetime, timezone_name: str) -> dict[str, str]:
     return {"timestamp": str(int(dt.timestamp())), "timezone": timezone_name}
 
 
-def _primary_calendar_id(*, session: requests.Session | None = None) -> str:
-    data = _openapi_request("POST", "/open-apis/calendar/v4/calendars/primary", session=session)
-    if isinstance(data.get("calendar"), dict):
-        calendar_id = str(data["calendar"].get("calendar_id") or "").strip()
-        if calendar_id:
-            return calendar_id
-    calendars = data.get("calendars") or []
+def _bot_calendar_id() -> str:
+    """Return the bot's own primary calendar ID."""
+    client = _get_client()
+    req = PrimaryCalendarRequestBuilder().user_id_type("open_id").build()
+    data = _unwrap(client.calendar.v4.calendar.primary(req))
+    calendars = _get_attr(data, "calendars") or []
     for item in calendars:
-        if not isinstance(item, dict):
+        if item is None:
             continue
-        calendar_id = str(item.get("calendar_id") or "").strip()
+        inner_calendar = _get_attr(item, "calendar")
+        if inner_calendar is not None:
+            calendar_id = str(_get_attr(inner_calendar, "calendar_id") or "").strip()
+            if calendar_id:
+                return calendar_id
+        calendar_id = str(_get_attr(item, "calendar_id") or "").strip()
         if calendar_id:
             return calendar_id
-    raise FeishuSkillError("Feishu primary calendar lookup returned no calendar_id", payload=data)
+    calendar = _get_attr(data, "calendar")
+    if calendar is not None:
+        calendar_id = str(_get_attr(calendar, "calendar_id") or "").strip()
+        if calendar_id:
+            return calendar_id
+    raise FeishuSkillError("Bot primary calendar lookup returned no calendar_id", payload={})
 
 
-def _primary_calendar_id_for_user(user_open_id: str, *, session: requests.Session | None = None) -> str:
+def _primary_calendar_id_for_user(user_open_id: str) -> str | None:
+    """Return the user's primary calendar ID, or None if lookup fails."""
     target = user_open_id.strip()
     if not target:
-        raise FeishuSkillError("user_open_id is required for primary calendar lookup")
-    data = _openapi_request(
-        "POST",
-        "/open-apis/calendar/v4/calendars/primary",
-        params={"user_id": target, "user_id_type": "open_id"},
-        session=session,
-    )
-    if isinstance(data.get("calendar"), dict):
-        calendar_id = str(data["calendar"].get("calendar_id") or "").strip()
-        if calendar_id:
-            return calendar_id
-    calendars = data.get("calendars") or []
+        return None
+    client = _get_client()
+    body = PrimarysCalendarRequestBodyBuilder().user_ids([target]).build()
+    req = PrimarysCalendarRequestBuilder().request_body(body).user_id_type("open_id").build()
+    try:
+        data = _unwrap(client.calendar.v4.calendar.primarys(req))
+    except FeishuSkillError:
+        return None
+    calendars = _get_attr(data, "calendars") or []
     for item in calendars:
-        if not isinstance(item, dict):
+        if item is None:
             continue
-        calendar_id = str(item.get("calendar_id") or "").strip()
+        item_user_id = str(_get_attr(item, "user_id") or "").strip()
+        if item_user_id != target:
+            continue
+        inner_calendar = _get_attr(item, "calendar")
+        if inner_calendar is not None:
+            calendar_id = str(_get_attr(inner_calendar, "calendar_id") or "").strip()
+            if calendar_id:
+                return calendar_id
+        calendar_id = str(_get_attr(item, "calendar_id") or "").strip()
         if calendar_id:
             return calendar_id
-    raise FeishuSkillError(
-        "Feishu user primary calendar lookup returned no calendar_id",
-        payload={"user_open_id": target, "data": data},
-    )
+    return None
 
 
 def start_negotiation(
     *,
     title: str,
-    initiator_open_id: str,
+    requester_open_id: str,
     attendee_open_ids: list[str],
     candidate_slots: list[str],
     duration_minutes: int,
@@ -647,8 +630,8 @@ def start_negotiation(
 ) -> dict[str, Any]:
     if not title.strip():
         raise FeishuSkillError("title is required")
-    if not initiator_open_id.strip():
-        raise FeishuSkillError("initiator_open_id is required")
+    if not requester_open_id.strip():
+        raise FeishuSkillError("requester_open_id is required")
     if duration_minutes <= 0:
         raise FeishuSkillError("duration_minutes must be greater than zero")
 
@@ -676,7 +659,7 @@ def start_negotiation(
     state = MeetingNegotiationState(
         negotiation_id=uuid.uuid4().hex,
         title=title.strip(),
-        initiator_open_id=initiator_open_id.strip(),
+        requester_open_id=requester_open_id.strip(),
         timezone=timezone,
         duration_minutes=duration_minutes,
         max_rounds=max(max_rounds, 1),
@@ -779,7 +762,6 @@ def send_final_invitations(
     end_time: str,
     timezone: str,
     meeting_link: str | None,
-    session: requests.Session | None = None,
 ) -> dict[str, Any]:
     message = (
         f"会议确认: {title}\n"
@@ -789,19 +771,22 @@ def send_final_invitations(
     content = json.dumps({"text": message}, ensure_ascii=False)
     delivered: list[str] = []
     failed: list[dict[str, str]] = []
+    client = _get_client()
 
     for attendee_open_id in attendee_open_ids:
         target = attendee_open_id.strip()
         if not target:
             continue
         try:
-            _openapi_request(
-                "POST",
-                "/open-apis/im/v1/messages",
-                params={"receive_id_type": "open_id"},
-                body={"receive_id": target, "msg_type": "text", "content": content},
-                session=session,
+            body = (
+                CreateMessageRequestBodyBuilder()
+                .receive_id(target)
+                .msg_type("text")
+                .content(content)
+                .build()
             )
+            req = CreateMessageRequestBuilder().receive_id_type("open_id").request_body(body).build()
+            _unwrap(client.im.v1.message.create(req))
             delivered.append(target)
         except FeishuSkillError as exc:
             failed.append({"attendee_open_id": target, "error": str(exc)})
@@ -814,7 +799,6 @@ def finalize_negotiation_and_create_meeting(
     *,
     description: str | None = None,
     location: str | None = None,
-    session: requests.Session | None = None,
 ) -> dict[str, Any]:
     state = _deserialize_negotiation_state(state_payload)
     if state.status != "agreed" or not state.agreed_slot:
@@ -823,34 +807,31 @@ def finalize_negotiation_and_create_meeting(
     start_dt = datetime.fromisoformat(state.agreed_slot)
     end_dt = datetime.fromtimestamp(start_dt.timestamp() + state.duration_minutes * 60, tz=start_dt.tzinfo)
     attendee_open_ids = sorted(set(state.attendees.keys()))
-    participant_open_ids = sorted(set(attendee_open_ids + [state.initiator_open_id]))
+    participant_open_ids = sorted(set(attendee_open_ids + [state.requester_open_id]))
 
-    created_meetings: list[dict[str, Any]] = []
-    for calendar_owner_open_id in participant_open_ids:
-        calendar_id = _primary_calendar_id_for_user(calendar_owner_open_id, session=session)
-        meeting = create_meeting(
-            title=state.title,
-            start_time=start_dt.isoformat(),
-            end_time=end_dt.isoformat(),
-            attendees=participant_open_ids,
-            timezone=state.timezone,
-            description=description,
-            location=location,
-            initiator_open_id=state.initiator_open_id,
-            initiator_calendar_id=calendar_id,
-            session=session,
-        )
-        created_meetings.append(
-            {
-                "calendar_owner_open_id": calendar_owner_open_id,
-                "meeting": meeting,
-            }
-        )
-
-    primary_meeting = next(
-        (item["meeting"] for item in created_meetings if item["calendar_owner_open_id"] == state.initiator_open_id),
-        created_meetings[0]["meeting"],
+    # Create a single event on the requester's primary calendar.
+    # Feishu automatically propagates it to attendee calendars when
+    # participants are included in the event's attendee list.
+    calendar_id = _primary_calendar_id_for_user(state.requester_open_id)
+    meeting = create_meeting(
+        title=state.title,
+        start_time=start_dt.isoformat(),
+        end_time=end_dt.isoformat(),
+        attendees=participant_open_ids,
+        timezone=state.timezone,
+        description=description,
+        location=location,
+        requester_open_id=state.requester_open_id,
+        requester_calendar_id=calendar_id,
     )
+    created_meetings = [
+        {
+            "calendar_owner_open_id": state.requester_open_id,
+            "meeting": meeting,
+        }
+    ]
+
+    primary_meeting = meeting
 
     invitation = send_final_invitations(
         attendee_open_ids=attendee_open_ids,
@@ -859,20 +840,19 @@ def finalize_negotiation_and_create_meeting(
         end_time=end_dt.strftime("%Y-%m-%d %H:%M"),
         timezone=state.timezone,
         meeting_link=primary_meeting.get("join_url"),
-        session=session,
     )
 
     return {
         "negotiation_id": state.negotiation_id,
         "agreed_slot": state.agreed_slot,
-        "meeting_owner_open_id": state.initiator_open_id,
+        "meeting_owner_open_id": state.requester_open_id,
         "primary_meeting": primary_meeting,
         "meetings": created_meetings,
         "invitation_delivery": invitation,
     }
 
 
-def _resolve_meeting_attendees(attendees: list[Any], *, session: requests.Session | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+def _resolve_meeting_attendees(attendees: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     attendee_results: list[dict[str, Any]] = []
     resolved_attendees: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -892,7 +872,7 @@ def _resolve_meeting_attendees(attendees: list[Any], *, session: requests.Sessio
             continue
 
         if spec["email"]:
-            candidate = _resolve_email_attendee(spec["email"], session=session)
+            candidate = _resolve_email_attendee(spec["email"])
             if candidate is None:
                 attendee_results.append({
                     "requested": requested,
@@ -913,7 +893,7 @@ def _resolve_meeting_attendees(attendees: list[Any], *, session: requests.Sessio
         normalized_name = str(spec["name"] or "").strip()
         if "群" in normalized_name:
             try:
-                group_results, group_attendees = _resolve_group_phrase_attendees(normalized_name, session=session)
+                group_results, group_attendees = _resolve_group_phrase_attendees(normalized_name)
             except FeishuSkillError as exc:
                 attendee_results.append(
                     {
@@ -928,9 +908,28 @@ def _resolve_meeting_attendees(attendees: list[Any], *, session: requests.Sessio
             resolved_attendees.extend(group_attendees)
             continue
 
-        search_result = search_contacts(str(spec["name"] or ""), limit=5, session=session)
+        search_result = search_contacts(str(spec["name"] or ""), limit=5)
         candidates = search_result["candidates"]
         if not candidates:
+            # Fallback: name may be a group/chat even without "群" in it
+            chat_result = search_chats(str(spec["name"] or ""), limit=1)
+            chat_candidates = chat_result.get("candidates") or []
+            if chat_candidates and float(chat_candidates[0].get("score") or 0.0) >= 0.8:
+                try:
+                    group_results, group_attendees = _resolve_group_phrase_attendees(str(spec["name"] or ""))
+                except FeishuSkillError as exc:
+                    attendee_results.append(
+                        {
+                            "requested": requested,
+                            "status": "unresolved",
+                            "error": "group_lookup_failed",
+                            "details": str(exc),
+                        }
+                    )
+                    continue
+                attendee_results.extend(group_results)
+                resolved_attendees.extend(group_attendees)
+                continue
             attendee_results.append({
                 "requested": requested,
                 "status": "unresolved",
@@ -980,16 +979,15 @@ def create_meeting(
     description: str | None = None,
     location: str | None = None,
     idempotency_key: str | None = None,
-    initiator_open_id: str | None = None,
-    initiator_calendar_id: str | None = None,
-    session: requests.Session | None = None,
+    requester_open_id: str | None = None,
+    requester_calendar_id: str | None = None,
 ) -> dict[str, Any]:
     start_dt = _parse_time(start_time, timezone)
     end_dt = _parse_time(end_time, timezone)
     if end_dt <= start_dt:
         raise FeishuSkillError("end_time must be later than start_time")
 
-    attendee_results, resolved_attendees, warnings = _resolve_meeting_attendees(attendees, session=session)
+    attendee_results, resolved_attendees, warnings = _resolve_meeting_attendees(attendees)
     unresolved = [item for item in attendee_results if item["status"] != "resolved"]
     if unresolved:
         raise FeishuSkillError(
@@ -997,47 +995,161 @@ def create_meeting(
             payload={"attendee_results": attendee_results, "warnings": warnings},
         )
 
-    if initiator_calendar_id:
-        calendar_id = initiator_calendar_id.strip()
-    elif initiator_open_id:
-        calendar_id = _primary_calendar_id_for_user(initiator_open_id, session=session)
+    if not requester_open_id and not requester_calendar_id:
+        requester_open_id = (os.getenv("FEISHU_REQUESTER_OPEN_ID") or "").strip() or None
+
+    if requester_calendar_id:
+        calendar_id = requester_calendar_id.strip()
+        target_calendar_owner = "explicit"
+    elif requester_open_id:
+        user_calendar_id = _primary_calendar_id_for_user(requester_open_id)
+        if user_calendar_id:
+            calendar_id = user_calendar_id
+            target_calendar_owner = "user"
+        else:
+            calendar_id = _bot_calendar_id()
+            target_calendar_owner = "bot"
+            warnings.append(
+                "Could not determine requester's primary calendar; using bot calendar as fallback."
+            )
     else:
-        calendar_id = _primary_calendar_id(session=session)
+        raise FeishuSkillError(
+            "requester_open_id is required for create_meeting to ensure user-calendar ownership; "
+            "set FEISHU_REQUESTER_OPEN_ID env var or pass --requester-open-id"
+        )
 
-    payload: dict[str, Any] = {
-        "summary": title,
-        "description": description or "",
-        "need_notification": True,
-        "start_time": _build_time_info(start_dt, timezone),
-        "end_time": _build_time_info(end_dt, timezone),
-        "attendees": resolved_attendees,
-        "vchat": {"vc_type": "vc"},
-    }
-    if location:
-        payload["location"] = {"name": location}
+    # Ensure the requester is always included as an attendee so the event
+    # appears on their calendar and they receive the invitation.
+    requester_in_attendees = False
+    if requester_open_id:
+        for item in resolved_attendees:
+            if item.get("user_id") == requester_open_id:
+                requester_in_attendees = True
+                break
+        if not requester_in_attendees:
+            resolved_attendees.append(
+                {"type": "user", "user_id": requester_open_id, "is_optional": False}
+            )
+            attendee_results.append(
+                {
+                    "requested": requester_open_id,
+                    "status": "resolved",
+                    "display_name": requester_open_id,
+                    "open_id": requester_open_id,
+                    "match_reason": "requester_implicit",
+                }
+            )
 
-    params: dict[str, Any] = {"user_id_type": "open_id"}
-    if idempotency_key:
-        params["idempotency_key"] = idempotency_key
+    attendee_objs = [
+        CalendarEventAttendeeBuilder()
+        .type("user")
+        .user_id(item["user_id"])
+        .is_optional(bool(item.get("is_optional")))
+        .build()
+        for item in resolved_attendees
+    ]
 
-    data = _openapi_request(
-        "POST",
-        f"/open-apis/calendar/v4/calendars/{calendar_id}/events",
-        params=params,
-        body=payload,
-        session=session,
+    # Determine requester display name for organizer field.
+    requester_display_name = requester_open_id
+    if requester_open_id:
+        for item in attendee_results:
+            if item.get("open_id") == requester_open_id and item.get("display_name"):
+                requester_display_name = item["display_name"]
+                break
+
+    body_builder = (
+        CalendarEventBuilder()
+        .summary(title)
+        .description(description or "")
+        .need_notification(True)
+        .start_time(TimeInfoBuilder().timestamp(str(int(start_dt.timestamp()))).timezone(timezone).build())
+        .end_time(TimeInfoBuilder().timestamp(str(int(end_dt.timestamp()))).timezone(timezone).build())
+        .vchat(VchatBuilder().vc_type("vc").build())
+        .attendee_ability("can_see_others")
     )
-    event = data.get("event") if isinstance(data.get("event"), dict) else {}
-    vchat = event.get("vchat") if isinstance(event.get("vchat"), dict) else {}
-    event_id = str(event.get("event_id") or "").strip()
+    if requester_open_id:
+        body_builder = body_builder.event_organizer(
+            EventOrganizerBuilder()
+            .user_id(requester_open_id)
+            .display_name(requester_display_name)
+            .build()
+        )
+    if location:
+        body_builder = body_builder.location(EventLocationBuilder().name(location).build())
+
+    builder = (
+        CreateCalendarEventRequestBuilder()
+        .calendar_id(calendar_id)
+        .user_id_type("open_id")
+        .request_body(body_builder.build())
+    )
+    if idempotency_key:
+        builder = builder.idempotency_key(idempotency_key)
+    req = builder.build()
+
+    client = _get_client()
+    resp = client.calendar.v4.calendar_event.create(req)
+
+    # If the bot lacks write access to the user's calendar (191002), fall back to
+    # the bot's own calendar so the event can still be created and invitations sent.
+    if not resp.success() and target_calendar_owner == "user" and resp.code == 191002:
+        calendar_id = _bot_calendar_id()
+        target_calendar_owner = "bot"
+        warnings.append(
+            "Bot lacks write access to requester's calendar; created on bot calendar instead. "
+            "Attendees will still receive invitations."
+        )
+        builder = (
+            CreateCalendarEventRequestBuilder()
+            .calendar_id(calendar_id)
+            .user_id_type("open_id")
+            .request_body(body_builder.build())
+        )
+        if idempotency_key:
+            builder = builder.idempotency_key(idempotency_key)
+        req = builder.build()
+        resp = client.calendar.v4.calendar_event.create(req)
+
+    data = _unwrap(resp)
+    event = _get_attr(data, "event")
+    if event is None:
+        raise FeishuSkillError("Meeting creation response did not include event", payload={})
+    vchat = _get_attr(event, "vchat")
+    event_id = str(_get_attr(event, "event_id") or "").strip()
     if not event_id:
-        raise FeishuSkillError("Meeting creation response did not include event_id", payload=data)
+        raise FeishuSkillError("Meeting creation response did not include event_id", payload={})
+
+    # Feishu ignores attendees in the create-event body; add them via the dedicated
+    # attendee API so that invitations are actually sent and appear on calendars.
+    if attendee_objs:
+        attendee_body = (
+            CreateCalendarEventAttendeeRequestBodyBuilder()
+            .attendees(attendee_objs)
+            .need_notification(True)
+            .build()
+        )
+        attendee_req = (
+            CreateCalendarEventAttendeeRequestBuilder()
+            .calendar_id(calendar_id)
+            .event_id(event_id)
+            .user_id_type("open_id")
+            .request_body(attendee_body)
+            .build()
+        )
+        try:
+            _unwrap(client.calendar.v4.calendar_event_attendee.create(attendee_req))
+        except FeishuSkillError as exc:
+            warnings.append(f"Attendee invitation failed: {exc}")
+
+    # Use the actual organizer from Feishu response if available.
+    resp_organizer = _get_attr(event, "event_organizer")
+    organizer_name = str(_get_attr(resp_organizer, "display_name") or requester_display_name).strip()
     return {
         "event_id": event_id,
-        "organizer_identity": DEFAULT_ORGANIZER_IDENTITY,
-        "initiator_open_id": initiator_open_id,
-        "calendar_id": str(event.get("organizer_calendar_id") or calendar_id),
-        "join_url": str(vchat.get("meeting_url") or vchat.get("live_link") or "").strip() or None,
+        "organizer_identity": organizer_name,
+        "requester_open_id": requester_open_id,
+        "calendar_id": str(_get_attr(event, "organizer_calendar_id") or calendar_id),
+        "join_url": str(_get_attr(vchat, "meeting_url") or _get_attr(vchat, "live_link") or "").strip() or None,
         "attendee_results": attendee_results,
         "warnings": warnings,
     }
@@ -1072,12 +1184,13 @@ def _build_cli() -> argparse.ArgumentParser:
     meeting_parser.add_argument("--description")
     meeting_parser.add_argument("--location")
     meeting_parser.add_argument("--idempotency-key")
-    meeting_parser.add_argument("--initiator-open-id")
-    meeting_parser.add_argument("--initiator-calendar-id")
+    meeting_owner_group = meeting_parser.add_mutually_exclusive_group(required=False)
+    meeting_owner_group.add_argument("--requester-open-id", help="Requester open_id; defaults to FEISHU_REQUESTER_OPEN_ID env var")
+    meeting_owner_group.add_argument("--requester-calendar-id", help="Explicit calendar id override")
 
     negotiation_parser = subparsers.add_parser("start-negotiation")
     negotiation_parser.add_argument("--title", required=True)
-    negotiation_parser.add_argument("--initiator-open-id", required=True)
+    negotiation_parser.add_argument("--requester-open-id", required=True)
     negotiation_parser.add_argument("--duration-minutes", type=int, required=True)
     negotiation_parser.add_argument("--timezone", default=DEFAULT_TIMEZONE)
     negotiation_parser.add_argument("--max-rounds", type=int, default=DEFAULT_NEGOTIATION_ROUNDS)
@@ -1118,13 +1231,13 @@ def main(argv: list[str] | None = None) -> int:
                 description=args.description,
                 location=args.location,
                 idempotency_key=args.idempotency_key,
-                initiator_open_id=args.initiator_open_id,
-                initiator_calendar_id=args.initiator_calendar_id,
+                requester_open_id=args.requester_open_id,
+                requester_calendar_id=args.requester_calendar_id,
             )
         elif args.command == "start-negotiation":
             result = start_negotiation(
                 title=args.title,
-                initiator_open_id=args.initiator_open_id,
+                requester_open_id=args.requester_open_id,
                 attendee_open_ids=list(args.attendee_open_ids or []),
                 candidate_slots=list(args.candidate_slots or []),
                 duration_minutes=args.duration_minutes,
@@ -1150,16 +1263,13 @@ def main(argv: list[str] | None = None) -> int:
     except FeishuSkillError as exc:
         print(json.dumps({"ok": False, "error": str(exc), "payload": exc.payload}, ensure_ascii=False, indent=2))
         return 1
-    except requests.RequestException as exc:
-        response_body = ""
-        if getattr(exc, "response", None) is not None:
-            response_body = str(getattr(exc.response, "text", "") or "").strip()
+    except ObtainAccessTokenException as exc:
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "error": f"Feishu HTTP request failed: {exc}",
-                    "payload": {"response_body": response_body or None},
+                    "error": f"Feishu auth failed: {exc}",
+                    "payload": {},
                 },
                 ensure_ascii=False,
                 indent=2,

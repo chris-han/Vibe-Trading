@@ -5104,7 +5104,10 @@ async def _feishu_route_message(
 
     if not session_id:
         title_prefix = f"Feishu:{resolved_user.name}" if resolved_user is not None else "Feishu"
-        session = svc.create_session(title=f"{title_prefix}:{chat_id[:30]}", config={"channel": "feishu"})
+        session = svc.create_session(
+            title=f"{title_prefix}:{chat_id[:30]}",
+            config={"channel": "feishu", "feishu_sender_open_id": sender_open_id},
+        )
         session_id = session.session_id
         _set_feishu_bound_session_id(session_key, session_id)
         if resolved_workspace is not None:

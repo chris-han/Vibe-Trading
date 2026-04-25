@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SKILL_TEXT_TARGET_RE = re.compile(r"^(\.github/skills/.*)$")
+SKILL_TEXT_TARGET_RE = re.compile(r"^(\.github/skills/.*|agent/src/skills/.*/SKILL\.md)$")
 BACKEND_TARGET_RE = re.compile(
     r"^("
     r"agent/src/runtime_prompt_policy\.py|"
@@ -89,6 +89,11 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
         "prompt_config_file_layout",
         re.compile(r"config\.json|code/signal_engine\.py", re.IGNORECASE),
         "Prompts and skill text must not encode file layout contracts such as config.json or code/signal_engine.py.",
+    ),
+    (
+        "prompt_absolute_temp_path",
+        re.compile(r"(?:^|[\s\"'`])(\/tmp\/|\/var\/tmp\/)", re.IGNORECASE),
+        "Prompts and skill text must not encode absolute temp paths like /tmp/...; keep file paths workspace/home-rooted via deterministic helpers.",
     ),
 ]
 
