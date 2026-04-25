@@ -148,13 +148,19 @@ When this skill is installed into a workspace, use the configured values as foll
 ## Operating Rules
 
 1. Use the Feishu bot identity `semantier` as the organizer identity for contact search, meeting creation, and meeting summaries unless an explicit workspace config override is provided.
+1a. If the user explicitly designates an organizer (for example: `组织者是 X` or `organizer is X`), you MAY use that designated organizer instead of the default session owner.
+1b. If `organizer` and `initiator` are not the same person, you MUST obtain explicit approval from the designated organizer before running `create-meeting` or `finalize-negotiation`.
+1c. Approval must be explicit and attributable to the designated organizer (clear yes/approve intent). If approval is missing or ambiguous, do not create events.
 2. **MANDATORY**: When any required meeting field is missing, you MUST emit the `a2ui` `schema_form` block defined in the **Missing Input A2UI Contract** section below. A free-form markdown bullet list asking for the same fields is NEVER acceptable — even when reading the skill for the first time.
 2a. When the agent is not certain about any required meeting field, it must ask the user to clarify via that form. Do not silently assume a default duration, attendee list, or other required value.
+2b. Before creating an event, if any parameter is inferred/defaulted (for example duration, timezone, description, or selected organizer/initiator), you MUST show a pre-create review `schema_form` with those default values and ask whether to edit or approve.
 3. Resolve attendees through the materialized `feishu_bot_api.py` script rather than guessing account identifiers.
 4. Confirm ambiguous contact matches before creating the meeting.
 5. Run attendee negotiation rounds until all attendees agree on one slot or rounds are exhausted.
 6. After agreement, create meeting items on each participant calendar using the same agreed slot and attendee list.
 7. Treat the request initiator as the meeting owner identity in summaries and final outputs.
+7a. If organizer override is used, include both identities explicitly in confirmations: organizer identity and initiator identity.
+7b. Never execute create-event calls when organizer approval is still pending.
 
 ## Implementation Guidelines: Using the Materialized Script
 
@@ -451,6 +457,105 @@ Rules for this schema:
 - `meeting_description` is optional and must remain `required: false`.
 - If the user already supplied some fields, keep the same schema keys and only ask for the missing ones.
 - If the attendee names might be ambiguous, still collect them in `attendees` first; resolve them through backend contact search after submit.
+
+## Pre-Create Review and Approval A2UI Contract
+
+After attendee resolution and before `create-meeting`/`finalize-negotiation`, if any value is inferred or defaulted, emit a review form with prefilled defaults and an explicit approve/edit choice.
+
+Use this `a2ui` block shape:
+
+```a2ui
+{
+  "version": "1.0",
+  "root": {
+    "component": "schema_form",
+    "props": {
+      "title": "确认并审批会议创建",
+      "submitLabel": "提交确认",
+      "followUp": "请根据审批结果继续：approve 则创建会议，edit 则先修改参数。",
+      "fields": [
+        {
+          "key": "meeting_title",
+          "label": "会议主题",
+          "type": "text",
+          "required": true,
+          "default": "<resolved_or_default_title>"
+        },
+        {
+          "key": "meeting_time",
+          "label": "会议时间",
+          "type": "text",
+          "required": true,
+          "default": "<resolved_or_default_time>"
+        },
+        {
+          "key": "duration_value",
+          "label": "会议时长数值",
+          "type": "number",
+          "required": true,
+          "default": 30
+        },
+        {
+          "key": "duration_unit",
+          "label": "会议时长单位",
+          "type": "select",
+          "required": true,
+          "options": [
+            { "label": "分钟", "value": "分钟" },
+            { "label": "小时", "value": "小时" }
+          ],
+          "default": "分钟"
+        },
+        {
+          "key": "timezone",
+          "label": "时区",
+          "type": "text",
+          "required": true,
+          "default": "Asia/Shanghai"
+        },
+        {
+          "key": "organizer_identity",
+          "label": "组织者",
+          "type": "text",
+          "required": true,
+          "default": "<resolved_organizer>"
+        },
+        {
+          "key": "initiator_identity",
+          "label": "发起人",
+          "type": "text",
+          "required": true,
+          "default": "<resolved_initiator>"
+        },
+        {
+          "key": "organizer_approval",
+          "label": "组织者审批",
+          "type": "select",
+          "required": true,
+          "options": [
+            { "label": "approve", "value": "approve" },
+            { "label": "edit", "value": "edit" }
+          ]
+        },
+        {
+          "key": "approval_note",
+          "label": "审批备注",
+          "type": "textarea",
+          "required": false,
+          "placeholder": "可选：记录组织者审批说明"
+        }
+      ]
+    }
+  }
+}
+```
+
+Rules for review/approval form:
+
+- This review form is required before create-event when inferred/defaulted values exist.
+- If organizer and initiator differ, `organizer_approval=approve` is mandatory before calling any create-event command.
+- If user chooses `edit`, revise fields and re-confirm; do not create event in the same step.
+- Keep audit clarity in final response: include organizer, initiator, and whether organizer approval was obtained.
 
 ## Response Shape
 

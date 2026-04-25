@@ -39,6 +39,7 @@ def test_skill_points_to_local_helper_script():
 def test_skill_a2ui_contract_is_mandatory_and_no_bullet_list_fallback():
     """Regression: agent must emit schema_form not a markdown bullet list when fields are missing."""
     source = SKILL_FILE.read_text(encoding="utf-8")
+    missing_input_section = source.split("## Pre-Create Review and Approval A2UI Contract", 1)[0]
     # The mandatory enforcement language must be present
     assert "MANDATORY" in source
     # The schema_form component name must appear in the a2ui block
@@ -53,9 +54,30 @@ def test_skill_a2ui_contract_is_mandatory_and_no_bullet_list_fallback():
     assert '"type": "select"' in source
     assert '"value": "分钟"' in source
     assert '"value": "小时"' in source
-    assert '"default": "分钟"' not in source
+    assert '"default": "分钟"' not in missing_input_section
     assert "Do not silently assume a default duration" in source
     assert "Never prefill or preselect a required field" in source
+
+
+def test_skill_requires_organizer_approval_when_organizer_differs_from_initiator():
+    source = SKILL_FILE.read_text(encoding="utf-8")
+
+    assert "you MAY use that designated organizer" in source
+    assert "organizer` and `initiator` are not the same person" in source
+    assert "MUST obtain explicit approval" in source
+    assert "do not create events" in source
+
+
+def test_skill_defines_pre_create_review_form_with_default_values():
+    source = SKILL_FILE.read_text(encoding="utf-8")
+
+    assert "## Pre-Create Review and Approval A2UI Contract" in source
+    assert '"title": "确认并审批会议创建"' in source
+    assert '"key": "organizer_approval"' in source
+    assert '"label": "approve"' in source
+    assert '"label": "edit"' in source
+    assert '"default": "<resolved_organizer>"' in source
+    assert '"default": "<resolved_initiator>"' in source
 
 
 def test_search_contacts_uses_skill_local_ranking(monkeypatch):
@@ -140,6 +162,29 @@ def test_tenant_access_token_reads_top_level_field(monkeypatch):
     assert captured["method"] == "POST"
     assert str(captured["url"]).endswith("/open-apis/auth/v3/tenant_access_token/internal")
     assert captured["return_data"] is False
+
+
+def test_primary_calendar_id_for_user_accepts_calendars_list_shape(monkeypatch):
+    helper = _load_helper_module()
+
+    def fake_openapi_request(method, path, *, params=None, body=None, session=None):
+        assert method == "POST"
+        assert path == "/open-apis/calendar/v4/calendars/primary"
+        assert params == {"user_id": "ou_amy", "user_id_type": "open_id"}
+        return {
+            "calendars": [
+                {
+                    "calendar_id": "feishu.cn_test_primary@group.calendar.feishu.cn",
+                    "is_primary": True,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(helper, "_openapi_request", fake_openapi_request)
+
+    calendar_id = helper._primary_calendar_id_for_user("ou_amy")
+
+    assert calendar_id == "feishu.cn_test_primary@group.calendar.feishu.cn"
 
 
 def test_create_meeting_builds_expected_event_payload(monkeypatch):

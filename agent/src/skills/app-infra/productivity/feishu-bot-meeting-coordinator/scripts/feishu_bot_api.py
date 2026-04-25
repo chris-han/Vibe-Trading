@@ -610,6 +610,13 @@ def _primary_calendar_id_for_user(user_open_id: str, *, session: requests.Sessio
         calendar_id = str(data["calendar"].get("calendar_id") or "").strip()
         if calendar_id:
             return calendar_id
+    calendars = data.get("calendars") or []
+    for item in calendars:
+        if not isinstance(item, dict):
+            continue
+        calendar_id = str(item.get("calendar_id") or "").strip()
+        if calendar_id:
+            return calendar_id
     raise FeishuSkillError(
         "Feishu user primary calendar lookup returned no calendar_id",
         payload={"user_open_id": target, "data": data},
