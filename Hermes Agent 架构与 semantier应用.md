@@ -71,6 +71,89 @@ Hermes 的权限控制通过以下维度实现：
 * Hermes Dashboard 应通过 `agent/hermes_dashboard_wrapper.py` 启动，而不是直接运行 upstream `hermes dashboard`。
 * 若直接运行 upstream dashboard，则 `X-Hermes-Home` 会被忽略，Dashboard 会退回单一 `HERMES_HOME` 视图，无法满足多用户隔离。
 
+### **2.4 WebUI 认证流（Feishu OAuth + 零网关鉴权）**
+
+#### **2.4.1 核心原则：网关不实现鉴权逻辑**
+
+`hermes-workspace`（WebUI 网关）**不在本地实现任何认证逻辑**。所有鉴权由后端 `/agent`（FastAPI）统一处理，前端仅作为纯代理（pure proxy）和渲染层。
+
+具体落地：
+
+* **移除所有前端 API 路由的 `isAuthenticated(request)` 门禁**。此前 `src/routes/api/*.ts` 中大量路由通过检查 `hermes-auth` cookie（本地密码登录）来拦截请求，这会导致已拿到 `vt_session` 的 Feishu 用户被错误拒绝。
+* **前端所有 `/api/*` 路由不再做本地鉴权拦截**，直接将请求（含 `vt_session` cookie）代理到后端，由后端根据 cookie 有效性返回 401。
+* **保留 `auth-check.ts` 作为信息端点**：它继续返回 `HERMES_PASSWORD` 的鉴权状态，供旧版 `LoginScreen` 使用；Feishu OAuth 是否开启由独立的 `/auth/me` 端点报告。
+
+#### **2.4.2 Feishu OAuth 端到端流程**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User/Browser
+    participant W as hermes-workspace (TanStack Start)
+    participant A as /agent (FastAPI)
+    participant F as Feishu OAuth
+
+    U->>W: 首次访问 /
+    W->>A: useSemantierAuthStatus 轮询 /auth/me
+    A-->>W: { feishu_oauth_enabled: true, authenticated: false }
+    W-->>U: window.location.assign('/auth/feishu/login')
+
+    U->>W: GET /auth/feishu/login
+    W->>A: proxy to /auth/feishu/login
+    A-->>U: 302 Redirect to Feishu OAuth
+
+    U->>F: 用户授权
+    F-->>U: 302 Redirect to /auth/feishu/callback?code=...
+
+    U->>W: GET /auth/feishu/callback?code=...
+    W->>A: proxy to /auth/feishu/callback?code=...
+    A->>A: 换取 access_token → 查用户 info → upsert 用户
+    A->>A: ensure_workspace(workspaces/<user_id>)
+    A-->>U: Set-Cookie: vt_session=<hmac-signed>；302 Redirect to /
+
+    U->>W: 再次访问 /
+    W->>A: /auth/me (携带 vt_session)
+    A-->>W: { authenticated: true, user: ..., workspace_slug: 'alice_zhang' }
+    W->>A: /system/paths (携带 vt_session)
+    A-->>W: { currentWorkspaceRoot: 'workspaces/<user_id>' }
+    W-->>U: 渲染用户专属 Workspace
+```
+
+关键点：
+
+* **`vt_session` 是唯一的会话凭证**：HttpOnly、SameSite=Strict，前端 JS 不可读。
+* **`/auth/$` 路由代理**：`hermes-workspace` 的 `src/routes/auth/$.tsx` 将所有 `/auth/*` 请求代理到后端 `/agent`，因此 `/auth/feishu/login` 和 `/auth/feishu/callback` 无需在 vite proxy 中额外配置。
+* ** workspace 自动 provision**：`/auth/feishu/callback` 在后端完成 OAuth 后，会调用 `ensure_workspace()` 为用户创建 `workspaces/<user_id>/` 目录（若不存在）。
+
+#### **2.4.3 未登录用户的处理路径**
+
+| 场景 | 行为 | 实现位置 |
+|------|------|----------|
+| 用户首次打开页面 | `workspace-shell.tsx` 检测到 `feishu_oauth_enabled=true && authenticated=false`，重定向到 `/auth/feishu/login` | `src/components/workspace-shell.tsx` |
+| 用户直接访问 `/api/*`（无 `vt_session`） | 后端 `/system/paths` 返回 401 或 public workspace；前端 `resolveActiveWorkspaceRoot` 抛出 `WorkspaceAuthRequiredError` | `src/server/workspace-root.ts` |
+| API 路由需要 workspace 但用户未认证 | 路由 catch 块捕获 `WorkspaceAuthRequiredError`，返回 HTTP 401 JSON | `src/routes/api/files.ts` 等 11 个路由 |
+| 用户已配置 `HERMES_PASSWORD`（旧版） | `auth-check.ts` 继续返回 `authRequired=true`；`LoginScreen` 仍然显示；与 Feishu OAuth 互不影响 | `src/routes/api/auth-check.ts` |
+
+#### **2.4.4 工作空间解析与 `WorkspaceAuthRequiredError`**
+
+`src/server/workspace-root.ts` 中的 `resolveActiveWorkspaceRoot` 负责在服务端将请求映射到正确的 workspace 目录：
+
+1. 携带 `vt_session` 请求后端 `/system/paths`。
+2. 若后端返回 401 → 尝试 `/auth/me` 回退；若仍失败 → 抛出 `WorkspaceAuthRequiredError`。
+3. 若后端返回 `authenticated: false` 且 `workspaceId === 'public'` → 同样尝试 `/auth/me` 回退；失败则抛出 `WorkspaceAuthRequiredError`。
+4. **彻底禁用 public workspace fallback**：`fallbackWorkspaceRoot()` 不再返回 `workspaces/public`，而是直接抛出 `WorkspaceAuthRequiredError('Public workspace is disabled. Please log in.')`。
+
+因此，未登录用户在前端会经历：
+
+* 页面级重定向（`workspace-shell.tsx` → Feishu 登录页）
+* 或 API 级 401（若绕过页面直接请求 `/api/files` 等）
+
+#### **2.4.5 与 Gateway 层鉴权的关系**
+
+* **WebUI 入口**：由 `/agent` 的 Feishu OAuth 流程控制，依赖 `vt_session`。
+* **Messaging Gateway（Feishu/Weixin Bot）**：仍由 `hermes-agent/gateway/` 自身的配对/白名单机制控制（见 6.3），与 WebUI 的 `vt_session` 是独立的两套鉴权面。
+* **Dashboard Wrapper**：`agent/hermes_dashboard_wrapper.py` 通过 `X-Hermes-Home` 做请求级隔离，不鉴权；鉴权在请求到达 wrapper 之前已由 `/agent` 完成。
+
 ## ---
 
 **3\. Skill 学习与自进化**
@@ -209,7 +292,147 @@ graph LR
 4. Gateway 写入 `.hermes/sessions`，后端 backfill 到 SessionStore，WebUI 可见。
 5. 删除配置时必须同时清理 SQLite + workspace runtime surfaces，并重启 Gateway，避免 stale 凭据继续连通。
 
-### **6.1.1 当前统一策略（2026-04 已落地）**
+### **6.3 Feishu Gateway 配对机制与自动授权策略**
+
+本节说明 Feishu 网关在**首次私聊（DM）**时的用户准入（Pairing）流程，以及 `FEISHU_GROUP_POLICY` 与 `FEISHU_ALLOW_ALL_USERS` 等环境变量的作用域与配置方法。
+
+#### **6.3.1 配对码（Pairing Code）流程**
+
+当未知用户首次向 Feishu 机器人发送私聊消息时，Gateway 会按以下顺序检查身份：
+
+1. `_is_user_authorized()` 依次检查：
+   - `FEISHU_ALLOW_ALL_USERS=true` → **直接放行**
+   - Pairing Store：`~/.hermes/platforms/pairing/feishu-approved.json`
+   - `FEISHU_ALLOWED_USERS`（逗号分隔的 open_id）
+   - `GATEWAY_ALLOWED_USERS`（跨平台全局名单）
+2. 若全部未命中，且 `unauthorized_dm_behavior == "pair"`，Gateway 调用 `PairingStore.generate_code("feishu", user_id, user_name)` 生成一次性配对码。
+3. 机器人回复：
+   ```
+   Hi~ I don't recognize you yet!
+   Here's your pairing code: V8FLYC4J
+   Ask the bot owner to run:
+   hermes pairing approve feishu V8FLYC4J
+   ```
+4. 管理员执行 `hermes pairing approve feishu <CODE>` 后，用户被写入 `feishu-approved.json`，下次消息自动通过。
+
+> **关键点**：配对机制是 Hermes Gateway **通用能力**（`gateway/run.py` + `gateway/pairing.py`），并非 Feishu 独有；Telegram、Discord、Slack 等也走同一套存储与命令。
+
+#### **6.3.2 `FEISHU_GROUP_POLICY=allowlist` 的真实作用域**
+
+`FEISHU_GROUP_POLICY` **仅影响群聊（Group）**，不影响 DM 配对。它在 `hermes-agent/gateway/platforms/feishu.py` 中控制 `@mention` 响应策略：
+
+| 策略值 | 群聊行为 |
+|--------|----------|
+| `allowlist`（默认） | 仅响应 `FEISHU_ALLOWED_USERS` 名单内用户的 `@mention` |
+| `open` | 响应**任意**用户的 `@mention` |
+| `disabled` | 完全忽略所有群消息 |
+| `admin_only` | 仅响应管理员（`admins` 配置）的 `@mention` |
+
+**注意**：即使在 `open` 模式下，机器人仍需被 `@mention`（或消息中含 `@_all`）才会处理群消息；`FEISHU_GROUP_POLICY` 是**前置策略门**，在 mention 检测之前执行。
+
+#### **6.3.3 跳过人工审批的三种方式**
+
+若希望用户首次联系时**不弹出配对码**，可通过环境变量在 Gateway 环境（加载 Hermes 进程的 `.env`）中配置：
+
+| 方式 | 环境变量 | 效果 | 适用场景 |
+|------|----------|------|----------|
+| **放行全部 Feishu 私聊** | `FEISHU_ALLOW_ALL_USERS=true` | 任何用户可直接 DM，无需配对码；群聊仍受 `FEISHU_GROUP_POLICY` 约束 | 对内测试、可控内网环境 |
+| **放行全平台私聊** | `GATEWAY_ALLOW_ALL_USERS=true` | 所有平台（Feishu/Weixin/Telegram/...）均免配对 | 多平台统一部署、信任环境 |
+| **预审批特定用户** | `FEISHU_ALLOWED_USERS=<open_id1>,<open_id2>` | 名单内用户免配对，同时也在 `allowlist` 群策略中生效 | 生产环境、已知用户白名单 |
+
+**推荐配置示例**（对内测试）：
+```bash
+FEISHU_ALLOW_ALL_USERS=true
+FEISHU_GROUP_POLICY=allowlist
+```
+
+**生产环境推荐**（仅开放已知用户）：
+```bash
+FEISHU_ALLOWED_USERS=ou_xxx,ou_yyy
+FEISHU_GROUP_POLICY=allowlist
+```
+
+> **与 `agent/.env` 的关系**：`FEISHU_GROUP_POLICY` 与 `FEISHU_ALLOW_ALL_USERS` 由 `hermes-agent/gateway/` 消费。若 Gateway 进程与 `/agent` 后端共用同一份 `.env` 加载逻辑，则写在 `agent/.env` 中即可生效；若分别启动，需确保 Gateway 进程能读到对应变量。
+
+#### **6.3.4 按群聊覆盖策略（Per-Group Override）**
+
+除全局 `FEISHU_GROUP_POLICY` 外，可在 `.hermes/config.yaml` 中为特定群聊配置独立规则：
+
+```yaml
+group_rules:
+  "oc_abc123":
+    policy: "allowlist"
+    allowlist:
+      - "ou_user1"
+      - "ou_user2"
+  "oc_def456":
+    policy: "disabled"
+```
+
+未命中 `group_rules` 的群聊回退到全局策略。该机制与 DM 配对存储完全独立。
+
+#### **6.3.5 环境变量变更的生效方式（重启边界）**
+
+`GATEWAY_ALLOW_ALL_USERS`、`FEISHU_ALLOW_ALL_USERS`、`FEISHU_GROUP_POLICY` 等变量均由 Gateway **进程启动时**通过 `os.getenv()` 一次性读取，**不支持热加载**。修改 `.env` 后必须重启对应进程才能生效。
+
+##### **生效链路**
+
+在 semantier 默认架构中，环境变量的传递路径如下：
+
+```
+agent/.env
+  → runtime_env.py (api_server 启动时 python-dotenv load)
+  → os.environ (API Server 进程内)
+  → dict(os.environ) (传给 Gateway 子进程)
+  → Gateway 启动读取 os.getenv(...)
+```
+
+**关键边界**：`api_server.py` 仅在**自身启动时**加载一次 `agent/.env`。如果 API Server 进程未重启，即使通过 API 触发 Gateway `--replace`，子进程继承的仍然是 API Server 启动时的旧环境变量。
+
+##### **托管模式下的正确操作（默认）**
+
+当 Gateway 由 `agent/api_server.py` 自动托管时：
+
+1. 修改 `agent/.env` 并保存。
+2. **重启 API Server**，使其重新加载 `runtime_env.py` 和 `.env`：
+   ```bash
+   cd /home/chris/repo/semantier/agent
+   # 停止旧进程（示例）
+   kill $(cat .runtime/backend.pid)
+   # 重新启动
+   uv run python cli.py serve --port 8899
+   ```
+3. API Server 启动后，若 Gateway 未自动拉起，进入 WebUI Messaging 配置页保存或调用对应 API，触发 `_ensure_workspace_gateway_running(..., force_restart=True)`，新 Gateway 进程即可拿到最新变量。
+
+##### **独立运行 Gateway 时的操作**
+
+若 Gateway 是手动在终端中独立运行（不经过 `api_server.py`）：
+
+```bash
+cd /home/chris/repo/semantier/agent
+source .venv/bin/activate
+export GATEWAY_ALLOW_ALL_USERS=true
+# 或直接 source .env
+python -m hermes_cli.main gateway run --replace
+```
+
+此时只需 **停止当前 Gateway 进程，重新 export 变量后再启动** 即可。
+
+##### **验证方法**
+
+重启后让陌生用户发送一条测试 DM：
+- **生效**：直接收到正常回复，**不再出现** `Hi~ I don't recognize you yet!` 配对码。
+- **未生效**：仍然收到配对码提示。
+
+若未生效，按以下顺序排查：
+1. 确认修改的是 `agent/.env`（而非仓库根目录 `.env` 或 `hermes-agent/.env`）。
+2. 确认无拼写错误（如 `GATEWAY_ALLOW_ALL_USERS` 而非 `GATEWAY_ALLOW_ALL_USER`）。
+3. 确认 API Server 进程 PID 已变化（真正重启过）。
+4. 检查 Gateway 子进程的环境变量：`cat /proc/<gateway_pid>/environ | tr '\0' '\n' | grep ALLOW_ALL`。
+
+---
+
+### **6.4 当前统一策略（2026-04 已落地）**
 
 - `agent` 是工作空间会话与消息历史的唯一控制面；Weixin / Feishu / WebUI 只是入口与投递通道，不应各自维护独立的 canonical transcript store。
 - 现状采用双向投影而非双 canonical store：

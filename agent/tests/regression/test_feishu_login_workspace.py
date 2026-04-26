@@ -92,19 +92,13 @@ def test_system_paths_reports_active_hermes_home(tmp_path, monkeypatch):
     assert Path(payload["dataRoot"]).exists()
 
 
-def test_system_paths_reports_public_workspace_for_anonymous_user(tmp_path, monkeypatch):
-    workspaces_dir = _patch_isolated_auth_runtime(tmp_path, monkeypatch)
+def test_system_paths_requires_auth_for_anonymous_user_when_feishu_enabled(tmp_path, monkeypatch):
+    _patch_isolated_auth_runtime(tmp_path, monkeypatch)
 
     client = TestClient(api_server.app)
     response = client.get("/system/paths")
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["authenticated"] is False
-    assert payload["currentWorkspaceId"] == "public"
-    assert payload["currentWorkspaceSlug"] == "public"
-    assert payload["currentWorkspaceRoot"] == str((workspaces_dir / "public").resolve())
-    assert Path(payload["currentWorkspaceRoot"]).is_dir()
+    assert response.status_code == 401, response.text
 
 
 def test_system_paths_reports_authenticated_workspace_root(tmp_path, monkeypatch):
@@ -195,7 +189,9 @@ def test_auth_me_reports_feishu_oauth_capability(tmp_path, monkeypatch):
     guest_me = guest.get("/auth/me")
 
     assert guest_me.status_code == 200, guest_me.text
-    assert guest_me.json()["feishu_oauth_enabled"] is True
+    data = guest_me.json()
+    assert data["feishu_oauth_enabled"] is True
+    assert "workspace_root" in data
 
     monkeypatch.setenv("FEISHU_OAUTH_ENABLED", "false")
     disabled = TestClient(api_server.app)

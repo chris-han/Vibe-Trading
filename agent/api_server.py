@@ -584,6 +584,17 @@ def _read_auth_session(token: Optional[str]) -> Optional[Dict[str, Any]]:
     return decoded if isinstance(decoded, dict) else None
 
 
+# Endpoints that remain accessible without a Feishu session cookie.
+_PUBLIC_ENDPOINTS: set[str] = {
+    "/auth/feishu/login",
+    "/auth/feishu/callback",
+    "/auth/me",
+    "/auth/logout",
+    "/health",
+    "/feishu/webhook",
+}
+
+
 def _resolve_request_context(request: Request, *, require_login: bool = False) -> RequestContext:
     if _feishu_oauth_enabled():
         session_payload = _read_auth_session(request.cookies.get(AUTH_SESSION_COOKIE))
@@ -597,7 +608,9 @@ def _resolve_request_context(request: Request, *, require_login: bool = False) -
                     workspace_slug=user.workspace_slug,
                 )
                 return RequestContext(authenticated=True, user=user, workspace=workspace)
-        if require_login:
+        # No valid session and Feishu OAuth is enabled.
+        # Allow explicitly public endpoints; everything else requires auth.
+        if require_login or request.url.path not in _PUBLIC_ENDPOINTS:
             raise HTTPException(status_code=401, detail="Authentication required")
     return RequestContext(authenticated=False, user=None, workspace=_get_public_workspace())
 
@@ -1971,6 +1984,7 @@ class AuthMeResponse(BaseModel):
     feishu_oauth_enabled: bool
     user: Optional[AuthUserResponse] = None
     workspace_slug: Optional[str] = None
+    workspace_root: Optional[str] = None
 
 
 class MessagingValidateRequest(BaseModel):
@@ -2471,11 +2485,13 @@ async def auth_me(request: Request):
             authenticated=False,
             feishu_oauth_enabled=_feishu_oauth_enabled(),
             workspace_slug=ctx.workspace.workspace_slug,
+            workspace_root=str(ctx.workspace.workspace_root),
         )
     return AuthMeResponse(
         authenticated=True,
         feishu_oauth_enabled=_feishu_oauth_enabled(),
         workspace_slug=ctx.workspace.workspace_slug,
+        workspace_root=str(ctx.workspace.workspace_root),
         user=AuthUserResponse(
             user_id=ctx.user.user_id,
             name=ctx.user.name,
