@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from fastapi.testclient import TestClient
 import json
+import subprocess
 
 import api_server
 
@@ -760,3 +761,49 @@ def test_start_hermes_gateway_api(tmp_path, monkeypatch):
     assert payload["ok"] is True
     assert payload["pid"] == 12345
     assert payload["message"] == "started"
+
+
+def test_start_workspace_gateway_uses_backend_python(tmp_path, monkeypatch):
+    hermes_home = tmp_path / "workspace" / ".hermes"
+    hermes_home.mkdir(parents=True)
+
+    backend_agent_dir = tmp_path / "agent"
+    backend_python = backend_agent_dir / ".venv" / "bin" / "python"
+    backend_python.parent.mkdir(parents=True)
+    backend_python.write_text("", encoding="utf-8")
+
+    hermes_agent_dir = tmp_path / "hermes-agent"
+    (hermes_agent_dir / "gateway").mkdir(parents=True)
+    (hermes_agent_dir / "gateway" / "run.py").write_text("", encoding="utf-8")
+    hermes_python = hermes_agent_dir / ".venv" / "bin" / "python"
+    hermes_python.parent.mkdir(parents=True)
+    hermes_python.write_text("", encoding="utf-8")
+
+    popen_calls: list[dict] = []
+
+    class _StubProcess:
+        pid = 43210
+
+    def _stub_popen(argv, cwd=None, env=None, **kwargs):
+        popen_calls.append({"argv": argv, "cwd": cwd, "env": env, "kwargs": kwargs})
+        return _StubProcess()
+
+    monkeypatch.setattr(api_server, "_AGENT_DIR", backend_agent_dir)
+    monkeypatch.setattr(api_server, "_resolve_hermes_agent_dir", lambda: hermes_agent_dir)
+    monkeypatch.setattr(api_server, "_ensure_gateway_health_webhook", lambda hermes_home: None)
+    monkeypatch.setattr(api_server, "_sync_workspace_provider_api_key", lambda hermes_home, env: None)
+    monkeypatch.setattr(api_server, "_is_gateway_healthy", lambda: False)
+    monkeypatch.setattr(api_server, "_HERMES_GATEWAY_START_ATTEMPTS", 1)
+    monkeypatch.setattr(api_server.time, "sleep", lambda _: None)
+    monkeypatch.setattr(api_server._sys, "executable", str(backend_python))
+    monkeypatch.setattr(subprocess, "Popen", _stub_popen)
+
+    result = api_server._start_workspace_hermes_gateway(hermes_home)
+
+    assert result["ok"] is True
+    assert popen_calls
+    call = popen_calls[0]
+    assert call["argv"][0] == str(backend_python)
+    assert call["cwd"] == str(hermes_agent_dir)
+    assert call["env"]["HERMES_PYTHON"] == str(backend_python)
+    assert call["env"]["VIRTUAL_ENV"] == str(backend_agent_dir / ".venv")

@@ -2017,7 +2017,16 @@ def _resolve_hermes_agent_dir() -> Optional[Path]:
 
 
 def _resolve_hermes_python(agent_dir: Path) -> str:
-    for candidate in (agent_dir / ".venv" / "bin" / "python", agent_dir / "venv" / "bin" / "python"):
+    current_python = Path(_sys.executable).expanduser()
+    if current_python.exists():
+        return str(current_python)
+
+    for candidate in (
+        _AGENT_DIR / ".venv" / "bin" / "python",
+        _AGENT_DIR / "venv" / "bin" / "python",
+        agent_dir / ".venv" / "bin" / "python",
+        agent_dir / "venv" / "bin" / "python",
+    ):
         if candidate.exists():
             return str(candidate)
     return "python3"
@@ -2228,9 +2237,13 @@ def _start_workspace_hermes_gateway(hermes_home: Path, skip_health_check: bool =
     env = dict(os.environ)
     env["HERMES_HOME"] = str(hermes_home)
     env["API_SERVER_ENABLED"] = "true"
+    env["HERMES_PYTHON"] = python
+    python_path = Path(python)
+    if python_path.parent.name == "bin" and python_path.parent.parent.exists():
+        env["VIRTUAL_ENV"] = str(python_path.parent.parent)
     _sync_workspace_provider_api_key(hermes_home, env)
     env["PATH"] = (
-        f"{agent_dir / '.venv' / 'bin'}:{agent_dir / 'venv' / 'bin'}:{env.get('PATH', '')}"
+        f"{python_path.parent}:{agent_dir / '.venv' / 'bin'}:{agent_dir / 'venv' / 'bin'}:{env.get('PATH', '')}"
     )
     # Prevent the hermes CLI from syncing bundled skills into the per-workspace
     # HERMES_HOME/skills directory on every gateway launch.  Builtin skills are

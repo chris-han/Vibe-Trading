@@ -406,7 +406,23 @@ Use this checklist when you need true in-card submit behavior.
 - Start negotiation CLI: `python scripts/feishu_bot_api.py start-negotiation --title "项目同步" --requester-open-id "ou_xxx" --duration-minutes 30 --attendee-open-id "ou_a" --attendee-open-id "ou_b" --candidate-slot "2026-04-24 15:40" --candidate-slot "2026-04-24 16:40"`
 - Submit response CLI: `python scripts/feishu_bot_api.py submit-response --state-json '{...}' --attendee-open-id "ou_a" --accepted-slot "2026-04-24 15:40"`
 - Finalize CLI: `python scripts/feishu_bot_api.py finalize-negotiation --state-json '{...}' --description "讨论项目进展"`
-- Python API: import `search_contacts(...)`, `start_negotiation(...)`, `submit_attendee_response(...)`, `finalize_negotiation_and_create_meeting(...)`, and `create_meeting(...)` from `scripts/feishu_bot_api.py`.
+
+### Calendar Management CLI (new)
+- Get event: `python scripts/feishu_bot_api.py get-event --calendar-id "cal_xxx" --event-id "evt_xxx"`
+- List attendees with RSVP: `python scripts/feishu_bot_api.py list-attendees --calendar-id "cal_xxx" --event-id "evt_xxx"`
+- Update event: `python scripts/feishu_bot_api.py update-event --calendar-id "cal_xxx" --event-id "evt_xxx" --title "New Title" --start-time "2026-04-24 16:00"`
+- Delete event: `python scripts/feishu_bot_api.py delete-event --calendar-id "cal_xxx" --event-id "evt_xxx"`
+- Reply (RSVP): `python scripts/feishu_bot_api.py reply-event --calendar-id "cal_xxx" --event-id "evt_xxx" --rsvp-status accept`
+- Check freebusy: `python scripts/feishu_bot_api.py check-freebusy --user-id "ou_a" --user-id "ou_b" --time-min "2026-04-24 14:00" --time-max "2026-04-24 18:00"`
+- Send reminder: `python scripts/feishu_bot_api.py send-reminder --receive-id "ou_xxx" --message "Please confirm attendance."`
+
+### Swarm Preset
+This skill is also available as a swarm preset: `agent/config/swarm/feishu_meeting_coordinator.yaml`
+- Single agent (`meeting_coordinator`) with 5 sequential tasks
+- Task 4 (`collect-responses`) runs an internal polling loop via the agent's ReAct tools until all attendees respond
+- Variables: `meeting_title`, `attendee_queries`, `requester_open_id`, `duration_minutes`, `timezone`, `time_hint`, `description`, `location`
+
+- Python API: import `search_contacts(...)`, `start_negotiation(...)`, `submit_attendee_response(...)`, `finalize_negotiation_and_create_meeting(...)`, `create_meeting(...)`, `get_event(...)`, `list_event_attendees(...)`, `update_event(...)`, `delete_event(...)`, `reply_event(...)`, `check_freebusy(...)`, and `send_reminder(...)` from `scripts/feishu_bot_api.py`.
 
 
 ## Missing Input A2UI Contract
@@ -611,4 +627,225 @@ For meeting creation, return:
  If no matching contacts are found, report that clearly and ask for a refined name, department, or alias.
  If multiple contacts match, present the candidates and ask the user to choose.
  If the calendar operation fails, preserve the resolved attendee candidates so the user does not need to repeat them.
+
+---
+
+## DB-Backed Negotiation Lifecycle (Cron-Ready)
+
+For long-running async RSVP collection, the skill now supports **SQLite-backed negotiation state** with a clean migration path to PostgreSQL. This replaces the in-memory-only state dict with durable persistence, enabling external cron schedulers (for example Hermes cron) to poll and advance negotiations without holding an agent worker thread.
+
+### Architecture
+
+```
+┌─────────────────┐     ┌─────────────────────┐     ┌─────────────────┐
+│   User Request  │────▶│  Swarm / Agent      │────▶│  SQLite DB      │
+│   (schedule mtg)│     │  (setup phase)      │     │  (state source) │
+└─────────────────┘     └─────────────────────┘     └─────────────────┘
+                                │                           ▲
+                                │ create negotiation        │
+                                ▼                           │
+                         ┌──────────────┐                  │
+                         │  Feishu API  │◀─────────────────┘
+                         │  (create     │    cron poll reads
+                         │   event +    │    RSVP, updates DB
+                         │   invite)    │
+                         └──────────────┘
+                                ▲
+                                │
+                         ┌──────────────┐
+                         │  Cron Job    │  every 10m:
+                         │  (Hermes or  │  check RSVP → remind
+                         │   external)  │  → reschedule → finalize
+                         └──────────────┘
+```
+
+### State Machine
+
+```
+draft ──▶ awaiting_rsvp ──▶ ready_to_finalize ──▶ finalized
+              │
+              ▼
+        rescheduling ──▶ awaiting_rsvp (next round)
+              │
+              ▼
+            failed (deadline / max rounds)
+```
+
+| Status | Meaning | Next Action |
+|--------|---------|-------------|
+| `draft` | Negotiation record created, no round sent yet | Add first round + create Feishu event |
+| `awaiting_rsvp` | Waiting for attendees to respond | Poll: check Feishu RSVP, remind pending |
+| `rescheduling` | Someone declined, need new slot | Agent proposes next slot, add round, reset RSVP |
+| `ready_to_finalize` | All attendees accepted current slot | Agent calls `create-meeting` or `finalize-negotiation` |
+| `finalized` | Meeting created, event_id stored | Terminal state |
+| `failed` | Deadline passed or max rounds exhausted | Terminal state, notify requester |
+| `cancelled` | User cancelled | Terminal state |
+
+### Files
+
+- `scripts/feishu_bot_api.py` — main CLI (already materialized)
+- `scripts/meeting_store.py` — SQLite persistence layer (must be materialized alongside)
+
+Both files live in the same `scripts/` directory. When invoking DB commands, reference **both** absolute paths in your terminal command so the wrapper materializes both into the sandbox.
+
+### DB CLI Commands
+
+```bash
+# Initialize the database (creates tables + indexes)
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py init-db
+
+# Create a negotiation record
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  create-negotiation-db \
+  --title "项目汇报会" \
+  --requester-open-id "ou_requester_001" \
+  --duration-minutes 30 \
+  --deadline-at "2026-04-28T18:00:00+08:00" \
+  --chat-id "oc_target_chat_001" \
+  --attendees-json '[{"open_id":"ou_a","name":"Alex"},{"open_id":"ou_b","name":"Bob"}]'
+
+# Add a proposed time round
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  add-round \
+  --negotiation-id "<neg_id>" \
+  --start-time "2026-04-28T15:00:00+08:00" \
+  --end-time "2026-04-28T15:30:00+08:00" \
+  --event-id "<feishu_event_id>"
+
+# Record an attendee response (from chat or Feishu callback)
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  record-response \
+  --negotiation-id "<neg_id>" \
+  --attendee-open-id "ou_a" \
+  --rsvp-status accept
+
+# Poll a single negotiation (state machine transition)
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  poll-negotiation \
+  --negotiation-id "<neg_id>"
+
+# Dry-run poll (report only, no side effects)
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  poll-negotiation \
+  --negotiation-id "<neg_id>" \
+  --dry-run
+
+# List all active negotiations (for cron discovery)
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  list-active-negotiations
+
+# Get full negotiation details
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  get-negotiation-db \
+  --negotiation-id "<neg_id>"
+```
+
+### Schema (SQLite, PG-Compatible)
+
+| Table | Purpose | PG Migration |
+|-------|---------|--------------|
+| `negotiations` | Core negotiation lifecycle | `TEXT` → `TIMESTAMPTZ`, `JSON` → `JSONB` |
+| `negotiation_rounds` | Each proposed slot round | `AUTOINCREMENT` → `SERIAL` |
+| `attendee_responses` | Per-attendee RSVP per round | Add `ON DELETE CASCADE` FK |
+| `poll_logs` | Audit trail of every cron check | `JSON` → `JSONB` |
+
+All SQL uses standard `?` placeholders (swap to `%s` for psycopg). No SQLite-only extensions (FTS, STRICT, etc.) are used.
+
+### Hermes Jobs UI Integration
+
+The polling job is a **first-class Hermes cron job** and appears in the existing Jobs screen at `hermes-workspace/src/screens/jobs/jobs-screen.tsx`. Users can pause, resume, trigger manually, view run history, and delete the job from that UI.
+
+### Creating the Poll Job
+
+The agent can create the Hermes cron job programmatically:
+
+```bash
+python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+  create-hermes-job \
+  --negotiation-id "<neg_id>" \
+  --title "项目汇报会" \
+  --schedule "every 10m" \
+  --deliver "origin"
+```
+
+This tries to import Hermes `cron.jobs.create_job` directly. If Hermes modules are not in the sandbox path, it returns a `fallback_payload` that can be POSTed to `/api/hermes-jobs`:
+
+```bash
+curl -X POST /api/hermes-jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Meeting Poll: 项目汇报会",
+    "schedule": "every 10m",
+    "prompt": "You are the Feishu Meeting Negotiation Poller...",
+    "skills": ["feishu-bot-meeting-coordinator"],
+    "deliver": ["origin"]
+  }'
+```
+
+### Cron Prompt Template
+
+The `create-hermes-job` command auto-generates this prompt:
+
+```
+You are the Feishu Meeting Negotiation Poller.
+
+Your job:
+1. Run: python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py \
+      poll-negotiation --negotiation-id <neg_id> [--db-path <path>]
+2. Read the JSON result.
+3. If action is "ready_to_finalize", create the final meeting using the agreed
+   slot from the current round, then update the negotiation to "finalized".
+4. If action is "rescheduling", notify the requester that a new slot is needed.
+5. If action is "failed", notify the requester that negotiation failed.
+6. If action is "reminded", "checked", or "no_action", reply with [SILENT].
+
+Rules:
+- Always use the DB as the source of truth.
+- Do NOT create duplicate events.
+- When sending reminders, personalize with the meeting title.
+- If the negotiation is already finalized or failed, reply with [SILENT].
+```
+
+### Setup Flow (Agent + Hermes Cron Hybrid)
+
+1. **Agent handles setup** (synchronous, one-shot):
+   - Resolve attendees via `search-contacts` / `search-chats`
+   - Call `create-negotiation-db` to persist the negotiation
+   - Call `create-meeting` with the first proposed slot
+   - Call `add-round` with the returned `event_id`
+   - Call `create-hermes-job` to register the polling cron job
+   - The job now appears in the Jobs UI (`jobs-screen.tsx`)
+
+2. **Hermes Cron handles polling** (async, repeating):
+   - Every 10 minutes, the job wakes up and runs the poller prompt
+   - The poller calls `poll-negotiation`, which syncs Feishu RSVP and advances state
+   - On `ready_to_finalize`, the poller creates the final meeting
+   - On `rescheduling`, the poller notifies the requester
+   - On `failed`, the poller notifies the requester
+   - Run history and output appear in the Jobs UI
+
+3. **User controls via Jobs UI**:
+   - Pause the job if the meeting is no longer needed
+   - Trigger the job manually to force an immediate poll
+   - View run history and output logs
+   - Delete the job when the negotiation is complete
+
+4. **User interruptions** (optional):
+   - User can reply in chat with "I accept" or "I decline"
+   - A webhook or agent turn calls `record-response` to update the DB
+   - Next cron tick picks up the new state
+
+### PostgreSQL Migration Notes
+
+To migrate from SQLite to PostgreSQL:
+
+1. **Driver swap**: Replace `sqlite3` with `psycopg` (or `asyncpg`).
+2. **Placeholders**: Change all `?` to `%s` in SQL strings.
+3. **Timestamps**: Change `TEXT` columns holding ISO timestamps to `TIMESTAMPTZ`.
+4. **JSON**: Change `TEXT` JSON columns to `JSONB` and use PG native JSON operators.
+5. **Auto-increment**: Replace `INTEGER PRIMARY KEY AUTOINCREMENT` with `SERIAL PRIMARY KEY` or `GENERATED ALWAYS AS IDENTITY`.
+6. **Connection**: Replace `sqlite3.connect()` with `psycopg.connect()` pool.
+7. **Pragmas**: Remove `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON`.
+
+The `MeetingStore` class interface (`create_negotiation`, `get_negotiation`, `update_negotiation`, `list_active_negotiations`, `add_round`, `upsert_attendee_response`, `get_attendee_responses`, `get_pending_attendees`, `log_poll`) should remain unchanged; only the internal `_connect()` and SQL placeholder logic needs swapping.
  If backend Feishu bot/API capability is unavailable in the current runtime, state that explicitly and ask the user whether to continue later after backend recovery or switch to a manual scheduling fallback.

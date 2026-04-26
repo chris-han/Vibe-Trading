@@ -279,7 +279,7 @@ cd ../agent && python cli.py serve --port 8899
 # Terminal 2: Frontend dev server
 cd ../frontend && bun install && bun run dev
 
-cd /home/chris/repo/Vibe-Trading/frontend
+cd /home/chris/repo/semantier/frontend
 bun run dev
 ```
 
@@ -689,7 +689,7 @@ uv run python cli.py serve --port 8899
 For live frontend changes, you can use a single shell command that starts both processes and keeps the current port split:
 
 ```bash
-cd /home/chris/repo/Vibe-Trading && \
+cd /home/chris/repo/semantier && \
   (cd agent && ./.venv/bin/python api_server.py --port 8899) & \
   (cd frontend && bun install && bun run dev)
 ```

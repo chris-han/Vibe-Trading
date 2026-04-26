@@ -39,9 +39,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -53,11 +54,19 @@ from lark_oapi.api.calendar.v4 import (
     CreateCalendarEventAttendeeRequestBodyBuilder,
     CreateCalendarEventAttendeeRequestBuilder,
     CreateCalendarEventRequestBuilder,
+    DeleteCalendarEventRequestBuilder,
     EventLocationBuilder,
     EventOrganizerBuilder,
+    GetCalendarEventRequestBuilder,
+    ListCalendarEventAttendeeRequestBuilder,
+    ListFreebusyRequestBuilder,
+    ListFreebusyRequestBodyBuilder,
+    PatchCalendarEventRequestBuilder,
     PrimaryCalendarRequestBuilder,
     PrimarysCalendarRequestBuilder,
     PrimarysCalendarRequestBodyBuilder,
+    ReplyCalendarEventRequestBuilder,
+    ReplyCalendarEventRequestBodyBuilder,
     TimeInfoBuilder,
     VchatBuilder,
 )
@@ -73,6 +82,50 @@ from lark_oapi.api.im.v1 import (
     ListChatRequestBuilder,
 )
 from lark_oapi.core.exception import ObtainAccessTokenException
+
+# meeting_store.py may be materialized alongside us; try a sibling import first.
+_meeting_store = None
+try:
+    import importlib.util
+
+    _meeting_store_path = Path(__file__).resolve().parent / "meeting_store.py"
+    if _meeting_store_path.exists():
+        _spec = importlib.util.spec_from_file_location("meeting_store", str(_meeting_store_path))
+        if _spec and _spec.loader:
+            _meeting_store = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_meeting_store)
+except Exception:
+    _meeting_store = None
+
+# Hermes cron may be available in the same repo; discover it by traversing upward.
+_hermes_cron = None
+
+
+def _try_load_hermes_cron():
+    global _hermes_cron
+    if _hermes_cron is not None:
+        return _hermes_cron
+    try:
+        import importlib.util
+
+        script_path = Path(__file__).resolve()
+        for parent in script_path.parents:
+            candidate = parent / "hermes-agent" / "cron" / "jobs.py"
+            if candidate.exists():
+                spec = importlib.util.spec_from_file_location("hermes_cron_jobs", str(candidate))
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    # Hermes cron depends on hermes_constants; ensure hermes-agent is on path
+                    hermes_root = candidate.parents[1]
+                    if str(hermes_root) not in sys.path:
+                        sys.path.insert(0, str(hermes_root))
+                    spec.loader.exec_module(mod)
+                    _hermes_cron = mod
+                    return mod
+    except Exception:
+        pass
+    return None
+
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_ORGANIZER_IDENTITY = "semantier"
@@ -852,6 +905,308 @@ def finalize_negotiation_and_create_meeting(
     }
 
 
+def _poll_negotiation_db(
+    negotiation_id: str,
+    *,
+    db_path: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Poll a single negotiation, sync RSVP from Feishu, and advance state machine.
+
+    State machine:
+        draft → awaiting_rsvp → ready_to_finalize → finalized
+                        ↓
+                    rescheduling → awaiting_rsvp
+                        ↓
+                    failed (timeout / max rounds exceeded)
+    """
+    if _meeting_store is None:
+        raise FeishuSkillError("meeting_store.py is not available")
+
+    store = _meeting_store.get_store(db_path=db_path)
+    neg = store.get_negotiation(negotiation_id)
+    if neg is None:
+        raise FeishuSkillError(f"negotiation not found: {negotiation_id}")
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    # If deadline passed, fail immediately
+    if neg.deadline_at and datetime.fromisoformat(neg.deadline_at) < now:
+        if not dry_run:
+            store.update_negotiation(negotiation_id, status="failed", failure_reason="deadline_reached")
+            store.log_poll(negotiation_id, action_taken="failed", details="Deadline reached")
+        return {
+            "negotiation_id": negotiation_id,
+            "action": "failed",
+            "reason": "deadline_reached",
+            "dry_run": dry_run,
+        }
+
+    # If already finalized/failed/cancelled, nothing to do
+    if neg.status in ("finalized", "failed", "cancelled"):
+        return {
+            "negotiation_id": negotiation_id,
+            "action": "no_action",
+            "reason": f"status is {neg.status}",
+            "dry_run": dry_run,
+        }
+
+    # Get current round
+    rounds = store.get_rounds(negotiation_id)
+    if not rounds:
+        return {
+            "negotiation_id": negotiation_id,
+            "action": "no_action",
+            "reason": "no_rounds_defined",
+            "dry_run": dry_run,
+        }
+
+    current_round = rounds[-1]
+
+    # Sync RSVP from Feishu if we have an event_id
+    feishu_synced: list[dict[str, Any]] = []
+    if current_round.event_id and neg.calendar_id:
+        try:
+            attendees_api = list_event_attendees(
+                calendar_id=neg.calendar_id,
+                event_id=current_round.event_id,
+            )
+            for att in attendees_api.get("attendees", []):
+                open_id = att.get("attendee_open_id") or att.get("user_id")
+                rsvp = att.get("rsvp_status", "pending")
+                if open_id:
+                    if not dry_run:
+                        store.upsert_attendee_response(
+                            negotiation_id=negotiation_id,
+                            attendee_open_id=open_id,
+                            round_id=current_round.id,
+                            rsvp_status=rsvp,
+                            feishu_rsvp_status=rsvp,
+                            responded_at=now_iso,
+                        )
+                    feishu_synced.append({"open_id": open_id, "rsvp_status": rsvp})
+        except FeishuSkillError:
+            # Event may have been deleted; continue with DB state
+            pass
+
+    # Evaluate responses for current round
+    responses = store.get_attendee_responses(negotiation_id, round_id=current_round.id)
+    pending = [r for r in responses if r.rsvp_status == "pending"]
+    declined = [r for r in responses if r.rsvp_status == "decline"]
+    accepted = [r for r in responses if r.rsvp_status == "accept"]
+
+    attendee_snapshot = {
+        "total": len(responses),
+        "pending": len(pending),
+        "accepted": len(accepted),
+        "declined": len(declined),
+        "tentative": len([r for r in responses if r.rsvp_status == "tentative"]),
+        "feishu_synced": feishu_synced,
+    }
+
+    # Case 1: Everyone accepted → ready to finalize
+    if len(accepted) == len(responses) and len(responses) > 0:
+        if not dry_run:
+            store.update_negotiation(negotiation_id, status="ready_to_finalize")
+            store.update_round_status(current_round.id, status="accepted")
+            store.log_poll(
+                negotiation_id,
+                action_taken="finalized",
+                round_id=current_round.id,
+                attendee_snapshot=attendee_snapshot,
+                details="All attendees accepted",
+            )
+        return {
+            "negotiation_id": negotiation_id,
+            "action": "ready_to_finalize",
+            "round": current_round.round_number,
+            "attendee_snapshot": attendee_snapshot,
+            "dry_run": dry_run,
+        }
+
+    # Case 2: Someone declined and we're at max rounds → fail
+    if declined and neg.current_round >= neg.max_rounds:
+        if not dry_run:
+            store.update_negotiation(
+                negotiation_id,
+                status="failed",
+                failure_reason=f"Attendee(s) declined in final round {neg.current_round}",
+            )
+            store.log_poll(
+                negotiation_id,
+                action_taken="failed",
+                round_id=current_round.id,
+                attendee_snapshot=attendee_snapshot,
+                details=f"Declined by {[r.attendee_open_id for r in declined]} at final round",
+            )
+        return {
+            "negotiation_id": negotiation_id,
+            "action": "failed",
+            "reason": "declined_in_final_round",
+            "declined_by": [r.attendee_open_id for r in declined],
+            "dry_run": dry_run,
+        }
+
+    # Case 3: Someone declined but we have more rounds → mark for rescheduling
+    if declined and neg.current_round < neg.max_rounds:
+        if not dry_run:
+            store.update_negotiation(negotiation_id, status="rescheduling")
+            store.update_round_status(current_round.id, status="rejected")
+            store.log_poll(
+                negotiation_id,
+                action_taken="rescheduled",
+                round_id=current_round.id,
+                attendee_snapshot=attendee_snapshot,
+                details=f"Declined by {[r.attendee_open_id for r in declined]}; moving to round {neg.current_round + 1}",
+            )
+        return {
+            "negotiation_id": negotiation_id,
+            "action": "rescheduling",
+            "reason": "attendee_declined",
+            "declined_by": [r.attendee_open_id for r in declined],
+            "next_round": neg.current_round + 1,
+            "dry_run": dry_run,
+        }
+
+    # Case 4: Still pending → send reminders if appropriate
+    if pending:
+        # Only remind if we haven't reminded too recently (simple heuristic: every 3 polls)
+        poll_logs = store.get_poll_logs(negotiation_id, limit=10)
+        recent_reminders = sum(1 for p in poll_logs if p["action_taken"] == "reminded")
+        action = "reminded" if recent_reminders < 3 else "checked"
+        if not dry_run:
+            # Send reminder to pending attendees
+            for r in pending:
+                if neg.chat_id and r.attendee_open_id:
+                    try:
+                        send_reminder(
+                            receive_id=r.attendee_open_id,
+                            message=f"Reminder: Please RSVP for '{neg.title}' (round {current_round.round_number}).",
+                        )
+                    except FeishuSkillError:
+                        pass
+            store.log_poll(
+                negotiation_id,
+                action_taken=action,
+                round_id=current_round.id,
+                attendee_snapshot=attendee_snapshot,
+                details=f"Pending attendees: {[r.attendee_open_id for r in pending]}",
+            )
+        return {
+            "negotiation_id": negotiation_id,
+            "action": action,
+            "pending_count": len(pending),
+            "pending_attendees": [r.attendee_open_id for r in pending],
+            "dry_run": dry_run,
+        }
+
+    # Fallback: no action needed
+    if not dry_run:
+        store.log_poll(
+            negotiation_id,
+            action_taken="no_action",
+            round_id=current_round.id,
+            attendee_snapshot=attendee_snapshot,
+            details="No pending or declined attendees",
+        )
+    return {
+        "negotiation_id": negotiation_id,
+        "action": "no_action",
+        "attendee_snapshot": attendee_snapshot,
+        "dry_run": dry_run,
+    }
+
+
+def _build_poll_job_prompt(negotiation_id: str, db_path: str | None = None) -> str:
+    """Build the Hermes cron prompt for polling a negotiation."""
+    return (
+        f"You are the Feishu Meeting Negotiation Poller.\n\n"
+        f"Your job:\n"
+        f"1. Run: python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py "
+        f"poll-negotiation --negotiation-id {negotiation_id}"
+        f"{f' --db-path {db_path}' if db_path else ''}\n"
+        f"2. Read the JSON result.\n"
+        f"3. If action is 'ready_to_finalize', create the final meeting by running:\n"
+        f"   python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py "
+        f"get-negotiation-db --negotiation-id {negotiation_id}"
+        f"{f' --db-path {db_path}' if db_path else ''}\n"
+        f"   Then use the agreed slot to call create-meeting with the negotiation title, "
+        f"   round start/end times, and all attendees.\n"
+        f"   After creation, update the negotiation status to 'finalized' using record-response\n"
+        f"   or direct DB update (not implemented yet; log completion instead).\n"
+        f"4. If action is 'rescheduling', notify the requester that a new slot is needed.\n"
+        f"5. If action is 'failed', notify the requester that negotiation failed.\n"
+        f"6. If action is 'reminded' or 'checked' or 'no_action', reply with [SILENT].\n\n"
+        f"Rules:\n"
+        f"- Always use the DB as the source of truth.\n"
+        f"- Do NOT create duplicate events.\n"
+        f"- When sending reminders, personalize with the meeting title.\n"
+        f"- If the negotiation is already finalized or failed, reply with [SILENT]."
+    )
+
+
+def _create_hermes_poll_job(
+    negotiation_id: str,
+    *,
+    title: str,
+    schedule: str = "every 10m",
+    db_path: str | None = None,
+    deliver: str = "origin",
+) -> dict[str, Any]:
+    """Create a Hermes cron job for polling a negotiation.
+
+    Tries to import Hermes cron modules directly. If unavailable, returns
+    a structured payload that can be POSTed to /api/hermes-jobs.
+    """
+    prompt = _build_poll_job_prompt(negotiation_id, db_path)
+    job_name = f"Meeting Poll: {title}"
+
+    hermes_mod = _try_load_hermes_cron()
+    if hermes_mod is not None:
+        try:
+            create_job = hermes_mod.create_job
+            job = create_job(
+                prompt=prompt,
+                schedule=schedule,
+                name=job_name,
+                deliver=deliver,
+                skills=["feishu-bot-meeting-coordinator"],
+            )
+            return {
+                "created_via": "hermes_direct",
+                "job_id": job.get("id"),
+                "job_name": job_name,
+                "schedule": schedule,
+                "negotiation_id": negotiation_id,
+            }
+        except Exception as exc:
+            return {
+                "created_via": "hermes_direct_failed",
+                "error": str(exc),
+                "fallback_payload": {
+                    "name": job_name,
+                    "schedule": schedule,
+                    "prompt": prompt,
+                    "deliver": [deliver],
+                    "skills": ["feishu-bot-meeting-coordinator"],
+                },
+            }
+
+    # Fallback: return payload for manual/API creation
+    return {
+        "created_via": "fallback_payload",
+        "note": "Hermes cron module not found. Use the fallback_payload to create the job via POST /api/hermes-jobs",
+        "fallback_payload": {
+            "name": job_name,
+            "schedule": schedule,
+            "prompt": prompt,
+            "deliver": [deliver],
+            "skills": ["feishu-bot-meeting-coordinator"],
+        },
+    }
+
+
 def _resolve_meeting_attendees(attendees: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     attendee_results: list[dict[str, Any]] = []
     resolved_attendees: list[dict[str, Any]] = []
@@ -1155,6 +1510,225 @@ def create_meeting(
     }
 
 
+# ---------------------------------------------------------------------------
+# Calendar management APIs
+# ---------------------------------------------------------------------------
+
+
+def get_event(*, calendar_id: str, event_id: str) -> dict[str, Any]:
+    """Fetch a calendar event by ID, including attendee RSVP status."""
+    client = _get_client()
+    req = (
+        GetCalendarEventRequestBuilder()
+        .calendar_id(calendar_id.strip())
+        .event_id(event_id.strip())
+        .need_attendee(True)
+        .user_id_type("open_id")
+        .build()
+    )
+    data = _unwrap(client.calendar.v4.calendar_event.get(req))
+    event = _get_attr(data, "event")
+    if event is None:
+        raise FeishuSkillError("Event not found", payload={"calendar_id": calendar_id, "event_id": event_id})
+
+    attendees: list[dict[str, Any]] = []
+    raw_attendees = _get_attr(event, "attendees") or []
+    for a in raw_attendees:
+        attendees.append(
+            {
+                "user_id": _get_attr(a, "user_id"),
+                "display_name": _get_attr(a, "display_name"),
+                "rsvp_status": _get_attr(a, "rsvp_status"),
+                "is_optional": _get_attr(a, "is_optional"),
+                "is_organizer": _get_attr(a, "is_organizer"),
+            }
+        )
+
+    vchat = _get_attr(event, "vchat")
+    return {
+        "event_id": str(_get_attr(event, "event_id") or "").strip(),
+        "summary": str(_get_attr(event, "summary") or "").strip(),
+        "description": str(_get_attr(event, "description") or "").strip(),
+        "start_time": {
+            "timestamp": str(_get_attr(_get_attr(event, "start_time"), "timestamp") or "").strip(),
+            "timezone": str(_get_attr(_get_attr(event, "start_time"), "timezone") or "").strip(),
+        },
+        "end_time": {
+            "timestamp": str(_get_attr(_get_attr(event, "end_time"), "timestamp") or "").strip(),
+            "timezone": str(_get_attr(_get_attr(event, "end_time"), "timezone") or "").strip(),
+        },
+        "status": str(_get_attr(event, "status") or "").strip(),
+        "visibility": str(_get_attr(event, "visibility") or "").strip(),
+        "attendee_ability": str(_get_attr(event, "attendee_ability") or "").strip(),
+        "attendees": attendees,
+        "join_url": str(_get_attr(vchat, "meeting_url") or _get_attr(vchat, "live_link") or "").strip() or None,
+        "calendar_id": calendar_id,
+    }
+
+
+def list_event_attendees(*, calendar_id: str, event_id: str) -> list[dict[str, Any]]:
+    """List all attendees for a calendar event with their RSVP status."""
+    client = _get_client()
+    req = (
+        ListCalendarEventAttendeeRequestBuilder()
+        .calendar_id(calendar_id.strip())
+        .event_id(event_id.strip())
+        .user_id_type("open_id")
+        .build()
+    )
+    data = _unwrap(client.calendar.v4.calendar_event_attendee.list(req))
+    items = _get_attr(data, "items") or []
+    return [
+        {
+            "attendee_id": _get_attr(item, "attendee_id"),
+            "user_id": _get_attr(item, "user_id"),
+            "display_name": _get_attr(item, "display_name"),
+            "rsvp_status": _get_attr(item, "rsvp_status"),
+            "is_optional": _get_attr(item, "is_optional"),
+            "is_organizer": _get_attr(item, "is_organizer"),
+        }
+        for item in items
+    ]
+
+
+def update_event(
+    *,
+    calendar_id: str,
+    event_id: str,
+    title: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    timezone: str = DEFAULT_TIMEZONE,
+    description: str | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    """Patch an existing calendar event. Only supplied fields are updated."""
+    body_builder = CalendarEventBuilder()
+    if title is not None:
+        body_builder = body_builder.summary(title)
+    if description is not None:
+        body_builder = body_builder.description(description)
+    if location is not None:
+        body_builder = body_builder.location(EventLocationBuilder().name(location).build())
+    if start_time is not None:
+        start_dt = _parse_time(start_time, timezone)
+        body_builder = body_builder.start_time(
+            TimeInfoBuilder().timestamp(str(int(start_dt.timestamp()))).timezone(timezone).build()
+        )
+    if end_time is not None:
+        end_dt = _parse_time(end_time, timezone)
+        body_builder = body_builder.end_time(
+            TimeInfoBuilder().timestamp(str(int(end_dt.timestamp()))).timezone(timezone).build()
+        )
+
+    req = (
+        PatchCalendarEventRequestBuilder()
+        .calendar_id(calendar_id.strip())
+        .event_id(event_id.strip())
+        .user_id_type("open_id")
+        .request_body(body_builder.build())
+        .build()
+    )
+    client = _get_client()
+    data = _unwrap(client.calendar.v4.calendar_event.patch(req))
+    event = _get_attr(data, "event")
+    if event is None:
+        raise FeishuSkillError("Event update response did not include event", payload={})
+    return {
+        "event_id": str(_get_attr(event, "event_id") or "").strip(),
+        "calendar_id": calendar_id,
+    }
+
+
+def delete_event(*, calendar_id: str, event_id: str, need_notification: bool = True) -> dict[str, Any]:
+    """Delete/cancel a calendar event."""
+    client = _get_client()
+    req = (
+        DeleteCalendarEventRequestBuilder()
+        .calendar_id(calendar_id.strip())
+        .event_id(event_id.strip())
+        .need_notification(need_notification)
+        .build()
+    )
+    _unwrap(client.calendar.v4.calendar_event.delete(req))
+    return {"event_id": event_id, "calendar_id": calendar_id, "deleted": True}
+
+
+def reply_event(*, calendar_id: str, event_id: str, rsvp_status: str) -> dict[str, Any]:
+    """Reply to a calendar event invitation (accept/decline/tentative)."""
+    valid = {"accept", "decline", "tentative"}
+    if rsvp_status not in valid:
+        raise FeishuSkillError(f"rsvp_status must be one of {valid}", payload={})
+    body = ReplyCalendarEventRequestBodyBuilder().rsvp_status(rsvp_status).build()
+    req = (
+        ReplyCalendarEventRequestBuilder()
+        .calendar_id(calendar_id.strip())
+        .event_id(event_id.strip())
+        .request_body(body)
+        .build()
+    )
+    client = _get_client()
+    _unwrap(client.calendar.v4.calendar_event.reply(req))
+    return {"event_id": event_id, "calendar_id": calendar_id, "rsvp_status": rsvp_status}
+
+
+def check_freebusy(
+    *,
+    user_ids: list[str],
+    time_min: str,
+    time_max: str,
+    timezone: str = DEFAULT_TIMEZONE,
+) -> list[dict[str, Any]]:
+    """Check busy/free status for a list of users within a time range.
+
+    time_min / time_max should be ISO-8601 datetime strings or Feishu timestamp strings.
+    """
+    client = _get_client()
+    body = (
+        ListFreebusyRequestBodyBuilder()
+        .user_id(user_ids)
+        .time_min(str(int(_parse_time(time_min, timezone).timestamp())))
+        .time_max(str(int(_parse_time(time_max, timezone).timestamp())))
+        .build()
+    )
+    req = ListFreebusyRequestBuilder().request_body(body).user_id_type("open_id").build()
+    data = _unwrap(client.calendar.v4.freebusy.list(req))
+    items = _get_attr(data, "items") or []
+    return [
+        {
+            "user_id": _get_attr(item, "user_id"),
+            "start_time": str(_get_attr(_get_attr(item, "start_time"), "timestamp") or "").strip(),
+            "end_time": str(_get_attr(_get_attr(item, "end_time"), "timestamp") or "").strip(),
+            "busy": bool(_get_attr(item, "busy") or False),
+        }
+        for item in items
+    ]
+
+
+def send_reminder(*, receive_id: str, message: str, receive_id_type: str = "open_id") -> dict[str, Any]:
+    """Send a Feishu IM message (text) to a user or chat."""
+    client = _get_client()
+    content = json.dumps({"text": message}, ensure_ascii=False)
+    body = (
+        CreateMessageRequestBodyBuilder()
+        .receive_id(receive_id)
+        .content(content)
+        .msg_type("text")
+        .build()
+    )
+    req = (
+        CreateMessageRequestBuilder()
+        .receive_id_type(receive_id_type)
+        .request_body(body)
+        .build()
+    )
+    data = _unwrap(client.im.v1.message.create(req))
+    return {
+        "message_id": str(_get_attr(data, "message_id") or "").strip(),
+        "receive_id": receive_id,
+    }
+
+
 def _build_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Feishu bot meeting helper for the feishu-bot-meeting-coordinator skill")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1208,6 +1782,97 @@ def _build_cli() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--state-json", required=True)
     finalize_parser.add_argument("--description")
     finalize_parser.add_argument("--location")
+
+    # Calendar management commands
+    get_event_parser = subparsers.add_parser("get-event")
+    get_event_parser.add_argument("--calendar-id", required=True)
+    get_event_parser.add_argument("--event-id", required=True)
+
+    list_attendees_parser = subparsers.add_parser("list-attendees")
+    list_attendees_parser.add_argument("--calendar-id", required=True)
+    list_attendees_parser.add_argument("--event-id", required=True)
+
+    update_event_parser = subparsers.add_parser("update-event")
+    update_event_parser.add_argument("--calendar-id", required=True)
+    update_event_parser.add_argument("--event-id", required=True)
+    update_event_parser.add_argument("--title")
+    update_event_parser.add_argument("--start-time")
+    update_event_parser.add_argument("--end-time")
+    update_event_parser.add_argument("--timezone", default=DEFAULT_TIMEZONE)
+    update_event_parser.add_argument("--description")
+    update_event_parser.add_argument("--location")
+
+    delete_event_parser = subparsers.add_parser("delete-event")
+    delete_event_parser.add_argument("--calendar-id", required=True)
+    delete_event_parser.add_argument("--event-id", required=True)
+    delete_event_parser.add_argument("--no-notification", action="store_true", dest="no_notification")
+
+    reply_event_parser = subparsers.add_parser("reply-event")
+    reply_event_parser.add_argument("--calendar-id", required=True)
+    reply_event_parser.add_argument("--event-id", required=True)
+    reply_event_parser.add_argument("--rsvp-status", required=True, choices=["accept", "decline", "tentative"])
+
+    freebusy_parser = subparsers.add_parser("check-freebusy")
+    freebusy_parser.add_argument("--user-id", action="append", dest="user_ids", required=True)
+    freebusy_parser.add_argument("--time-min", required=True)
+    freebusy_parser.add_argument("--time-max", required=True)
+    freebusy_parser.add_argument("--timezone", default=DEFAULT_TIMEZONE)
+
+    reminder_parser = subparsers.add_parser("send-reminder")
+    reminder_parser.add_argument("--receive-id", required=True)
+    reminder_parser.add_argument("--message", required=True)
+    reminder_parser.add_argument("--receive-id-type", default="open_id", choices=["open_id", "union_id", "user_id", "chat_id", "email"])
+
+    # -- DB-backed negotiation lifecycle commands ----------------------------
+    db_parent = argparse.ArgumentParser(add_help=False)
+    db_parent.add_argument("--db-path", default=None, help="Path to SQLite DB (default: ~/.semantier/feishu-bot-meeting-coordinator/meetings.db)")
+
+    subparsers.add_parser("init-db", parents=[db_parent])
+
+    create_neg_db_parser = subparsers.add_parser("create-negotiation-db", parents=[db_parent])
+    create_neg_db_parser.add_argument("--title", required=True)
+    create_neg_db_parser.add_argument("--requester-open-id", required=True)
+    create_neg_db_parser.add_argument("--duration-minutes", type=int, required=True)
+    create_neg_db_parser.add_argument("--description")
+    create_neg_db_parser.add_argument("--location")
+    create_neg_db_parser.add_argument("--requester-display-name")
+    create_neg_db_parser.add_argument("--timezone", default=DEFAULT_TIMEZONE)
+    create_neg_db_parser.add_argument("--max-rounds", type=int, default=3)
+    create_neg_db_parser.add_argument("--poll-interval-minutes", type=int, default=10)
+    create_neg_db_parser.add_argument("--deadline-at")
+    create_neg_db_parser.add_argument("--chat-id")
+    create_neg_db_parser.add_argument("--session-id")
+    create_neg_db_parser.add_argument("--attendees-json", help='JSON list of {"open_id":"...","name":"..."}')
+
+    get_neg_db_parser = subparsers.add_parser("get-negotiation-db", parents=[db_parent])
+    get_neg_db_parser.add_argument("--negotiation-id", required=True)
+
+    subparsers.add_parser("list-active-negotiations", parents=[db_parent])
+
+    add_round_parser = subparsers.add_parser("add-round", parents=[db_parent])
+    add_round_parser.add_argument("--negotiation-id", required=True)
+    add_round_parser.add_argument("--start-time", required=True)
+    add_round_parser.add_argument("--end-time", required=True)
+    add_round_parser.add_argument("--event-id")
+
+    record_rsp_parser = subparsers.add_parser("record-response", parents=[db_parent])
+    record_rsp_parser.add_argument("--negotiation-id", required=True)
+    record_rsp_parser.add_argument("--attendee-open-id", required=True)
+    record_rsp_parser.add_argument("--rsvp-status", required=True, choices=["pending", "accept", "decline", "tentative"])
+    record_rsp_parser.add_argument("--attendee-name")
+    record_rsp_parser.add_argument("--note")
+    record_rsp_parser.add_argument("--feishu-rsvp-status")
+
+    poll_parser = subparsers.add_parser("poll-negotiation", parents=[db_parent])
+    poll_parser.add_argument("--negotiation-id", required=True)
+    poll_parser.add_argument("--dry-run", action="store_true", help="Only report what action would be taken")
+
+    create_hermes_parser = subparsers.add_parser("create-hermes-job", parents=[db_parent])
+    create_hermes_parser.add_argument("--negotiation-id", required=True)
+    create_hermes_parser.add_argument("--title", required=True)
+    create_hermes_parser.add_argument("--schedule", default="every 10m")
+    create_hermes_parser.add_argument("--deliver", default="origin")
+
     return parser
 
 
@@ -1252,6 +1917,164 @@ def main(argv: list[str] | None = None) -> int:
                 accepted_slots=list(args.accepted_slots or []),
                 declined_slots=list(args.declined_slots or []),
                 note=args.note,
+            )
+        elif args.command == "get-event":
+            result = get_event(calendar_id=args.calendar_id, event_id=args.event_id)
+        elif args.command == "list-attendees":
+            result = list_event_attendees(calendar_id=args.calendar_id, event_id=args.event_id)
+        elif args.command == "update-event":
+            result = update_event(
+                calendar_id=args.calendar_id,
+                event_id=args.event_id,
+                title=args.title,
+                start_time=args.start_time,
+                end_time=args.end_time,
+                timezone=args.timezone,
+                description=args.description,
+                location=args.location,
+            )
+        elif args.command == "delete-event":
+            result = delete_event(
+                calendar_id=args.calendar_id,
+                event_id=args.event_id,
+                need_notification=not args.no_notification,
+            )
+        elif args.command == "reply-event":
+            result = reply_event(
+                calendar_id=args.calendar_id,
+                event_id=args.event_id,
+                rsvp_status=args.rsvp_status,
+            )
+        elif args.command == "check-freebusy":
+            result = check_freebusy(
+                user_ids=list(args.user_ids or []),
+                time_min=args.time_min,
+                time_max=args.time_max,
+                timezone=args.timezone,
+            )
+        elif args.command == "send-reminder":
+            result = send_reminder(
+                receive_id=args.receive_id,
+                message=args.message,
+                receive_id_type=args.receive_id_type,
+            )
+        # ---- DB-backed commands -------------------------------------------
+        elif args.command == "init-db":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available; ensure it is materialized alongside feishu_bot_api.py")
+            db_path = _meeting_store.init_db(db_path=args.db_path)
+            result = {"db_path": db_path, "status": "initialized"}
+        elif args.command == "create-negotiation-db":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available")
+            store = _meeting_store.get_store(db_path=args.db_path)
+            neg_id = store.create_negotiation(
+                title=args.title,
+                requester_open_id=args.requester_open_id,
+                duration_minutes=args.duration_minutes,
+                description=args.description,
+                location=args.location,
+                requester_display_name=args.requester_display_name,
+                timezone=args.timezone,
+                max_rounds=args.max_rounds,
+                poll_interval_minutes=args.poll_interval_minutes,
+                deadline_at=args.deadline_at,
+                chat_id=args.chat_id,
+                session_id=args.session_id,
+            )
+            if args.attendees_json:
+                for item in json.loads(args.attendees_json):
+                    store.upsert_attendee_response(
+                        negotiation_id=neg_id,
+                        attendee_open_id=item["open_id"],
+                        attendee_name=item.get("name"),
+                        rsvp_status="pending",
+                    )
+            result = {"negotiation_id": neg_id, "status": "created"}
+        elif args.command == "get-negotiation-db":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available")
+            store = _meeting_store.get_store(db_path=args.db_path)
+            neg = store.get_negotiation(args.negotiation_id)
+            if neg is None:
+                raise FeishuSkillError(f"negotiation not found: {args.negotiation_id}")
+            rounds = store.get_rounds(args.negotiation_id)
+            responses = store.get_attendee_responses(args.negotiation_id)
+            result = {
+                "negotiation": {
+                    **neg.__dict__,
+                    "meta": neg.meta,
+                },
+                "rounds": [r.__dict__ for r in rounds],
+                "responses": [r.__dict__ for r in responses],
+            }
+        elif args.command == "list-active-negotiations":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available")
+            store = _meeting_store.get_store(db_path=args.db_path)
+            active = store.list_active_negotiations()
+            result = {
+                "count": len(active),
+                "negotiations": [
+                    {
+                        "id": n.id,
+                        "title": n.title,
+                        "status": n.status,
+                        "current_round": n.current_round,
+                        "deadline_at": n.deadline_at,
+                        "requester_open_id": n.requester_open_id,
+                        "updated_at": n.updated_at,
+                    }
+                    for n in active
+                ],
+            }
+        elif args.command == "add-round":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available")
+            store = _meeting_store.get_store(db_path=args.db_path)
+            neg = store.get_negotiation(args.negotiation_id)
+            if neg is None:
+                raise FeishuSkillError(f"negotiation not found: {args.negotiation_id}")
+            round_id = store.add_round(
+                negotiation_id=args.negotiation_id,
+                round_number=neg.current_round,
+                proposed_start_time=args.start_time,
+                proposed_end_time=args.end_time,
+                event_id=args.event_id,
+            )
+            store.update_negotiation(
+                args.negotiation_id,
+                status="awaiting_rsvp",
+            )
+            result = {"round_id": round_id, "round_number": neg.current_round}
+        elif args.command == "record-response":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available")
+            store = _meeting_store.get_store(db_path=args.db_path)
+            store.upsert_attendee_response(
+                negotiation_id=args.negotiation_id,
+                attendee_open_id=args.attendee_open_id,
+                rsvp_status=args.rsvp_status,
+                attendee_name=args.attendee_name,
+                note=args.note,
+                feishu_rsvp_status=args.feishu_rsvp_status,
+            )
+            result = {"status": "recorded"}
+        elif args.command == "poll-negotiation":
+            if _meeting_store is None:
+                raise FeishuSkillError("meeting_store.py is not available")
+            result = _poll_negotiation_db(
+                negotiation_id=args.negotiation_id,
+                db_path=args.db_path,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "create-hermes-job":
+            result = _create_hermes_poll_job(
+                negotiation_id=args.negotiation_id,
+                title=args.title,
+                schedule=args.schedule,
+                db_path=args.db_path,
+                deliver=args.deliver,
             )
         else:
             state_payload = json.loads(args.state_json)

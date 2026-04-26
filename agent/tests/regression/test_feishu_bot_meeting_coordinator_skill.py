@@ -628,3 +628,522 @@ def test_finalize_negotiation_creates_meeting_and_sends_invitations(monkeypatch)
     assert result["meeting_owner_open_id"] == "ou_requester"
     assert result["primary_meeting"]["calendar_id"] == "cal_ou_requester"
     assert len(result["meetings"]) == 1
+
+
+def test_get_event_fetches_event_and_attendees(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_event = SimpleNamespace(
+        event_id="evt_123",
+        summary="Test Meeting",
+        description="desc",
+        start_time=SimpleNamespace(timestamp="1234567890", timezone="Asia/Shanghai"),
+        end_time=SimpleNamespace(timestamp="1234569690", timezone="Asia/Shanghai"),
+        status="confirmed",
+        visibility="default",
+        attendee_ability="can_see_others",
+        attendees=[
+            SimpleNamespace(user_id="ou_a", display_name="A", rsvp_status="accept", is_optional=False, is_organizer=False),
+            SimpleNamespace(user_id="ou_b", display_name="B", rsvp_status="decline", is_optional=False, is_organizer=False),
+        ],
+        vchat=SimpleNamespace(meeting_url="https://vc.example.com/123"),
+    )
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = SimpleNamespace(event=mock_event)
+
+    mock_client = MagicMock()
+    mock_client.calendar.v4.calendar_event.get.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.get_event(calendar_id="cal_test", event_id="evt_123")
+    assert result["event_id"] == "evt_123"
+    assert result["summary"] == "Test Meeting"
+    assert len(result["attendees"]) == 2
+    assert result["attendees"][0]["rsvp_status"] == "accept"
+    assert result["attendees"][1]["rsvp_status"] == "decline"
+    assert result["join_url"] == "https://vc.example.com/123"
+
+
+def test_list_event_attendees_returns_rsvp_status(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_data = SimpleNamespace(
+        items=[
+            SimpleNamespace(attendee_id="att_1", user_id="ou_a", display_name="A", rsvp_status="accept", is_optional=False, is_organizer=False),
+            SimpleNamespace(attendee_id="att_2", user_id="ou_b", display_name="B", rsvp_status="tentative", is_optional=True, is_organizer=False),
+        ]
+    )
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = mock_data
+
+    mock_client = MagicMock()
+    mock_client.calendar.v4.calendar_event_attendee.list.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.list_event_attendees(calendar_id="cal_test", event_id="evt_123")
+    assert len(result) == 2
+    assert result[0]["user_id"] == "ou_a"
+    assert result[0]["rsvp_status"] == "accept"
+    assert result[1]["is_optional"] is True
+
+
+def test_update_event_patches_supplied_fields(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_event = SimpleNamespace(event_id="evt_123")
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = SimpleNamespace(event=mock_event)
+
+    mock_client = MagicMock()
+    mock_client.calendar.v4.calendar_event.patch.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.update_event(
+        calendar_id="cal_test",
+        event_id="evt_123",
+        title="Updated Title",
+        start_time="2026-04-24 16:00",
+        end_time="2026-04-24 16:30",
+        timezone="Asia/Shanghai",
+    )
+    assert result["event_id"] == "evt_123"
+    assert result["calendar_id"] == "cal_test"
+
+
+def test_delete_event_returns_deleted_flag(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = SimpleNamespace()
+
+    mock_client = MagicMock()
+    mock_client.calendar.v4.calendar_event.delete.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.delete_event(calendar_id="cal_test", event_id="evt_123")
+    assert result["deleted"] is True
+    assert result["event_id"] == "evt_123"
+
+
+def test_reply_event_updates_rsvp(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = SimpleNamespace()
+
+    mock_client = MagicMock()
+    mock_client.calendar.v4.calendar_event.reply.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.reply_event(calendar_id="cal_test", event_id="evt_123", rsvp_status="accept")
+    assert result["rsvp_status"] == "accept"
+
+
+def test_check_freebusy_returns_busy_status(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_data = SimpleNamespace(
+        items=[
+            SimpleNamespace(user_id="ou_a", start_time=SimpleNamespace(timestamp="1234567890"), end_time=SimpleNamespace(timestamp="1234569690"), busy=True),
+            SimpleNamespace(user_id="ou_b", start_time=SimpleNamespace(timestamp="1234567890"), end_time=SimpleNamespace(timestamp="1234569690"), busy=False),
+        ]
+    )
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = mock_data
+
+    mock_client = MagicMock()
+    mock_client.calendar.v4.freebusy.list.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.check_freebusy(
+        user_ids=["ou_a", "ou_b"],
+        time_min="2026-04-24 15:00",
+        time_max="2026-04-24 17:00",
+        timezone="Asia/Shanghai",
+    )
+    assert len(result) == 2
+    assert result[0]["user_id"] == "ou_a"
+    assert result[0]["busy"] is True
+    assert result[1]["busy"] is False
+
+
+def test_send_reminder_sends_im_message(monkeypatch):
+    helper = _load_helper_module()
+
+    mock_data = SimpleNamespace(message_id="om_123")
+    mock_resp = MagicMock()
+    mock_resp.success.return_value = True
+    mock_resp.data = mock_data
+
+    mock_client = MagicMock()
+    mock_client.im.v1.message.create.return_value = mock_resp
+    monkeypatch.setattr(helper, "_get_client", lambda: mock_client)
+
+    result = helper.send_reminder(receive_id="ou_a", message="Please confirm attendance.")
+    assert result["message_id"] == "om_123"
+    assert result["receive_id"] == "ou_a"
+
+
+# ---------------------------------------------------------------------------
+# MeetingStore (SQLite persistence) tests
+# ---------------------------------------------------------------------------
+
+MEETING_STORE_FILE = SKILL_DIR / "scripts" / "meeting_store.py"
+
+
+def _load_meeting_store_module():
+    spec = importlib.util.spec_from_file_location("meeting_store", MEETING_STORE_FILE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fresh_store(tmp_path: Path):
+    module = _load_meeting_store_module()
+    db_path = tmp_path / "test_meetings.db"
+    return module.MeetingStore(db_path=db_path)
+
+
+@pytest.fixture
+def store(tmp_path):
+    return _fresh_store(tmp_path)
+
+
+def test_store_creates_tables_on_init(tmp_path):
+    db_path = tmp_path / "test.db"
+    store = _load_meeting_store_module().MeetingStore(db_path=db_path)
+    assert db_path.exists()
+    # Verify a known table exists
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='negotiations'"
+        ).fetchone()
+    assert row is not None
+
+
+def test_create_and_get_negotiation(store):
+    neg_id = store.create_negotiation(
+        title="Test Meeting",
+        requester_open_id="ou_req",
+        duration_minutes=30,
+        description="desc",
+        location="Room A",
+        timezone="Asia/Tokyo",
+        max_rounds=5,
+        poll_interval_minutes=15,
+        deadline_at="2026-04-28T18:00:00+09:00",
+        chat_id="oc_chat",
+        session_id="sess_001",
+        meta={"source": "test"},
+    )
+    assert len(neg_id) == 32  # hex uuid
+
+    neg = store.get_negotiation(neg_id)
+    assert neg is not None
+    assert neg.title == "Test Meeting"
+    assert neg.requester_open_id == "ou_req"
+    assert neg.description == "desc"
+    assert neg.location == "Room A"
+    assert neg.timezone == "Asia/Tokyo"
+    assert neg.duration_minutes == 30
+    assert neg.status == "draft"
+    assert neg.current_round == 1
+    assert neg.max_rounds == 5
+    assert neg.poll_interval_minutes == 15
+    assert neg.deadline_at == "2026-04-28T18:00:00+09:00"
+    assert neg.chat_id == "oc_chat"
+    assert neg.session_id == "sess_001"
+    assert neg.meta == {"source": "test"}
+    assert neg.finalized_at is None
+    assert neg.failure_reason is None
+
+
+def test_update_negotiation(store):
+    neg_id = store.create_negotiation(
+        title="T",
+        requester_open_id="ou_req",
+        duration_minutes=30,
+    )
+    ok = store.update_negotiation(
+        neg_id,
+        status="awaiting_rsvp",
+        current_round=2,
+        calendar_id="cal_123",
+        event_id="evt_456",
+        failure_reason="none",
+        meta={"rounds": 2},
+    )
+    assert ok is True
+
+    neg = store.get_negotiation(neg_id)
+    assert neg.status == "awaiting_rsvp"
+    assert neg.current_round == 2
+    assert neg.calendar_id == "cal_123"
+    assert neg.event_id == "evt_456"
+    assert neg.failure_reason == "none"
+    assert neg.meta == {"rounds": 2}
+
+
+def test_list_active_negotiations(store):
+    active_id = store.create_negotiation(title="A", requester_open_id="ou_a", duration_minutes=30)
+    store.update_negotiation(active_id, status="awaiting_rsvp")
+
+    finalized_id = store.create_negotiation(title="F", requester_open_id="ou_f", duration_minutes=30)
+    store.update_negotiation(finalized_id, status="finalized")
+
+    failed_id = store.create_negotiation(title="X", requester_open_id="ou_x", duration_minutes=30)
+    store.update_negotiation(failed_id, status="failed")
+
+    active = store.list_active_negotiations()
+    assert len(active) == 1
+    assert active[0].id == active_id
+
+
+def test_delete_negotiation(store):
+    neg_id = store.create_negotiation(title="D", requester_open_id="ou_d", duration_minutes=30)
+    assert store.delete_negotiation(neg_id) is True
+    assert store.get_negotiation(neg_id) is None
+    assert store.delete_negotiation(neg_id) is False
+
+
+def test_round_crud(store):
+    neg_id = store.create_negotiation(title="R", requester_open_id="ou_r", duration_minutes=30)
+    rid1 = store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00", event_id="evt_1")
+    rid2 = store.add_round(neg_id, 2, "2026-04-28T16:00:00+08:00", "2026-04-28T16:30:00+08:00")
+
+    rounds = store.get_rounds(neg_id)
+    assert len(rounds) == 2
+    assert rounds[0].round_number == 1
+    assert rounds[0].proposed_start_time == "2026-04-28T15:00:00+08:00"
+    assert rounds[0].event_id == "evt_1"
+    assert rounds[1].round_number == 2
+
+    current = store.get_current_round(neg_id)
+    assert current is not None
+    assert current.id == rid2
+    assert current.round_number == 2
+
+    store.update_round_status(rid1, "accepted", event_id="evt_1_final")
+    rounds = store.get_rounds(neg_id)
+    assert rounds[0].status == "accepted"
+
+
+def test_attendee_response_crud(store):
+    neg_id = store.create_negotiation(title="A", requester_open_id="ou_r", duration_minutes=30)
+
+    store.upsert_attendee_response(neg_id, "ou_a", attendee_name="Alex", rsvp_status="pending")
+    store.upsert_attendee_response(neg_id, "ou_b", attendee_name="Bob", rsvp_status="accept", note="OK")
+
+    responses = store.get_attendee_responses(neg_id)
+    assert len(responses) == 2
+    assert responses[0].attendee_open_id == "ou_a"
+    assert responses[0].rsvp_status == "pending"
+    assert responses[1].attendee_open_id == "ou_b"
+    assert responses[1].rsvp_status == "accept"
+    assert responses[1].note == "OK"
+
+    # Update existing
+    store.upsert_attendee_response(neg_id, "ou_a", rsvp_status="decline", feishu_rsvp_status="decline")
+    responses = store.get_attendee_responses(neg_id)
+    a_resp = [r for r in responses if r.attendee_open_id == "ou_a"][0]
+    assert a_resp.rsvp_status == "decline"
+    assert a_resp.feishu_rsvp_status == "decline"
+
+    pending = store.get_pending_attendees(neg_id)
+    assert len(pending) == 0  # Bob accepted, Alex declined
+
+
+def test_attendee_response_with_round(store):
+    neg_id = store.create_negotiation(title="A", requester_open_id="ou_r", duration_minutes=30)
+    rid = store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00")
+
+    store.upsert_attendee_response(neg_id, "ou_a", round_id=rid, rsvp_status="pending")
+    store.upsert_attendee_response(neg_id, "ou_a", round_id=rid, rsvp_status="accept")
+
+    responses = store.get_attendee_responses(neg_id, round_id=rid)
+    assert len(responses) == 1
+    assert responses[0].rsvp_status == "accept"
+
+
+def test_poll_logs(store):
+    neg_id = store.create_negotiation(title="P", requester_open_id="ou_r", duration_minutes=30)
+    rid = store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00")
+
+    store.log_poll(
+        neg_id,
+        action_taken="reminded",
+        round_id=rid,
+        details="Sent reminder to Alex",
+        attendee_snapshot={"ou_a": "pending", "ou_b": "accept"},
+    )
+    store.log_poll(neg_id, action_taken="checked", details="No change")
+
+    logs = store.get_poll_logs(neg_id)
+    assert len(logs) == 2
+    assert logs[0]["action_taken"] == "checked"  # most recent first
+    assert logs[1]["action_taken"] == "reminded"
+    assert logs[1]["attendee_snapshot"] == {"ou_a": "pending", "ou_b": "accept"}
+
+
+# ---------------------------------------------------------------------------
+# DB CLI integration tests (via feishu_bot_api.py)
+# ---------------------------------------------------------------------------
+
+def test_cli_init_db(tmp_path):
+    helper = _load_helper_module()
+    db_path = tmp_path / "cli_test.db"
+    result = helper.main(["init-db", f"--db-path={db_path}"])
+    assert result == 0
+    assert db_path.exists()
+
+
+def test_cli_create_and_get_negotiation_db(tmp_path):
+    helper = _load_helper_module()
+    db_path = tmp_path / "cli_test.db"
+    helper.main(["init-db", f"--db-path={db_path}"])
+
+    result_create = helper.main([
+        "create-negotiation-db",
+        f"--db-path={db_path}",
+        "--title=CLI Test",
+        "--requester-open-id=ou_req",
+        "--duration-minutes=60",
+        "--timezone=Asia/Shanghai",
+        "--attendees-json=[{\"open_id\":\"ou_a\",\"name\":\"Alex\"}]",
+    ])
+    assert result_create == 0
+
+    # We need to capture stdout to get the negotiation id.
+    # Re-run with a patched print or use a subprocess. Simpler: use the store directly.
+    store_module = _load_meeting_store_module()
+    store = store_module.MeetingStore(db_path=db_path)
+    negs = store.list_active_negotiations()
+    assert len(negs) == 1
+    neg_id = negs[0].id
+
+    result_get = helper.main([
+        "get-negotiation-db",
+        f"--db-path={db_path}",
+        f"--negotiation-id={neg_id}",
+    ])
+    assert result_get == 0
+
+
+def test_cli_poll_negotiation_deadline(store, tmp_path, monkeypatch):
+    """poll-negotiation should fail a negotiation when deadline is past."""
+    helper = _load_helper_module()
+    db_path = tmp_path / "poll.db"
+    store = _load_meeting_store_module().MeetingStore(db_path=db_path)
+
+    neg_id = store.create_negotiation(
+        title="Poll Test",
+        requester_open_id="ou_req",
+        duration_minutes=30,
+        deadline_at="2020-01-01T00:00:00+00:00",  # past
+    )
+    store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00")
+    store.upsert_attendee_response(neg_id, "ou_a", rsvp_status="pending")
+
+    result = helper.main([
+        "poll-negotiation",
+        f"--db-path={db_path}",
+        f"--negotiation-id={neg_id}",
+    ])
+    assert result == 0
+
+    neg = store.get_negotiation(neg_id)
+    assert neg.status == "failed"
+    assert neg.failure_reason == "deadline_reached"
+
+
+def test_cli_poll_ready_to_finalize(store, tmp_path, monkeypatch):
+    helper = _load_helper_module()
+    db_path = tmp_path / "poll2.db"
+    store = _load_meeting_store_module().MeetingStore(db_path=db_path)
+
+    neg_id = store.create_negotiation(
+        title="Poll Finalize",
+        requester_open_id="ou_req",
+        duration_minutes=30,
+        deadline_at="2026-12-31T00:00:00+00:00",
+    )
+    rid = store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00")
+    store.upsert_attendee_response(neg_id, "ou_a", round_id=rid, rsvp_status="accept")
+    store.upsert_attendee_response(neg_id, "ou_b", round_id=rid, rsvp_status="accept")
+
+    result = helper.main([
+        "poll-negotiation",
+        f"--db-path={db_path}",
+        f"--negotiation-id={neg_id}",
+    ])
+    assert result == 0
+
+    neg = store.get_negotiation(neg_id)
+    assert neg.status == "ready_to_finalize"
+    logs = store.get_poll_logs(neg_id)
+    assert any(log["action_taken"] == "finalized" for log in logs)
+
+
+def test_cli_poll_rescheduling_on_decline(store, tmp_path, monkeypatch):
+    helper = _load_helper_module()
+    db_path = tmp_path / "poll3.db"
+    store = _load_meeting_store_module().MeetingStore(db_path=db_path)
+
+    neg_id = store.create_negotiation(
+        title="Poll Reschedule",
+        requester_open_id="ou_req",
+        duration_minutes=30,
+        max_rounds=3,
+        deadline_at="2026-12-31T00:00:00+00:00",
+    )
+    rid = store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00")
+    store.upsert_attendee_response(neg_id, "ou_a", round_id=rid, rsvp_status="accept")
+    store.upsert_attendee_response(neg_id, "ou_b", round_id=rid, rsvp_status="decline")
+
+    result = helper.main([
+        "poll-negotiation",
+        f"--db-path={db_path}",
+        f"--negotiation-id={neg_id}",
+    ])
+    assert result == 0
+
+    neg = store.get_negotiation(neg_id)
+    assert neg.status == "rescheduling"
+    logs = store.get_poll_logs(neg_id)
+    assert any(log["action_taken"] == "rescheduled" for log in logs)
+
+
+def test_cli_poll_failed_on_final_round_decline(store, tmp_path, monkeypatch):
+    helper = _load_helper_module()
+    db_path = tmp_path / "poll4.db"
+    store = _load_meeting_store_module().MeetingStore(db_path=db_path)
+
+    neg_id = store.create_negotiation(
+        title="Poll Fail",
+        requester_open_id="ou_req",
+        duration_minutes=30,
+        max_rounds=1,
+        deadline_at="2026-12-31T00:00:00+00:00",
+    )
+    store.update_negotiation(neg_id, current_round=1)
+    rid = store.add_round(neg_id, 1, "2026-04-28T15:00:00+08:00", "2026-04-28T15:30:00+08:00")
+    store.upsert_attendee_response(neg_id, "ou_b", round_id=rid, rsvp_status="decline")
+
+    result = helper.main([
+        "poll-negotiation",
+        f"--db-path={db_path}",
+        f"--negotiation-id={neg_id}",
+    ])
+    assert result == 0
+
+    neg = store.get_negotiation(neg_id)
+    assert neg.status == "failed"
+    assert "declined" in (neg.failure_reason or "")

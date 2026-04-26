@@ -1,0 +1,190 @@
+name: feishu_meeting_coordinator
+title: "Feishu Meeting Coordinator"
+description: "Coordinate Feishu meeting scheduling: search contacts, negotiate availability, poll RSVP responses, and create calendar events with attendee invitations — single-agent sequential workflow"
+
+agents:
+  - id: meeting_coordinator
+    role: Meeting Coordinator
+    system_prompt: |
+      You are a Feishu meeting coordination assistant. Your job is to handle the full lifecycle of a meeting request from a user.
+
+      ## Workflow Phases
+      1. **Resolve attendees** — Search the Feishu directory and resolve every attendee name to an open_id
+      2. **Propose slots** — Generate 2-3 candidate time slots based on the user's hint and duration
+      3. **Send invitations** — Create a calendar event (two-step method) and send invitations to all attendees
+      4. **Collect responses** — Poll RSVP status until ALL attendees respond with "yes"/"已接受" or "pending"/"待定"
+      5. **Create final event** — Confirm and finalize the event once quorum is reached
+
+      ## Available Tools
+      - `terminal` — to invoke the helper script CLI commands
+      - `read_file` / `write_file` — to inspect and persist negotiation state JSON
+      - The helper script is materialized at: `.scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py`
+
+      ## Helper Script CLI Reference
+      ```bash
+      # Resolve contacts
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py search-contacts --query "Name"
+
+      # Create event (two-step: create skeleton + add attendees)
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py create-meeting \
+        --title "Meeting" --start-time "2026-04-28 15:00" --end-time "2026-04-28 15:30" \
+        --attendee "ou_xxx" --requester-open-id "ou_requester"
+
+      # Check event + attendee RSVP status
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py get-event \
+        --calendar-id "cal_xxx" --event-id "evt_xxx"
+
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py list-attendees \
+        --calendar-id "cal_xxx" --event-id "evt_xxx"
+
+      # Update event time/title
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py update-event \
+        --calendar-id "cal_xxx" --event-id "evt_xxx" --start-time "..." --end-time "..."
+
+      # Delete/cancel event
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py delete-event \
+        --calendar-id "cal_xxx" --event-id "evt_xxx"
+
+      # Check attendee freebusy
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py check-freebusy \
+        --user-id "ou_a" --user-id "ou_b" --time-min "2026-04-28 14:00" --time-max "2026-04-28 18:00"
+
+      # Send IM reminder to a user
+      python .scripts/feishu-bot-meeting-coordinator/scripts/feishu_bot_api.py send-reminder \
+        --receive-id "ou_xxx" --message "Please confirm your attendance for the meeting."
+      ```
+
+      ## Negotiation Rules
+      - Acceptable responses: "yes", "已接受", "pending", "待定"
+      - If ANY attendee responds "decline" / "已拒绝", you MUST propose a new time slot and re-invite
+      - If ANY attendee has not responded after polling, send a Feishu IM reminder and poll again
+      - Cap reminders at 3 per attendee; if still no response after 3 reminders, create the event anyway and note the missing response in the final summary
+      - Only call `create-meeting` (final confirmation) after quorum is confirmed or max rounds exhausted
+
+      ## Calendar Event Policy
+      - Always use the two-step creation: create event skeleton first, then add attendees via separate API
+      - Set `attendee_ability: can_see_others` so participants see each other
+      - The event may be created on the bot calendar (fallback); attendees still receive proper invitations from the Calendar Assistant
+      - Organizer will show as the bot when using bot calendar — this is a Feishu platform limitation
+
+      ## Output Requirements
+      After each task, write a concise summary to a state file (e.g., `meeting_state.json`) so downstream tasks can read it. Include:
+      - resolved_attendees: list of {open_id, display_name}
+      - candidate_slots: list of slot strings
+      - selected_slot: confirmed slot
+      - event_id: created event ID
+      - calendar_id: calendar ID where event lives
+      - attendee_statuses: dict of open_id -> rsvp_status
+      - warnings: list of any issues
+    tools: [bash, read_file, write_file, terminal]
+    skills: [feishu-bot-meeting-coordinator]
+    max_iterations: 100
+    timeout_seconds: 900
+    max_retries: 2
+
+tasks:
+  - id: resolve-attendees
+    agent_id: meeting_coordinator
+    prompt_template: |
+      Resolve all attendees for the meeting: {meeting_title}
+      Raw attendee queries: {attendee_queries}
+
+      Use the helper script (`search-contacts`) to resolve each name/query to a Feishu open_id.
+      If any name cannot be resolved, report it clearly but continue with the ones that can.
+      Write the resolved attendee list (display_name + open_id) to `meeting_state.json`.
+    depends_on: []
+
+  - id: propose-slots
+    agent_id: meeting_coordinator
+    prompt_template: |
+      Propose meeting time slots for: {meeting_title}
+      Duration: {duration_minutes} minutes
+      Timezone: {timezone}
+      Preferred time hint: {time_hint}
+      Resolved attendees: read from `meeting_state.json`
+
+      Generate 2-3 concrete candidate slots in ISO-like format (e.g., "2026-04-28 15:00").
+      Optionally run `check-freebusy` on the attendees to avoid obviously busy times.
+      Append the candidate_slots to `meeting_state.json`.
+    depends_on: [resolve-attendees]
+    input_from:
+      attendees: resolve-attendees
+
+  - id: send-invitations
+    agent_id: meeting_coordinator
+    prompt_template: |
+      Send calendar invitations for: {meeting_title}
+      Read `meeting_state.json` for resolved attendees and candidate slots.
+      Choose the best slot (or ask the user if ambiguous, but here just pick the first candidate).
+
+      Use `create-meeting` with the selected slot to create the event and send invitations.
+      Save the returned event_id and calendar_id back to `meeting_state.json`.
+      Also initialize attendee_statuses as empty/missing for all attendees.
+    depends_on: [propose-slots]
+    input_from:
+      slots: propose-slots
+      attendees: resolve-attendees
+
+  - id: collect-responses
+    agent_id: meeting_coordinator
+    prompt_template: |
+      Poll attendee RSVP responses for meeting: {meeting_title}
+      Read `meeting_state.json` for event_id, calendar_id, and attendee list.
+
+      LOOP (up to 5 polling rounds):
+      1. Run `get-event` and `list-attendees` to check current RSVP statuses
+      2. For each attendee:
+         - If status is "accept"/"已接受" or "tentative"/"待定" → mark as OK
+         - If status is "decline"/"已拒绝" → we need a new slot; break and signal slot-change
+         - If no response and reminder_count < 3 → run `send-reminder` to that user
+         - If no response and reminder_count >= 3 → mark as "no_response_after_3_reminders"
+      3. If ALL attendees are OK (or no_response_after_3), break the loop
+      4. Otherwise wait briefly and poll again
+
+      Write final attendee_statuses to `meeting_state.json`.
+      If a slot change is needed, note it in the state file.
+    depends_on: [send-invitations]
+    input_from:
+      event: send-invitations
+
+  - id: create-final-event
+    agent_id: meeting_coordinator
+    prompt_template: |
+      Finalize the meeting: {meeting_title}
+      Read `meeting_state.json`.
+
+      If a slot change was requested in the previous task:
+      - Run `update-event` to change the time to the new slot
+      - Re-send invitations with `create-meeting` or update the existing event
+
+      Otherwise, confirm the existing event is the final one.
+      Report the final event_id, calendar_id, join URL, attendee list with their RSVP statuses, and any warnings.
+    depends_on: [collect-responses]
+    input_from:
+      quorum: collect-responses
+
+variables:
+  - name: meeting_title
+    description: "Meeting title/topic"
+    required: true
+  - name: attendee_queries
+    description: "Comma-separated attendee names or queries"
+    required: true
+  - name: requester_open_id
+    description: "Requester's Feishu open_id"
+    required: true
+  - name: duration_minutes
+    description: "Meeting duration in minutes"
+    required: true
+  - name: timezone
+    description: "Timezone, e.g. Asia/Shanghai"
+    required: false
+  - name: time_hint
+    description: "User's preferred time, e.g. 'tomorrow 3pm'"
+    required: false
+  - name: description
+    description: "Meeting description/agenda"
+    required: false
+  - name: location
+    description: "Meeting location or 'Feishu VC'"
+    required: false
